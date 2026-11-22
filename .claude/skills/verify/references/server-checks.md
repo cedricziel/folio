@@ -363,6 +363,10 @@ rollback, terminal-state fencing, inactive queue admission, and legacy upgrades.
 Restore must preserve failed pending runs rather than replay their queued jobs.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test workflows --test vaults` for
 management controls, deleted-workflow history, secret masking, and vault access.
+The workflow page tests check creator and updater identities on active lists,
+Trash lists, and retained history, including system or unknown attribution and
+HTML escaping. Run the `workflows` screen tour, then inspect a retained history
+page on desktop and mobile in both themes. Check long actor labels for wrapping.
 Regenerate OpenAPI after response or route changes. Never verify workflow delivery
 against an existing webhook receiver or user archive.
 

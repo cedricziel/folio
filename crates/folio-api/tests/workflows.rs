@@ -722,6 +722,89 @@ async fn the_form_shows_and_edits_every_action() {
 }
 
 #[tokio::test]
+async fn workflow_management_pages_show_retained_actor_attribution_as_text() {
+    use folio_core::{models::UserId, mutation::with_actor};
+
+    let app = test_app().await;
+    let input = serde_json::from_value(workflow_body("http://127.0.0.1:1/unused")).unwrap();
+    let workflow = with_actor(
+        Some(UserId::from("creator<script>")),
+        app.state.workflow_repo.create(app.vault, input),
+    )
+    .await
+    .unwrap();
+    let mut edited = workflow_body("http://127.0.0.1:1/unused");
+    edited["name"] = json!("Edited workflow");
+    with_actor(
+        Some(UserId::from("editor")),
+        app.state.workflow_repo.update(
+            app.vault,
+            workflow.id,
+            serde_json::from_value(edited).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    let (status, active) = send(&app, "GET", "/workflows", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        active.contains("by creator&lt;script&gt;")
+            || active.contains("by creator&#60;script&#62;")
+    );
+    assert!(active.contains("by editor"));
+    assert!(!active.contains("by creator<script>"));
+    let history_url = format!("/workflows/{}/history", workflow.id);
+    let (status, history) = send(&app, "GET", &history_url, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        history.contains("by creator&lt;script&gt;")
+            || history.contains("by creator&#60;script&#62;")
+    );
+    assert!(history.contains("by editor"));
+
+    with_actor(
+        Some(UserId::from("remover")),
+        app.state.workflow_repo.delete(app.vault, workflow.id),
+    )
+    .await
+    .unwrap();
+    let (status, trash) = send(&app, "GET", "/workflows?deleted=true", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        trash.contains("by creator&lt;script&gt;") || trash.contains("by creator&#60;script&#62;")
+    );
+    assert!(trash.contains("by remover"));
+    let (status, history) = send(&app, "GET", &history_url, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        history.contains("by creator&lt;script&gt;")
+            || history.contains("by creator&#60;script&#62;")
+    );
+    assert!(history.contains("by remover"));
+    assert!(history.contains(", deleted "));
+}
+
+#[tokio::test]
+async fn workflow_management_pages_label_unattributed_changes() {
+    let app = test_app().await;
+    let (_, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(workflow_body("http://127.0.0.1:1/unused")),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let (status, page) = send(&app, "GET", "/workflows", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page.matches("by System or unknown").count(), 2);
+    let (status, history) = send(&app, "GET", &format!("/workflows/{id}/history"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history.matches("by System or unknown").count(), 2);
+}
+
+#[tokio::test]
 async fn workflow_trash_restore_and_retained_history_are_usable_from_management_pages() {
     let app = test_app().await;
     let mut input = workflow_body("http://127.0.0.1:1/unused");
