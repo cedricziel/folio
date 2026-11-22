@@ -2059,6 +2059,7 @@ async fn event_actor_filters_use_the_producer_context_without_granting_private_a
                     actor: Some(WorkflowActorCondition::User {
                         user_id: "editor".into(),
                     }),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },

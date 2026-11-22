@@ -95,6 +95,24 @@ pub struct WebhookEntry {
     pub causation_id: Option<uuid::Uuid>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookIngest {
+    pub payload_version: u32,
+    pub source_id: uuid::Uuid,
+    pub source_kind: super::SourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<super::IngestResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+}
+
 /// Body of every webhook delivery
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -109,6 +127,8 @@ pub struct WebhookPayload {
     pub document: Option<WebhookDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<WebhookEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingest: Option<WebhookIngest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_event: Option<WorkflowEventIdentity>,
 }
@@ -125,6 +145,7 @@ impl WebhookPayload {
             occurred_at,
             document: Some(document),
             entry: None,
+            ingest: None,
             source_event: None,
         }
     }
@@ -141,6 +162,24 @@ impl WebhookPayload {
             occurred_at,
             document: None,
             entry: Some(entry),
+            ingest: None,
+            source_event,
+        }
+    }
+
+    pub fn for_ingest(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        ingest: WebhookIngest,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            event,
+            version: PAYLOAD_VERSION,
+            occurred_at,
+            document: None,
+            entry: None,
+            ingest: Some(ingest),
             source_event,
         }
     }
@@ -159,6 +198,34 @@ impl WebhookPayload {
                     transition: transition.into(),
                     actor_id: None,
                     causation_id: None,
+                },
+                None,
+            );
+        }
+        if event.is_ingest_outcome() {
+            use super::IngestResult;
+            let outcome = match event {
+                WorkflowTrigger::IngestImported => Some(IngestResult::Imported),
+                WorkflowTrigger::IngestSkipped => Some(IngestResult::Skipped),
+                WorkflowTrigger::IngestDuplicate => Some(IngestResult::Duplicate),
+                WorkflowTrigger::IngestFailed => Some(IngestResult::Failed),
+                _ => None,
+            };
+            let reason_code = outcome.map(IngestResult::reason_code).or_else(|| {
+                (event == WorkflowTrigger::SourceFailed).then_some("source_unavailable")
+            });
+            return Self::for_ingest(
+                event,
+                Utc::now(),
+                WebhookIngest {
+                    payload_version: 1,
+                    source_id: Id::nil(),
+                    source_kind: super::SourceKind::Folder,
+                    item_id: outcome.map(|_| Id::nil()),
+                    attempt_id: outcome.map(|_| Id::nil()),
+                    outcome,
+                    reason_code: reason_code.map(str::to_owned),
+                    retryable: outcome.map(IngestResult::retryable),
                 },
                 None,
             );

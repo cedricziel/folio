@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block screen %}taxonomy{% endblock %}
+{% block title %}{{ field.name }} - Folio{% endblock %}
+{% block content %}
+<section class="page">
+  <header class="page-head">
+    <nav class="f-crumbs" aria-label="Breadcrumb">
+      <ol><li><a href="{{ "/manage"|vault_url }}">Manage</a></li><li><a href="{{ "/manage/fields"|vault_url }}">Fields</a></li><li aria-current="page">{{ field.name }}</li></ol>
+    </nav>
+    <h1 class="title">{{ field.name }}</h1>
+    <p class="lede">{{ kind_label }}{% if field.required %} · Required{% endif %}{% if field.unique %} · Unique{% endif %}{% if field.deleted_at.is_some() %} · Retired{% endif %}</p>
+  </header>
+  {% if let Some(message) = error %}<p class="f-notice f-notice-danger" role="alert">{{ message }}</p>{% endif %}
+  {% if true|can_manage %}
+  <section class="panel" aria-labelledby="field-settings">
+    <h2 id="field-settings" class="heading">Field settings</h2>
+    {% if field.deleted_at.is_none() %}
+    <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}" method="post" class="metadata-form" data-turbo="false">
+      {% include "partials/metadata_csrf.html" %}
+      <input type="hidden" name="kind" value="{{ field.kind.as_str() }}">
+      <label class="f-field" for="edit-field-name">
+        <span class="f-field-label">Name</span>
+        <input class="f-input" id="edit-field-name" name="name" value="{{ draft.name }}" required maxlength="128">
+      </label>
+      <label class="f-field"><span><input type="checkbox" name="required" value="true"{% if draft.required %} checked{% endif %}> Required</span></label>
+      <label class="f-field"><span><input type="checkbox" name="unique" value="true"{% if draft.unique %} checked{% endif %}> Unique in this vault</span></label>
+      <button class="f-btn f-btn-primary" type="submit">Save field</button>
+    </form>
+    <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/retire" method="post" class="metadata-form" data-turbo="false">
+      {% include "partials/metadata_csrf.html" %}
+      <button class="f-btn f-btn-quiet" type="submit">Retire field</button>
+    </form>
+    {% else %}
+    <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/restore" method="post" class="metadata-form" data-turbo="false">
+      {% include "partials/metadata_csrf.html" %}
+      <button class="f-btn" type="submit">Restore field</button>
+    </form>
+    {% endif %}
+  </section>
+  {% endif %}
+  {% if field.kind.as_str() == "select" %}
+  <section class="panel" aria-labelledby="field-options">
+    <h2 id="field-options" class="heading">Options</h2>
+    {% if true|can_manage && field.deleted_at.is_none() %}
+    <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options{{ option_query }}" method="post" class="metadata-form" data-turbo="false">
+      {% include "partials/metadata_csrf.html" %}
+      <label class="f-field" for="option-label">
+        <span class="f-field-label">New option</span>
+        <input class="f-input" id="option-label" name="label" value="{{ option_draft.label }}" required maxlength="128">
+      </label>
+      <label class="f-field" for="option-position">
+        <span class="f-field-label">Position</span>
+        <input class="f-input" id="option-position" name="position" type="number" min="0" max="4294967295" value="{{ option_draft.position }}" required>
+      </label>
+      <button class="f-btn" type="submit">Add option</button>
+    </form>
+    {% endif %}
+    {% if options.is_empty() %}<p class="lede">This field has no options.</p>{% endif %}
+    <div class="f-list">
+      {% for option in options %}
+      <section class="f-row f-row-plain" aria-label="{{ option.label }}">
+        <div class="row-main">
+          <h3 class="f-row-title">{{ option.label }}</h3>
+          <p class="f-row-sub">Position {{ option.position }}{% if option.deleted_at.is_some() %} · Retired{% endif %}</p>
+          {% if true|can_manage && field.deleted_at.is_none() %}
+          {% if option.deleted_at.is_none() %}
+          <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options/{{ option.id }}{{ option_query }}" method="post" class="metadata-form" data-turbo="false">
+            {% include "partials/metadata_csrf.html" %}
+            <label class="f-field"><span class="f-field-label">Name</span><input class="f-input" name="label" value="{{ option.label }}" maxlength="128" required></label>
+            <label class="f-field"><span class="f-field-label">Position</span><input class="f-input" name="position" type="number" min="0" max="4294967295" value="{{ option.position }}" required></label>
+            <button class="f-btn" type="submit">Save option</button>
+          </form>
+          <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options/{{ option.id }}/retire{{ option_query }}" method="post" class="metadata-form" data-turbo="false">
+            {% include "partials/metadata_csrf.html" %}
+            <button class="f-btn f-btn-quiet" type="submit">Retire option</button>
+          </form>
+          {% else %}
+          <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options/{{ option.id }}/restore{{ option_query }}" method="post" class="metadata-form" data-turbo="false">
+            {% include "partials/metadata_csrf.html" %}
+            <button class="f-btn" type="submit">Restore option</button>
+          </form>
+          {% endif %}
+          {% endif %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+    {% if let Some(after) = next %}
+    <p><a class="f-btn" href="{{ "/manage/fields"|vault_url }}/{{ field.id }}?after={{ after }}">More options</a></p>
+    {% endif %}
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

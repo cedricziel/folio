@@ -8,6 +8,8 @@ mod file_sizes;
 mod idempotent_uploads;
 pub mod import;
 mod importer;
+mod ingest_workflow_access;
+pub use ingest_workflow_access::IngestWorkflowAccess;
 mod ingest;
 mod library;
 pub mod notifications;

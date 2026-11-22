@@ -18,6 +18,7 @@ mod health;
 mod integrations;
 mod manage;
 pub(crate) mod metadata;
+mod metadata_pages;
 mod mfa;
 mod oidc;
 mod pages;
@@ -99,6 +100,7 @@ pub fn create_router(mut state: AppState, auth: auth::AuthState) -> Router {
         .merge(pwa::router())
         // Management routes (correspondents, document types, tags)
         .merge(manage::router())
+        .merge(metadata_pages::router())
         // Settings routes
         .merge(settings)
         .merge(integrations::router())

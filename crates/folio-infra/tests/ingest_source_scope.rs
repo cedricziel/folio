@@ -21,6 +21,7 @@ async fn scope_contract(database: Database) {
             rescan_secs: 60,
         }),
     };
+    workflow_outcome_contract(&repos, input.clone()).await;
     let source = repos.sources.create(vault, input.clone()).await.unwrap();
     let key = IngestItemKey::folder(b"private.pdf", b"stage", b"source scope");
     let fingerprint = "d".repeat(64);
@@ -153,6 +154,212 @@ async fn scope_contract(database: Database) {
             .unwrap(),
         IngestClaim::Claimed(_)
     ));
+}
+
+async fn workflow_outcome_contract(repos: &folio_infra::Repositories, input: IngestionSourceInput) {
+    use folio_core::models::{WebhookMethod, WorkflowAction, WorkflowInput, WorkflowTrigger};
+    use folio_core::services::{IngestWorkflowAccess, WorkflowEngine};
+    use folio_infra::workflow::{RunOutcome, WorkflowRunner};
+    use folio_infra::{ObjectStoreDocumentStore, StorageFileMetadata, WebhookClient};
+    use std::sync::Arc;
+
+    let owner = "workflow-outcome-owner";
+    repos
+        .auth
+        .create_user(folio_auth::User {
+            id: owner.into(),
+            username: owner.into(),
+            password_hash: "!".into(),
+            created_at: 1,
+            email: None,
+            display_name: None,
+            is_admin: false,
+            is_owner: false,
+            auth_source: "local".into(),
+            external_id: None,
+        })
+        .await
+        .unwrap();
+    let vault = repos
+        .vaults
+        .create("Workflow outcomes", Some(&owner.into()))
+        .await
+        .unwrap()
+        .id;
+    let source = repos.sources.create(vault, input).await.unwrap();
+    let access = Arc::new(IngestWorkflowAccess::new(
+        repos.sources.clone(),
+        repos.vaults.clone(),
+        repos.members.clone(),
+        &[],
+        true,
+    ));
+    let engine = WorkflowEngine::new(
+        repos.workflows.clone(),
+        repos.documents.clone(),
+        repos.correspondents.clone(),
+        repos.document_types.clone(),
+        Arc::new(StorageFileMetadata::new(Arc::new(
+            ObjectStoreDocumentStore::in_memory(),
+        ))),
+        "http://folio.test",
+    )
+    .with_ingest_access(access.clone());
+    let runner = WorkflowRunner::new(
+        repos.workflows.clone(),
+        repos.workflow_documents.clone(),
+        WebhookClient::new(),
+    )
+    .with_ingest_access(access);
+    let definition = WorkflowInput {
+        name: "Failed item delivery".into(),
+        enabled: true,
+        trigger: WorkflowTrigger::IngestFailed,
+        conditions: folio_core::models::WorkflowConditions {
+            event: Some(folio_core::models::WorkflowEventConditions {
+                ingest: Some(folio_core::models::WorkflowIngestConditions {
+                    source_id: Some(source.id),
+                    outcome: Some(IngestResult::Failed),
+                    retryable: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        actions: vec![WorkflowAction::Webhook {
+            url: "http://127.0.0.1:1/hook".into(),
+            method: WebhookMethod::Post,
+            headers: Default::default(),
+            secret: None,
+        }],
+    };
+    let workflow = repos
+        .workflows
+        .create(vault, definition.clone())
+        .await
+        .unwrap();
+    let key = IngestItemKey::folder(b"private-filename.pdf", b"stage", b"test content");
+    let fingerprint = "e".repeat(64);
+    let mut attempts = Vec::new();
+    for _ in 0..2 {
+        let IngestClaim::Claimed(attempt) = repos
+            .ingest_outcomes
+            .claim(
+                vault,
+                source.id,
+                SourceKind::Folder,
+                SourceOrigin::Managed,
+                &key,
+                &fingerprint,
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected an attempted import")
+        };
+        repos
+            .ingest_outcomes
+            .complete(&attempt, IngestResult::Failed, None, None)
+            .await
+            .unwrap()
+            .expect("completed outcome");
+        attempts.push(attempt);
+    }
+    assert_eq!(attempts[0].item_id, attempts[1].item_id);
+    assert_ne!(attempts[0].attempt_id, attempts[1].attempt_id);
+    let events = repos
+        .outbox
+        .replay(0, chrono::Utc::now() - chrono::Duration::hours(1), 100)
+        .await
+        .unwrap();
+    let mut runs = Vec::new();
+    for attempt in attempts {
+        let event = events
+            .iter()
+            .find(|event| {
+                event
+                    .envelope
+                    .as_ref()
+                    .is_some_and(|envelope| envelope.mutation_id() == attempt.attempt_id)
+            })
+            .unwrap();
+        let matched = engine.handle(event).await.unwrap();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].workflow_id, workflow.id);
+        assert!(matched[0].document_id.is_none());
+        assert!(!matched[0].payload.contains("private-filename"));
+        assert!(engine.handle(event).await.unwrap().is_empty());
+        runs.extend(matched);
+    }
+
+    let health_workflow = repos
+        .workflows
+        .create(
+            vault,
+            WorkflowInput {
+                trigger: WorkflowTrigger::SourceFailed,
+                conditions: Default::default(),
+                ..definition.clone()
+            },
+        )
+        .await
+        .unwrap();
+    repos
+        .ingest_outcomes
+        .record_source_status(
+            vault,
+            source.id,
+            SourceOrigin::Managed,
+            SourceKind::Folder,
+            &SourceStatus {
+                last_error: Some("private-provider-error".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let health_events = repos
+        .outbox
+        .replay(0, chrono::Utc::now() - chrono::Duration::hours(1), 100)
+        .await
+        .unwrap();
+    let failed_health = health_events
+        .iter()
+        .find(|event| {
+            event.envelope.as_ref().is_some_and(|envelope| {
+                envelope.event_type() == "source.failed" && envelope.subject().id == source.id
+            })
+        })
+        .unwrap();
+    let health_runs = engine.handle(failed_health).await.unwrap();
+    assert_eq!(health_runs.len(), 1);
+    assert_eq!(health_runs[0].workflow_id, health_workflow.id);
+    assert!(!health_runs[0].payload.contains("private-provider-error"));
+
+    repos.sources.delete(vault, source.id).await.unwrap();
+    assert_eq!(
+        runner.execute(runs[0].id).await.unwrap(),
+        RunOutcome::Failed
+    );
+    repos
+        .workflows
+        .create(
+            vault,
+            WorkflowInput {
+                trigger: WorkflowTrigger::SourceFailed,
+                conditions: Default::default(),
+                ..definition
+            },
+        )
+        .await
+        .unwrap();
+    assert!(engine.handle(failed_health).await.unwrap().is_empty());
+    let run = repos.workflows.find_run(runs[0].id).await.unwrap().unwrap();
+    assert_eq!(
+        run.last_error.as_deref(),
+        Some("Source or workflow is no longer authorized")
+    );
 }
 
 #[tokio::test]

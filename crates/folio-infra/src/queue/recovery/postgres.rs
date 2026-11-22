@@ -29,27 +29,32 @@ async fn locked_load(conn: &mut PgConnection, id: Uuid) -> Result<Option<JobRow>
         .bind(id.to_string()).fetch_optional(conn).await.map_err(repo_err)
 }
 
-async fn stages(conn: &mut PgConnection, id: Uuid) -> Result<Vec<StageRow>> {
-    sqlx::query_as("SELECT r.id::text, r.document_id::text, r.vault_id::text, r.stage, r.attempt,
+async fn stages(
+    conn: &mut PgConnection,
+    id: Uuid,
+    document_id: Uuid,
+    revision_id: Option<Uuid>,
+) -> Result<Vec<StageRow>> {
+    sqlx::query_as("SELECT r.id::text, r.document_id::text, r.vault_id::text, r.stage, r.attempt, r.revision_id::text,
                j.correlation_id::text, j.causation_id::text
         FROM processing_stage_runs r JOIN jobs j ON j.id = r.job_id
         JOIN documents d ON d.id = r.document_id
         JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
         WHERE j.id = $1::uuid AND r.group_id = j.processing_group_id AND r.vault_id = j.origin_vault_id
           AND d.vault_id = r.vault_id AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL
-          AND r.state = 'running' AND r.is_current = TRUE AND r.revision_id IS NULL
-          AND (d.current_revision_id IS NULL OR EXISTS (
+          AND r.state = 'running' AND r.is_current = TRUE
+          AND d.id = $2 AND r.revision_id IS NOT DISTINCT FROM $3
+          AND ((r.revision_id IS NULL AND d.current_revision_id IS NULL AND NOT EXISTS (
+              SELECT 1 FROM document_revisions history WHERE history.document_id = d.id
+          )) OR EXISTS (
               SELECT 1 FROM document_revisions revision
               WHERE revision.id = d.current_revision_id AND revision.document_id = d.id
-                AND revision.vault_id = d.vault_id AND revision.number = 1
+                AND revision.vault_id = d.vault_id
+                AND (revision.id = r.revision_id OR (r.revision_id IS NULL AND revision.number = 1))
           ))
           AND r.claim_id = j.claim_id AND r.queue_attempt = j.attempts
-          AND j.correlation_id IS NOT NULL
-          AND j.payload->'data'->>'document_id' = d.id::text
-          AND j.payload->>'type' = CASE j.job_type
-              WHEN 'process_document' THEN 'ProcessDocument' WHEN 'extract_text' THEN 'ExtractText'
-              WHEN 'generate_embedding' THEN 'GenerateEmbedding' WHEN 'generate_thumbnail' THEN 'GenerateThumbnail' END FOR UPDATE OF r FOR SHARE OF v")
-        .bind(id.to_string()).fetch_all(conn).await.map_err(repo_err)
+          AND j.correlation_id IS NOT NULL FOR UPDATE OF r FOR SHARE OF v")
+        .bind(id).bind(document_id).bind(revision_id).fetch_all(conn).await.map_err(repo_err)
 }
 
 async fn settle(pool: &PgPool, id: Uuid, failure: Failure<'_>) -> Result<Option<FailOutcome>> {
@@ -68,7 +73,8 @@ async fn settle(pool: &PgPool, id: Uuid, failure: Failure<'_>) -> Result<Option<
     let Some(row) = locked_load(&mut tx, id).await? else {
         return Ok(None);
     };
-    if row.document_id() != document_id {
+    let job = row.typed_job();
+    if job.as_ref().and_then(crate::queue::JobType::document_id) != document_id {
         return Ok(None);
     }
     let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
@@ -78,7 +84,18 @@ async fn settle(pool: &PgPool, id: Uuid, failure: Failure<'_>) -> Result<Option<
     let Some(decision) = failure.decision(&row, now)? else {
         return Ok(None);
     };
-    let running = stages(&mut tx, id).await?;
+    let running = match (document_id, job) {
+        (Some(document_id), Some(job)) => {
+            let mut running = stages(&mut tx, id, document_id, job.revision_id()).await?;
+            running.retain(|stage| {
+                stage
+                    .stage()
+                    .is_ok_and(|stage| super::super::stages::supports_stage(&job, stage))
+            });
+            running
+        }
+        _ => Vec::new(),
+    };
     let changed = sqlx::query("UPDATE jobs SET status = $1, error = $2, scheduled_at = COALESCE($3::timestamptz, scheduled_at),
             completed_at = $4::timestamptz, updated_at = $5::timestamptz, claim_id = NULL, lease_expires_at = NULL
         WHERE id = $6::uuid AND attempts = $7 AND claim_id IS NOT DISTINCT FROM $8::uuid AND status = 'processing'

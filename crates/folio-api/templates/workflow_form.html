@@ -122,6 +122,26 @@
             </div>
         </fieldset>
 
+        <fieldset class="field" data-workflow-form-target="ingestFilter" hidden disabled>
+            <legend class="legend">Only if the source matches</legend>
+            <label for="ingest_source_id">Source ID</label>
+            <input class="input" type="text" id="ingest_source_id" name="ingest_source_id" value="{{ values.ingest_source_id }}">
+            <label for="ingest_source_kind">Source kind</label>
+            <select class="select" id="ingest_source_kind" name="ingest_source_kind">
+                <option value="">Any</option>
+                <option value="folder"{% if values.ingest_kind_is("folder") %} selected{% endif %}>Watched folder</option>
+                <option value="email"{% if values.ingest_kind_is("email") %} selected{% endif %}>Mail account</option>
+            </select>
+            <label for="ingest_reason" data-workflow-form-target="ingestReasonLabel">Reason</label>
+            <input class="input" type="text" id="ingest_reason" name="ingest_reason" value="{{ values.ingest_reason }}" data-workflow-form-target="ingestReason">
+            <label for="ingest_retryable" data-workflow-form-target="ingestRetryLabel">Retry available</label>
+            <select class="select" id="ingest_retryable" name="ingest_retryable" data-workflow-form-target="ingestRetry">
+                <option value="">Any</option>
+                <option value="true"{% if values.ingest_retryable == "true" %} selected{% endif %}>Yes</option>
+                <option value="false"{% if values.ingest_retryable == "false" %} selected{% endif %}>No</option>
+            </select>
+        </fieldset>
+
         <p class="f-notice" data-workflow-form-target="discard" hidden>
             Files that match are discarded instead of imported. Nothing else to set up.
         </p>
@@ -131,7 +151,7 @@
                 <legend class="legend">Then Folio does</legend>
                 <p class="hint">Every step runs, in this order. Leave a step empty to skip it.</p>
 
-                <div class="action-card">
+                <div class="action-card" data-workflow-form-target="documentAction">
                     <p class="heading">Add tags</p>
                     {% if action_tags.is_empty() %}
                     <p class="hint">No tags yet. <a href="{{ "/manage"|vault_url }}">Create one</a>.</p>
@@ -142,7 +162,7 @@
                     {% endif %}
                 </div>
 
-                <div class="action-card">
+                <div class="action-card" data-workflow-form-target="documentAction">
                     <label class="heading" for="action_correspondent_id">Set who it is from</label>
                     <select class="select" id="action_correspondent_id" name="action_correspondent_id">
                         <option value="">Leave as is</option>
@@ -150,7 +170,7 @@
                     </select>
                 </div>
 
-                <div class="action-card">
+                <div class="action-card" data-workflow-form-target="documentAction">
                     <label class="heading" for="action_document_type_id">Set the type</label>
                     <select class="select" id="action_document_type_id" name="action_document_type_id">
                         <option value="">Leave as is</option>

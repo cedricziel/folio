@@ -122,6 +122,19 @@ impl From<PgPool> for Database {
     }
 }
 
+const LEGACY_CHUNK_REVISION: &str = "(
+    (d.current_revision_id IS NULL AND NOT EXISTS (
+        SELECT 1 FROM document_revisions history WHERE history.document_id = d.id
+    )) OR EXISTS (
+        SELECT 1 FROM document_revisions r
+        WHERE r.id = d.current_revision_id
+          AND r.document_id = d.id AND r.vault_id = d.vault_id AND r.number = 1
+    )
+)";
+
+const LIVE_CHUNK_DOCUMENT: &str = "d.deleted_at IS NULL AND d.purge_requested_at IS NULL
+    AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = d.vault_id AND v.deleted_at IS NULL)";
+
 /// The ports Folio needs, implemented for one backend
 pub struct Repositories {
     pub metadata_fields: Arc<dyn folio_core::ports::MetadataFieldRepository>,
