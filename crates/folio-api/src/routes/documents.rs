@@ -140,6 +140,10 @@ pub struct DocumentView {
     /// Name of the document type, when one is set
     document_type: Option<String>,
     tags: Vec<DocumentTag>,
+    /// Current persisted stage runs on document detail; empty for documents predating stage tracking.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(read_only)]
+    processing_stages: Option<Vec<folio_core::models::ProcessingStageSummary>>,
     #[schema(required = false)]
     can_edit_document_date: bool,
     #[schema(required = false)]
@@ -206,6 +210,7 @@ pub(super) async fn present(
                 can_edit_document_date: editable,
                 can_review_document: editable,
                 reviewed: document.reviewed_at.is_some(),
+                processing_stages: None,
                 correspondent: document
                     .correspondent_id
                     .and_then(|id| correspondents.get(&id).cloned()),
@@ -304,7 +309,13 @@ pub(crate) async fn get_document(
         .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
-    let view = present(vault, &state, vec![document]).await?.remove(0);
+    let mut view = present(vault, &state, vec![document]).await?.remove(0);
+    view.processing_stages = Some(
+        state
+            .document_repo
+            .processing_stage_summaries(vault, id)
+            .await?,
+    );
 
     Ok(Json(view))
 }

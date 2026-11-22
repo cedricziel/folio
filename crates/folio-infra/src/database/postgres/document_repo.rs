@@ -621,6 +621,46 @@ impl DocumentRepository for PostgresDocumentRepository {
         row.map(TryInto::try_into).transpose()
     }
 
+    async fn processing_stage_summaries(
+        &self,
+        vault: VaultId,
+        id: Id,
+    ) -> Result<Vec<folio_core::models::ProcessingStageSummary>> {
+        let rows: Vec<super::super::processing_summary::ProcessingSummaryRow> = sqlx::query_as(
+            "SELECT CAST(r.id AS TEXT) AS run_id, CAST(r.revision_id AS TEXT) AS revision_id,
+                    r.stage, r.attempt, r.state, r.reason_code, r.retry_at, r.has_text
+             FROM processing_stage_runs r
+             JOIN documents d ON d.id = r.document_id AND d.vault_id = r.vault_id
+             JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
+             WHERE d.id = $1 AND d.vault_id = $2 AND d.deleted_at IS NULL
+               AND d.purge_requested_at IS NULL
+               AND r.is_current = TRUE
+               AND (r.revision_id = d.current_revision_id OR (r.revision_id IS NULL AND (
+                   d.current_revision_id IS NULL OR EXISTS (
+                       SELECT 1 FROM document_revisions revision
+                       WHERE revision.id = d.current_revision_id AND revision.document_id = d.id
+                         AND revision.vault_id = d.vault_id AND revision.number = 1
+                   )
+               )))
+               AND (r.state <> 'pending' OR EXISTS (
+                   SELECT 1 FROM jobs j
+                   WHERE j.status IN ('pending', 'processing')
+                     AND (j.id = r.job_id OR (r.job_id IS NULL AND j.id IN (
+                         SELECT parent.job_id FROM processing_stage_runs parent
+                         WHERE parent.group_id = r.group_id AND parent.document_id = r.document_id
+                           AND parent.vault_id = r.vault_id AND parent.is_current = TRUE
+                     )))
+               ))
+             ORDER BY CASE r.stage WHEN 'ocr' THEN 0 WHEN 'embedding' THEN 1 ELSE 2 END",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
     async fn thumbnail_result_prefix(&self, vault: VaultId, id: Id) -> Result<Option<String>> {
         sqlx::query_scalar(
             "SELECT r.result_prefix FROM processing_stage_runs r

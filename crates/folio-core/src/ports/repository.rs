@@ -46,6 +46,14 @@ pub trait DocumentRepository: Send + Sync {
     /// Find a document by ID
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>>;
 
+    /// Current persisted stage runs for a live document in an active vault, ordered by stage.
+    /// Missing, trashed, wrong-vault, and legacy documents return an empty list.
+    async fn processing_stage_summaries(
+        &self,
+        vault: VaultId,
+        id: Id,
+    ) -> Result<Vec<crate::models::ProcessingStageSummary>>;
+
     /// Latest committed thumbnail prefix in this live document's active vault, including prior runs.
     /// Returns `None` when only legacy thumbnail storage exists or the document is unavailable.
     async fn thumbnail_result_prefix(&self, vault: VaultId, id: Id) -> Result<Option<String>>;
