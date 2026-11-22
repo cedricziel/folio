@@ -172,3 +172,14 @@ This skill is canonical at `.claude/skills/verify`. `.agents/skills/verify` is a
 - Document notes and comments: read [references/document-entries.md](references/document-entries.md).
 - Date edits, metadata events, moves and their API/MCP entry points: read [references/document-metadata.md](references/document-metadata.md).
 - Before a PR, run `make format`, `make lint` and `make test` (see the configuration section in [references/server-checks.md](references/server-checks.md)).
+
+## Verify live document lists
+
+Build `folio-app` and run `npx playwright test live-lists.spec.ts` from `e2e/`
+against the disposable instance. Run `npx playwright test vaults.spec.ts --grep
+'saved view results update'` for the saved-view grid and open editor. The
+browser checks use real document events to cover unrelated creation, processing
+and review, tag and date changes, and an interrupted refresh. Check that
+matching rows, empty states, and vault counts update while the URL, selected
+row, and unsaved inputs stay in place. Include Inbox, All documents, and a
+filtered list in the desktop and mobile screen tour.

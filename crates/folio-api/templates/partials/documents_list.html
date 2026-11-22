@@ -5,11 +5,11 @@
 </div>
 {% if rows.is_empty() %}
 <div class="empty-state" id="documents-empty">
-    {% if total == 0 %}
+    {% if total == 0 && !filtered %}
     <h2 class="display">Your paperwork, filed.</h2>
     <p class="lede">Drop a letter, invoice or contract below and Folio reads it for you.</p>
     {% if true|can_upload %}<button type="button" class="f-btn f-btn-primary" data-action="click->upload-modal#open">Upload a document</button>{% endif %}
-    {% else if view_all %}
+    {% else if view_all || filtered %}
     <h2 class="heading">No documents match.</h2>
     <p class="lede">Try another filter, or <a href="{{ "/?view=all"|vault_url }}">see all documents</a>.</p>
     {% else %}
