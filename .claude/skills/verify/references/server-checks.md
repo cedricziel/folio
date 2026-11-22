@@ -274,6 +274,9 @@ vectors, malformed dimensions, and nonfinite provider output.
 Run `cargo test -p folio-core --test processing_attempts` for retry state, stale
 attempt rejection, terminal immutability, persisted-state restoration, and attempt
 counter exhaustion. These model tests do not verify transactional lease fencing.
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --lib queue::recovery::tests`
+for recovery on SQLite and PostgreSQL. Unreadable-job cases cover dequeue
+quarantine and listings that retain readable jobs without altering damaged rows.
 Run the repository contract as well after changes to queue method signatures.
 These tests use temporary or in-memory data.
 

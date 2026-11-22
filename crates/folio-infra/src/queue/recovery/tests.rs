@@ -699,6 +699,36 @@ async fn unreadable_payload_is_failed_and_skipped(db: &Database) {
     );
 }
 
+async fn listing_skips_unreadable_rows(db: &Database) {
+    execute(db, "DELETE FROM jobs;", "DELETE FROM jobs;").await;
+    let document = Uuid::new_v4();
+    let bad = Uuid::new_v4();
+    let early = "2000-01-01T00:00:00+00:00";
+    let payload = serde_json::json!({
+        "type": "from_the_future",
+        "data": { "document_id": document }
+    });
+    execute(
+        db,
+        &format!("INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at) VALUES ('{bad}', 'from_the_future', '{payload}', 'pending', 0, 3, '{early}', '{early}', '{early}')"),
+        &format!("INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at) VALUES ('{bad}', 'from_the_future', '{payload}'::jsonb, 'pending', 0, 3, '{early}', '{early}', '{early}')"),
+    )
+    .await;
+    let queue = db.repositories().await.jobs;
+    let good = queue
+        .enqueue(JobType::extract_text(document))
+        .await
+        .unwrap();
+
+    let jobs = queue.find_active_jobs_for_document(document).await.unwrap();
+
+    assert_eq!(
+        jobs.into_iter().map(|job| job.id).collect::<Vec<_>>(),
+        [good]
+    );
+    assert_eq!(queue.pending_count().await.unwrap(), 2);
+}
+
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
     transient_failure_is_atomic_and_preserves_source_lineage(db).await;
