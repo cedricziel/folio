@@ -40,6 +40,8 @@ struct CustomMetadataWorkflowEditor: View {
                         Text("Choose a trigger").tag("")
                         ForEach(triggers) { row in Text(row.label).tag(row.id) }
                     }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("metadata-workflow-trigger")
                     if let selectedTrigger {
                         conditions(supportsValues: selectedTrigger.supportsValues)
                     }
@@ -49,6 +51,7 @@ struct CustomMetadataWorkflowEditor: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("New custom field workflow")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
@@ -70,6 +73,8 @@ struct CustomMetadataWorkflowEditor: View {
                     Text($0.draft.name).tag(Optional($0.id))
                 }
             }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("metadata-workflow-field")
             .onChange(of: fieldID) {
                 if let field = fields.first(where: { $0.id == fieldID }) { kind = field.draft.kind }
             }

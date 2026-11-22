@@ -7,14 +7,16 @@ final class CustomMetadataWorkflowUITests: XCTestCase {
         app.launchArguments = ["--custom-metadata-workflow"]
         app.launch()
         app.buttons["Open custom field workflow editor"].tap()
-        let trigger = app.buttons["When"]
+        let trigger = app.buttons["metadata-workflow-trigger"]
         XCTAssertTrue(trigger.waitForExistence(timeout: 10))
+        app.textFields["Name"].tap()
+        app.textFields["Name"].typeText("Invoice amount\n")
         trigger.tap()
         app.buttons["When a custom field is created"].tap()
         XCTAssertFalse(app.switches["Match new value"].exists)
         trigger.tap()
         app.buttons["When custom field values change"].tap()
-        app.buttons["Custom field"].tap()
+        app.buttons["metadata-workflow-field"].tap()
         app.buttons["Exact amount"].tap()
         let compare = app.switches["Match new value"]
         XCTAssertTrue(compare.waitForExistence(timeout: 10))
@@ -22,10 +24,9 @@ final class CustomMetadataWorkflowUITests: XCTestCase {
         let value = app.textFields["New value"]
         value.tap()
         value.typeText("9007199254740993.01")
-        let name = app.textFields["Name"]
-        name.tap()
-        name.typeText("Invoice amount")
         let url = app.textFields["Destination URL"]
+        for _ in 0..<4 where !url.isHittable { app.swipeUp() }
+        XCTAssertTrue(url.isHittable)
         url.tap()
         url.typeText("http://127.0.0.1:9/unused")
         app.buttons["Save workflow"].tap()
