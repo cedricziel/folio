@@ -41,11 +41,11 @@ Add `GET /api/sources/{id}/outcomes` with `before` and `limit` query parameters,
 
 ## Integration blockers
 
-Actor context, ownership, transactional envelopes/outbox, and trusted lineage are merged in #258, #260, #265, and #266. Stable source item identity is merged in #269. Workflow registry types and non-document action compatibility still require integration with the workflow owner. Do not introduce parallel interfaces.
+Actor context, ownership, transactional envelopes/outbox, and trusted lineage are merged in #258, #260, #265, and #266. Stable source item identity is merged in #269. Outcome storage, producers, and source activity are merged in #293, #309, and #316. Source lifecycle #311 added soft deletion, which must be checked during publication. Owner-only workflow dispatch and the builder options still require the workflow owner’s integration.
 
 ## Landed foundation API alignment
 
-The outcome worktree is based on merged main through #269. The implemented signatures are:
+The producers use these merged interfaces:
 
 - `folio_core::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience}` supplies the only envelope.
 - `DomainEventSubject { subject_type, id }` serializes subject_type as `type`.

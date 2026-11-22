@@ -44,7 +44,7 @@ pub use document_entry::{
 pub use document_page::{DocumentCursor, DocumentPage, DocumentPageQuery, DocumentSort};
 pub use document_review::{DocumentReview, ReviewDecision, ReviewOrigin};
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
-pub use file_identity::FileIdentity;
+pub use file_identity::{FileIdentity, UnverifiedOriginal};
 pub use import_run::{
     CreateImportRun, FolioState, ImportAction, ImportApplied, ImportItem, ImportItemCount,
     ImportItemOutcome, ImportItemStatus, ImportRun, ImportRunKind, ImportRunStatus, ImportTrigger,
@@ -78,6 +78,7 @@ pub use push::{
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
     AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,
+    AI_REQUEST_TIMEOUT_RANGE, DEFAULT_AI_REQUEST_TIMEOUT_SECS,
 };
 pub use source::{
     DocumentSource, EmailOrigin, FolderOrigin, SourceConditions, SourceKind, TextMatch,

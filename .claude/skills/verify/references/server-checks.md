@@ -28,6 +28,15 @@ It covers identity changes on JSON, fetch, and HTML requests, matching-session
 reuse, cookieless session bounds, trusted proxies, shared secrets, repeated
 headers, and bearer-request isolation. Do not use a live gateway or user session.
 
+## Verify server shutdown
+
+Run `cargo test -p folio-app shutdown::tests` to check the HTTP drain deadline
+and completion or cancellation of background tasks. On Unix, run
+`cargo test -p folio-app --test shutdown`. This test starts a child process
+with its own SQLite database, storage directory, and loopback ports. It keeps
+`/events` connected during SIGTERM, checks clean exit and stream completion,
+and receives the final shutdown log through a local OTLP collector.
+
 ## Verify ingestion claims
 
 Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_outcomes --test ingest_health --test ingest_source_scope`
@@ -35,6 +44,8 @@ with the isolated Cargo settings below. These tests use temporary SQLite databas
 and disposable PostgreSQL containers. They cover atomic outcome/ledger/outbox
 rollback, concurrent replay, stale attempts, changed skip decisions, bounded
 pagination, managed-source ownership, and source failure/recovery transitions.
+The source scope contract also trashes an enabled source during a poll and
+checks that new claims, pending completion, and status writes are rejected.
 Upgrade cases preserve existing ledger rows and emit no historical outcomes.
 Do not treat an unavailable PostgreSQL fixture as a passing parity check.
 
@@ -214,6 +225,11 @@ PostgreSQL containers; it covers bounded pagination, stable ordering, cursor
 binding, and batched tags with duplicate IDs and vault isolation. Containers are
 removed after the tests. Do not point these tests at an existing archive.
 
+The semantic search contract uses fixed embeddings and each backend's real search
+store. It checks filtered recall beyond the global candidate cutoff, inclusive
+creation start and exclusive end, deterministic score ties, trash exclusion, and
+vault isolation. Run the SQLite and both PostgreSQL configurations.
+
 For paged HTTP browsing, run `cargo test -p folio-api --test vaults browse`.
 The route tests cover bounded continuations, filter/tag enrichment, malformed
 queries, legacy list compatibility, invisible vaults, and membership revocation
@@ -233,6 +249,13 @@ Before reusing a Rust target directory from another checkout, run `cargo clean -
 for each workspace package, replacing `PACKAGE` with its name. Retain the dependency cache, but rebuild workspace
 packages so stale artifacts from the other checkout cannot satisfy a check.
 
+## Verify processing trigger definitions
+
+Run `cargo test -p folio-core --test processing_trigger_catalog --test processing_events`
+for producer event names, retry versus terminal failure choices, and bounded typed
+condition fields. Catalog tests do not establish registry dispatch or builder UI;
+verify those through the workflow suites above when registering the catalog.
+
 ## Verify worker leases
 
 Run `cargo test -p folio-infra --test processing_job_context` for enqueue-time vault
@@ -249,9 +272,10 @@ stale retry and failure, and recovery of processing rows created before leases.
 Run `RUSTC_WRAPPER= cargo test -p folio-infra --lib queue::worker::tests`
 for heartbeat renewal, rejection before expired work starts, cancellation on
 lease loss or renewal timeout, and progress while renewal waits for a connection.
-The worker suite also rejects missing embedding vectors before storing chunks or
-publishing completion. Run `cargo test -p folio-core --test embedding_batch` for
-missing or surplus vectors, malformed dimensions, and nonfinite provider output.
+The worker suite rejects missing vectors and changes to the embedding model or
+dimensions before storing chunks. A consistent retry stores every chunk.
+Run `cargo test -p folio-core --test embedding_batch` for missing or surplus
+vectors, malformed dimensions, and nonfinite provider output.
 Run `cargo test -p folio-core --test processing_attempts` for retry state, stale
 attempt rejection, terminal immutability, persisted-state restoration, and attempt
 counter exhaustion. These model tests do not verify transactional lease fencing.
@@ -388,7 +412,7 @@ Classifications from the WorkspaceView sidebar; package tests do not verify layo
 
 ## Verify retained vaults and owner grants
 
-Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test vault_lifecycle` against disposable SQLite and PostgreSQL fixtures. It covers scoped actor/lineage metadata, atomic initial ownership, no-op and rollback suppression, protected defaults, retained references, owner-only recovery, permanent audit history after outbox pruning, and cancellation/fencing of pending workflow runs.
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test vault_lifecycle` against disposable SQLite and PostgreSQL fixtures. It covers scoped actor/lineage metadata, atomic initial ownership, no-op and rollback suppression, protected defaults, retained references, owner-only recovery, permanent audit history after outbox pruning, lifecycle history retained after more than 100 newer document audit events, and cancellation/fencing of pending workflow runs.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test vault_lifecycle --test vaults` for owner, viewer, and unrelated-admin boundaries, forged lifecycle fields, deleted-vault scoping, and management controls. Existing document-focused drains must acknowledge every event while returning only document projections; dedicated lifecycle contracts inspect all envelopes.
 Run the existing repository, workflow, vault-isolation, and ingestion contracts after changes to parent-vault activity checks. A retained vault must not start workflow runs or source polls while deleted; restoring it must not reopen terminal runs.
 Build the disposable E2E fixture and run `npx playwright test vault_lifecycle.spec.ts vaults.spec.ts` from `e2e/` for desktop/mobile creation, deletion, restoration, and existing vault isolation. Do not point these tests at an existing archive. The Apple catalog and destination picker do not implement lifecycle management; native metadata, owner controls, recovery, and isolated native regressions remain required follow-up work.

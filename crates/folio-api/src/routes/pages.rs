@@ -60,6 +60,7 @@ pub fn router() -> Router<AppState> {
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate {
+    filtered: bool,
     has_review_filters: bool,
     clear_review_url: String,
     reviewed_filter: String,
@@ -231,6 +232,7 @@ async fn index_page(
         format!("/?{}", query.finish())
     };
     let template = IndexTemplate {
+        filtered,
         has_review_filters,
         clear_review_url,
         reviewed_filter: reviewed.map(|value| value.to_string()).unwrap_or_default(),
@@ -267,6 +269,7 @@ async fn index_page(
 #[derive(Template)]
 #[template(path = "partials/documents_frame.html")]
 struct DocumentsFrameTemplate {
+    filtered: bool,
     rows: Vec<DocumentRow>,
     total: usize,
     view_all: bool,
@@ -281,6 +284,7 @@ async fn documents_list(
     let total = documents.len();
 
     let template = DocumentsFrameTemplate {
+        filtered: false,
         rows: view::rows(DefaultVault(vault), &state, documents).await?,
         total,
         view_all: true,
@@ -488,7 +492,13 @@ async fn document_thumbnail(
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
-    match state.store.get(&keys::thumbnail(id)).await {
+    let key = state
+        .document_repo
+        .thumbnail_result_prefix(vault, id)
+        .await?
+        .map(|prefix| format!("{prefix}/thumbnail.jpg"))
+        .unwrap_or_else(|| keys::thumbnail(id));
+    match state.store.get(&key).await {
         Ok(object) => return Ok(stream_object(object, "image/jpeg")),
         Err(folio_core::Error::NotFound { .. }) => {}
         Err(e) => error!("Failed to read thumbnail for {id}: {e}"),
@@ -562,7 +572,19 @@ async fn document_page_thumbnail(
         return Err(ApiError::not_found("Page not found"));
     }
 
-    match state.store.get(&keys::page(id, page)).await {
+    let key = state
+        .document_repo
+        .thumbnail_result_prefix(vault, id)
+        .await?
+        .map(|prefix| {
+            if page == 1 && document.mime_type.as_deref() != Some("application/pdf") {
+                format!("{prefix}/thumbnail.jpg")
+            } else {
+                format!("{prefix}/pages/{page}.jpg")
+            }
+        })
+        .unwrap_or_else(|| keys::page(id, page));
+    match state.store.get(&key).await {
         Ok(object) => return Ok(stream_object(object, "image/jpeg")),
         Err(folio_core::Error::NotFound { .. }) => {}
         Err(e) => error!("Failed to read page {page} thumbnail for {id}: {e}"),

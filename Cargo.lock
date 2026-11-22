@@ -1299,7 +1299,7 @@ dependencies = [
  "p521",
  "pbkdf2",
  "pkcs8 0.11.0",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rsa 0.10.0-rc.19",
  "sec1 0.8.1",
  "serde",
@@ -1942,9 +1942,9 @@ dependencies = [
 
 [[package]]
 name = "fastembed"
-version = "7.7.0"
+version = "7.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7efdb63540aae5216307d11e08d75408cf0c2471aef7c10b1966eba7218b670b"
+checksum = "3d3eee4d7232dea86406e2bda49bb035b0596846b295cf94afcd46f5ad96a5b0"
 dependencies = [
  "hf-hub",
  "image",
@@ -1985,7 +1985,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee93edf3c501f0035bbeffeccfed0b79e14c311f12195ec0e661e114a0f60da4"
 dependencies = [
  "portable-atomic",
- "rand 0.10.3",
+ "rand 0.10.4",
  "web-time",
 ]
 
@@ -2135,8 +2135,11 @@ dependencies = [
  "folio-core",
  "folio-infra",
  "folio-mcp",
+ "futures",
  "reqwest 0.13.5",
+ "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2155,7 +2158,7 @@ dependencies = [
  "ipnet",
  "openidconnect",
  "qrcode",
- "rand 0.10.3",
+ "rand 0.10.4",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -2213,6 +2216,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "image",
+ "libc",
  "mail-parser",
  "native-tls",
  "notify",
@@ -3944,7 +3948,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "quick-xml",
- "rand 0.10.3",
+ "rand 0.10.4",
  "reqwest 0.13.5",
  "rustls-pki-types",
  "serde",
@@ -4783,7 +4787,7 @@ dependencies = [
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rand_pcg",
  "ring",
  "rustc-hash",
@@ -4854,9 +4858,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.3"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+checksum = "8f6fa277c67e6ea590466f04c3fe82cb509f0864fe470643e5570de9514a9b11"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -5232,7 +5236,7 @@ dependencies = [
  "libc",
  "pastey 0.2.3",
  "pin-project-lite",
- "rand 0.10.3",
+ "rand 0.10.4",
  "reqwest 0.13.5",
  "rmcp-macros",
  "schemars 1.2.3",
@@ -5303,9 +5307,9 @@ dependencies = [
 
 [[package]]
 name = "rust-embed"
-version = "8.13.0"
+version = "8.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19afa5b4b6a611de00bd1bdae6ae6f39084c9399f0679c3f52d8469cf335cc23"
+checksum = "e98f580cf7a2863aeb6827800283f52cbe6fb3f3bb7c1843783f903c16dcb8ad"
 dependencies = [
  "rust-embed-impl",
  "rust-embed-utils",
@@ -5314,9 +5318,9 @@ dependencies = [
 
 [[package]]
 name = "rust-embed-impl"
-version = "8.13.0"
+version = "8.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0d8afda6374eac59e066abee06d265247ebbaf3006cf878e2879e8356e34053"
+checksum = "a93e2f69cf224a6c7df7509aa5ba4a23f56828ee41b040e92ac8762371eb9ba7"
 dependencies = [
  "mime_guess",
  "proc-macro2",
@@ -5328,9 +5332,9 @@ dependencies = [
 
 [[package]]
 name = "rust-embed-utils"
-version = "8.13.0"
+version = "8.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d84e8ba78bd384263e5922f084cbe1b081c3b7e69add59c8fb097b879ba968a"
+checksum = "915e33dccbe7deb2b8a342dc4c517503fe85e0230ddbae40a4fb0220493dad9b"
 dependencies = [
  "mime_guess",
  "sha2 0.11.1",
@@ -6144,7 +6148,7 @@ dependencies = [
  "log",
  "md-5",
  "memchr",
- "rand 0.10.3",
+ "rand 0.10.4",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -6740,7 +6744,7 @@ dependencies = [
  "constant_time_eq",
  "hmac 0.13.0",
  "percent-encoding",
- "rand 0.10.3",
+ "rand 0.10.4",
  "serde",
  "sha1",
  "sha2 0.11.1",
@@ -7105,9 +7109,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.29.2"
+version = "1.29.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bed99139f7dac9b5cfe5f17be4d66dc7079a34dee1d74bcc77217119240e267c"
+checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -7348,7 +7352,7 @@ dependencies = [
  "der-parser",
  "hex",
  "nom 7.1.3",
- "rand 0.10.3",
+ "rand 0.10.4",
  "rand_chacha 0.10.0",
  "serde",
  "serde_cbor_2",

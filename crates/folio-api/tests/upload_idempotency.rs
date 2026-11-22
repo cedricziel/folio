@@ -227,6 +227,13 @@ impl folio_core::ports::DocumentStore for GatedStore {
         }
         self.inner.put(key, data).await
     }
+    async fn put_if_absent(&self, key: &str, data: bytes::Bytes) -> folio_core::Result<bool> {
+        if self.first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.started.notify_one();
+            self.release.notified().await;
+        }
+        self.inner.put_if_absent(key, data).await
+    }
     async fn get(&self, key: &str) -> folio_core::Result<folio_core::ports::StoredObject> {
         self.inner.get(key).await
     }

@@ -1,5 +1,7 @@
 //! Helpers shared by HTTP-based providers
 
+use std::time::Duration;
+
 use folio_core::error::{Error, Result};
 
 /// Use the configured endpoint if set, otherwise the default, without a trailing slash
@@ -40,11 +42,42 @@ pub async fn ensure_success(
     )))
 }
 
+/// Connecting to a provider that is up takes well under a second; this only
+/// has to catch a host that does not answer at all
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// HTTP client for AI providers, bounded so a hung provider fails one job
+/// instead of stalling the serial queue worker
+///
+/// `request_timeout` covers the whole request, body included. The caller
+/// takes it from the `ai.request_timeout_secs` setting.
+pub fn client(request_timeout: Duration) -> reqwest::Client {
+    client_with(CONNECT_TIMEOUT, request_timeout)
+}
+
+pub fn client_with(connect: Duration, request: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(connect)
+        .timeout(request)
+        .build()
+        .expect("static client configuration is valid")
+}
+
 pub fn request_error(provider: &str, e: reqwest::Error) -> Error {
+    if e.is_timeout() {
+        return Error::AiService(format!(
+            "{provider} request timed out; check that the provider is reachable and responding"
+        ));
+    }
     Error::AiService(format!("{provider} request failed: {e}"))
 }
 
 pub fn parse_error(provider: &str, e: reqwest::Error) -> Error {
+    if e.is_timeout() {
+        return Error::AiService(format!(
+            "{provider} request timed out while reading the response; check that the provider is responding"
+        ));
+    }
     Error::AiService(format!("Failed to parse {provider} response: {e}"))
 }
 

@@ -86,6 +86,7 @@ mod tests {
     use super::*;
     use crate::ai::test_support::MockServer;
     use folio_core::models::PipelineSettings;
+    use std::time::Duration;
 
     fn service(server: &MockServer) -> Arc<dyn EmbeddingService> {
         let mut settings = PipelineSettings::default();
@@ -124,6 +125,30 @@ mod tests {
         )])
         .await;
         service(&server).health().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn hung_provider_fails_with_a_timeout_naming_it() {
+        let server = MockServer::hanging().await;
+        let mut settings = PipelineSettings::default();
+        settings.embeddings.base_url = server.url();
+        settings.embeddings.model = "mxbai-embed-large".into();
+        let svc = build(&ProviderContext {
+            settings,
+            http: crate::ai::http::client_with(
+                Duration::from_millis(200),
+                Duration::from_millis(300),
+            ),
+        })
+        .unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(5), svc.embed(&["one"]))
+            .await
+            .expect("call must be bounded by the client timeout, not hang");
+
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("Ollama"), "{message}");
+        assert!(message.contains("timed out"), "{message}");
     }
 
     #[tokio::test]

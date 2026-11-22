@@ -13,7 +13,7 @@ use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::prefix::PrefixStore;
 use object_store::signer::Signer;
-use object_store::{ObjectStore, ObjectStoreExt};
+use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions};
 
 use folio_core::error::{Error, Result};
 use folio_core::ports::{DocumentStore, StoredObject};
@@ -144,6 +144,25 @@ impl DocumentStore for ObjectStoreDocumentStore {
                 .await
                 .map_err(|e| storage_err(&format!("Failed to write {key}"), e))?;
             Ok(())
+        })
+        .await
+    }
+
+    async fn put_if_absent(&self, key: &str, data: Bytes) -> Result<bool> {
+        self.timed("put_if_absent", async {
+            let options = PutOptions {
+                mode: PutMode::Create,
+                ..Default::default()
+            };
+            match self
+                .store
+                .put_opts(&Self::path(key)?, data.into(), options)
+                .await
+            {
+                Ok(_) => Ok(true),
+                Err(object_store::Error::AlreadyExists { .. }) => Ok(false),
+                Err(error) => Err(storage_err(&format!("Failed to create {key}"), error)),
+            }
         })
         .await
     }

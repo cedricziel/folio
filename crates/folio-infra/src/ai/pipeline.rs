@@ -24,7 +24,6 @@ const SETTINGS_TTL: Duration = Duration::from_secs(5);
 pub struct PipelineContext {
     settings_repo: Arc<dyn SettingsRepository>,
     fallback: PipelineSettings,
-    http: reqwest::Client,
     ocr_registry: OcrRegistry,
     embedding_registry: EmbeddingRegistry,
     cache: RwLock<Option<(Instant, Arc<PipelineSettings>)>>,
@@ -52,9 +51,9 @@ impl PipelineContext {
                 ai: AiSettings {
                     openai_api_key: config.ai.openai_api_key.clone().unwrap_or_default(),
                     anthropic_api_key: config.ai.anthropic_api_key.clone().unwrap_or_default(),
+                    request_timeout_secs: config.ai.request_timeout_secs,
                 },
             },
-            http: reqwest::Client::new(),
             ocr_registry: ocr::builtin(),
             embedding_registry: embeddings::builtin(),
             cache: RwLock::new(None),
@@ -124,7 +123,7 @@ impl PipelineContext {
     fn provider_context(&self, settings: &PipelineSettings) -> ProviderContext {
         ProviderContext {
             settings: settings.clone(),
-            http: self.http.clone(),
+            http: super::http::client(Duration::from_secs(settings.ai.request_timeout_secs)),
         }
     }
 }
@@ -157,7 +156,7 @@ impl<K: PartialEq + Clone, T: Clone> Memo<K, T> {
 /// OCR service that follows the `ocr.*` settings
 pub struct DynamicOcrService {
     pipeline: Arc<PipelineContext>,
-    current: Memo<(OcrSettings, String, String), Arc<dyn OcrService>>,
+    current: Memo<(OcrSettings, String, String, u64), Arc<dyn OcrService>>,
 }
 
 impl DynamicOcrService {
@@ -174,6 +173,7 @@ impl DynamicOcrService {
             settings.ocr.clone(),
             settings.ai.openai_api_key.clone(),
             settings.ai.anthropic_api_key.clone(),
+            settings.ai.request_timeout_secs,
         );
         self.current
             .get_or_build(key, || self.pipeline.build_ocr(&settings))
@@ -196,7 +196,7 @@ impl OcrService for DynamicOcrService {
 /// Embedding service that follows the `embeddings.*` settings
 pub struct DynamicEmbeddingService {
     pipeline: Arc<PipelineContext>,
-    current: Memo<(EmbeddingSettings, String), Arc<dyn EmbeddingService>>,
+    current: Memo<(EmbeddingSettings, String, u64), Arc<dyn EmbeddingService>>,
 }
 
 impl DynamicEmbeddingService {
@@ -212,6 +212,7 @@ impl DynamicEmbeddingService {
         let key = (
             settings.embeddings.clone(),
             settings.ai.openai_api_key.clone(),
+            settings.ai.request_timeout_secs,
         );
         self.current
             .get_or_build(key, || self.pipeline.build_embeddings(&settings))
@@ -252,4 +253,65 @@ async fn observe_ai<T>(
     let result = tracing::Instrument::instrument(call, span).await;
     crate::telemetry::metrics().ai_request(operation, &provider, result.is_ok(), started);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ai::test_support::MockServer;
+    use chrono::Utc;
+    use folio_core::models::Setting;
+
+    struct Rows(Vec<Setting>);
+
+    fn row(key: &str, value: &str) -> Setting {
+        Setting {
+            key: key.into(),
+            value: value.into(),
+            description: None,
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[async_trait]
+    impl SettingsRepository for Rows {
+        async fn get(&self, _: &str) -> Result<Option<Setting>> {
+            unimplemented!()
+        }
+        async fn list(&self) -> Result<Vec<Setting>> {
+            Ok(self.0.clone())
+        }
+        async fn list_by_prefix(&self, _: &str) -> Result<Vec<Setting>> {
+            unimplemented!()
+        }
+        async fn set(&self, _: &str, _: &str) -> Result<Setting> {
+            unimplemented!()
+        }
+        async fn set_many(&self, _: &[(String, String)]) -> Result<()> {
+            unimplemented!()
+        }
+        async fn delete(&self, _: &str) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn production_path_bounds_a_hung_provider_by_the_setting() {
+        let server = MockServer::hanging().await;
+        let rows = Rows(vec![
+            row("embeddings.provider", "ollama"),
+            row("embeddings.base_url", &server.url()),
+            row("ai.request_timeout_secs", "1"),
+        ]);
+        let pipeline = PipelineContext::new(Arc::new(rows), AiConfig::default());
+        let embeddings = DynamicEmbeddingService::new(pipeline);
+
+        let result = tokio::time::timeout(Duration::from_secs(10), embeddings.embed(&["x"]))
+            .await
+            .expect("pipeline-built client must not hang");
+
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("Ollama"), "{message}");
+        assert!(message.contains("timed out"), "{message}");
+    }
 }

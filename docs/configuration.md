@@ -13,7 +13,7 @@ From lowest to highest:
 4. Settings stored in the database (managed on the `/settings` page)
 
 The database overrides the other layers only for the keys it manages:
-`ai.openai_api_key`, `ai.anthropic_api_key`, `ocr.*`, `embeddings.*`,
+`ai.openai_api_key`, `ai.anthropic_api_key`, `ai.request_timeout_secs`, `ocr.*`, `embeddings.*`,
 the `processing.*` toggles, `apple.app_ids` and `push.*` (except
 `push.apns.base_url`, which is read from configuration only). Everything else
 is fixed at startup by the first three layers.
@@ -91,6 +91,7 @@ preserve existing database rows, including values seeded by earlier releases.
 | `ai.provider` | `FOLIO_AI__PROVIDER` | `openai` | `openai`, `anthropic` or `local`. |
 | `ai.openai_api_key` | `FOLIO_AI__OPENAI_API_KEY` | unset | OpenAI API key. |
 | `ai.anthropic_api_key` | `FOLIO_AI__ANTHROPIC_API_KEY` | unset | Anthropic API key. |
+| `ai.request_timeout_secs` | `FOLIO_AI__REQUEST_TIMEOUT_SECS` | `300` | Seconds one AI provider request (OCR or embeddings) may take before the job fails with a timeout error naming the provider. Raise it for slow CPU-only vision models. Range 1 to 3600. The value saved in the AI section of `/settings` overrides it. |
 | `mcp.enabled` | `FOLIO_MCP__ENABLED` | follows `auth.required` | Serve the MCP endpoint at `/mcp`. On when `auth.required` is true, off otherwise because the endpoint is only protected by auth. The `mcp.enabled` database setting overrides it. See [mcp.md](mcp.md). |
 | `mcp.allowed_hosts` | `FOLIO_MCP__ALLOWED_HOSTS` | empty | Comma-separated extra `Host` headers `/mcp` accepts besides loopback. |
 | `push.transport` | `FOLIO_PUSH__TRANSPORT` | `none` | `none` or `apns`. With `none`, the Apple app can register but no notification is sent. The database setting on `/settings` overrides it. See [push-notifications.md](push-notifications.md). |

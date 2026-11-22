@@ -35,6 +35,20 @@ async fn contract(store: &dyn DocumentStore) {
         .unwrap();
     assert_eq!(store.get_bytes(&key).await.unwrap(), b"replaced!");
 
+    let revision_key = keys::revision_original(Uuid::new_v4(), Uuid::new_v4());
+    let (first, second) = tokio::join!(
+        store.put_if_absent(&revision_key, Bytes::from_static(b"first")),
+        store.put_if_absent(&revision_key, Bytes::from_static(b"second")),
+    );
+    let first_won = first.unwrap();
+    assert_ne!(
+        first_won,
+        second.unwrap(),
+        "exactly one put must create the object"
+    );
+    let expected: &[u8] = if first_won { b"first" } else { b"second" };
+    assert_eq!(store.get_bytes(&revision_key).await.unwrap(), expected);
+
     // missing objects
     let missing = store.get(&keys::thumbnail(id)).await.err().unwrap();
     assert!(matches!(missing, Error::NotFound { .. }), "{missing:?}");

@@ -420,6 +420,6 @@ pub(super) async fn active_source(
     if origin == SourceOrigin::Config {
         return Ok(true);
     }
-    Ok(sqlx::query("SELECT id FROM ingestion_sources WHERE vault_id = ? AND id = ? AND kind = ? AND enabled = 1")
+    Ok(sqlx::query("SELECT id FROM ingestion_sources WHERE vault_id = ? AND id = ? AND kind = ? AND enabled = 1 AND deleted_at IS NULL")
         .bind(vault.to_string()).bind(source.to_string()).bind(kind.as_str()).fetch_optional(conn).await.map_err(repo_err)?.is_some())
 }

@@ -3,6 +3,7 @@
 //! This module contains the core business logic that orchestrates
 //! domain operations using the port traits.
 
+mod file_identities;
 mod file_sizes;
 mod idempotent_uploads;
 pub mod import;
@@ -15,6 +16,7 @@ mod paperless_sources;
 mod vaults;
 mod workflow_engine;
 
+pub use file_identities::backfill_original_identities;
 pub use file_sizes::backfill_file_sizes;
 pub use idempotent_uploads::{ClaimTiming, IdempotentUploads, UploadOutcome};
 pub use importer::Importer;
@@ -236,10 +238,20 @@ impl SearchServiceFacade {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
+        self.search_filtered(vault, query, limit, None).await
+    }
+
+    async fn search_filtered(
+        &self,
+        vault: VaultId,
+        query: &str,
+        limit: usize,
+        filter: Option<DocumentFilter>,
+    ) -> Result<Vec<SearchResult>> {
         let batch = self.embedding_service.embed(&[query]).await?;
         let vector = batch.vectors.first().map(Vec::as_slice).unwrap_or_default();
         self.search_service
-            .search(vault, &batch.model, vector, limit)
+            .search_filtered(vault, &batch.model, vector, limit, filter)
             .await
     }
 
@@ -254,7 +266,7 @@ impl SearchServiceFacade {
         limit: usize,
     ) -> Result<Vec<ScoredDocument>> {
         let semantic = self
-            .search_documents(vault, query, limit)
+            .search_documents(vault, query, limit, None)
             .await
             .unwrap_or_default();
         let scores: std::collections::HashMap<Id, f32> =
@@ -290,9 +302,10 @@ impl SearchServiceFacade {
         vault: VaultId,
         query: &str,
         limit: usize,
+        filter: Option<DocumentFilter>,
     ) -> Result<Vec<ScoredDocument>> {
         let mut results = Vec::new();
-        for hit in self.search(vault, query, limit).await? {
+        for hit in self.search_filtered(vault, query, limit, filter).await? {
             if let Some(document) = self
                 .document_repo
                 .find_by_id(vault, hit.document_id)

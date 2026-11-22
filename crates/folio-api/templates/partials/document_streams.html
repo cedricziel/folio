@@ -2,19 +2,19 @@
 {% match row %}
 {% when Some with (row) %}
 {% if prepend %}
-<turbo-stream action="remove" target="documents-empty"></turbo-stream>
-<turbo-stream action="prepend" target="documents-rows"><template>{% include "partials/document_row.html" %}</template></turbo-stream>
+<turbo-stream data-live-list action="remove" target="documents-empty"></turbo-stream>
+<turbo-stream data-live-list action="prepend" target="documents-rows"><template>{% include "partials/document_row.html" %}</template></turbo-stream>
 {% else %}
-<turbo-stream action="replace" target="document-{{ row.id }}"><template>{% include "partials/document_row.html" %}</template></turbo-stream>
+<turbo-stream data-live-list action="replace" target="document-{{ row.id }}"><template>{% include "partials/document_row.html" %}</template></turbo-stream>
 {% endif %}
 {% when None %}
 {% endmatch %}
 {% match detail %}{% when Some with (detail) %}{{ detail|safe }}{% when None %}{% endmatch %}
 {% match removed %}
 {% when Some with (id) %}
-<turbo-stream action="remove" target="document-{{ id }}"></turbo-stream>
+<turbo-stream data-live-list action="remove" target="document-{{ id }}"></turbo-stream>
 {% when None %}
 {% endmatch %}
-<turbo-stream action="replace" target="inbox-count"><template>{{ counts::inbox_badge(counts.inbox) }}</template></turbo-stream>
-<turbo-stream action="replace" target="all-count"><template>{{ counts::all_badge(counts.total) }}</template></turbo-stream>
-<turbo-stream action="replace" target="inbox-notice"><template>{{ counts::review_notice(counts) }}</template></turbo-stream>
+<turbo-stream data-live-list action="replace" target="inbox-count"><template>{{ counts::inbox_badge(counts.inbox) }}</template></turbo-stream>
+<turbo-stream data-live-list action="replace" target="all-count"><template>{{ counts::all_badge(counts.total) }}</template></turbo-stream>
+<turbo-stream data-live-list action="replace" target="inbox-notice"><template>{{ counts::review_notice(counts) }}</template></turbo-stream>

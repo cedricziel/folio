@@ -51,16 +51,38 @@ The event envelope and bounded condition snapshot are captured transactionally. 
 
 ## Foundation API integration
 
-The proposed foundation API is not merged. Verify these signatures against its merged commit before implementation:
+The foundation API is merged. The following integration points were checked against `27d9f43e` on November 22, 2026:
 
 - `folio_core::domain_event::DomainEventEnvelope::new(event_type, vault_id, subject, document_id, audience, data)` derives actor, time, and UUID on the server.
 - `DomainEventSubject { subject_type, id }` serializes subject_type as `type`. These events use document subject type and `Some(document_id)`.
 - `EventAudience::Vault` applies to this slice's document events. Consumers still recheck current vault/document access. Do not use Owners or User audience to bypass document authorization.
-- `with_correlation(correlation_id, causation_id)` carries workflow lineage. Reuse the envelope identity across retries instead of calling new again for delivery.
+- `with_mutation(mutation_id)` groups the revision, review-cleared, and compatibility events from one transaction. `with_correlation(correlation_id, causation_id)` carries workflow lineage. Reuse the envelope identity across retries instead of calling new again for delivery.
 - `folio_infra::database::{sqlite,postgres}::insert_domain_event(&mut Connection, &DomainEventEnvelope) -> Result<i64>` must execute on the domain mutation's transaction connection.
 
 The foundation owns migration `20261102160050_domain_event_identity.sql` and its nullable unique event_id. Do not add a parallel envelope table, identity migration, or event bus. Payload data schemas remain owned by this slice. OutboxEvent exposes optional envelope and optional legacy DocumentEvent; new document events carry both through foundation compatibility mapping, while old rows may have only the legacy event. Keep current SSE/workflow consumers compatible and test both row formats.
 
 ## Migration reservation
 
-This slice owns migration versions 20261102161000 through 20261102161999. Use valid timestamp-style versions with matching SQLite and PostgreSQL files. Before creating a migration, check merged main for unrelated collisions. Only unpublished, unapplied task-owned migrations may be renumbered. Verify fresh ordering and upgrades with dependency PRs landing in different orders. This reservation does not change the foundation merge gate.
+Migration `20261122190000_document_revisions.sql` runs after the shared document and vault ownership index from `20261102163000_document_discussion.sql`. Use matching SQLite and PostgreSQL versions. Check merged main for collisions before adding a migration. Only unpublished, unapplied task-owned migrations may be renumbered. Verify fresh ordering and upgrades with dependency PRs landing in different orders. This reservation does not change the foundation merge gate.
+
+## Resumption audit, November 22, 2026
+
+Date editing shipped in #290, review persistence in #295, and review actions and filters in #314. Their implementations are prerequisites already on main. Do not restore earlier client drafts over those implementations.
+
+At `27d9f43e`, `Importer::finish` and `Importer::import` still write `keys::original(document.id)` and call `DocumentRepository::finalize_upload` with a path and byte size. The retry path checks object existence without verifying stored bytes. Convert both paths together so a resumed upload cannot publish the identity of incoming bytes while retaining different stored bytes.
+
+`DocumentStore::put` explicitly replaces an existing object. Revision-local keys alone do not make retries immutable. Publication must verify the stored object and prevent later writers from replacing published bytes. Keep cleanup scoped to objects owned by the failed attempt, and preserve the existing late-purge cleanup behavior.
+
+`ProcessingQueue::enqueue_processing` currently takes only a document ID. Revision publication must enqueue work with its persisted revision ID in the same database transaction. Legacy jobs need an explicit migration or rejection policy; a missing revision ID must not authorize writes to whichever revision is current when the job finishes.
+
+The existing `finalize_upload` transaction emits the compatible Created event. Preserve that event for first uploads and add revision events through the shared transactional outbox. Backfill must emit neither upload nor revision-created events. Keep replacement routes unavailable until worker writes and search reads enforce current-revision ownership.
+
+Coordinate the job payload and claim checks with the processing owner before changing queue ports. Reconcile the Paperless import path separately: it creates imported documents through its own transaction and must retain its import-origin workflow suppression.
+
+## Processing owner integration boundary
+
+The processing owner is extending the existing OCR fence to embedding and thumbnail stages. That increment retains nullable revision identity and rejects non-null revisions until dispatch supports them. Integrate with that implementation rather than adding a second stage-fence abstraction.
+
+Add a distinct `ProcessDocumentRevision { document_id, revision_id, force }` job payload while retaining legacy `ProcessDocument` decoding. Every child job must inherit the persisted revision ID. The stage loader and completion transaction must compare that ID with `documents.current_revision_id`, alongside existing vault, current-run, and live-claim checks. Acquire locks in document, job, then stage order.
+
+Thumbnail outputs use the processing owner's immutable run/claim `result_prefix`. Associate that persisted output with its revision without overwriting earlier outputs. Do not expose replacement until OCR, embedding, thumbnail, recovery, and search paths all enforce the same revision boundary.

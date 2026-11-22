@@ -95,6 +95,7 @@ async fn seed_keys(h: &common::Harness) {
             &AiSettings {
                 openai_api_key: "stored-openai-secret".into(),
                 anthropic_api_key: "stored-anthropic-secret".into(),
+                ..Default::default()
             }
             .to_settings(),
         )
@@ -424,4 +425,67 @@ async fn administrator_can_request_global_reembedding() {
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(response.headers()["location"], "/settings?reembedded=0");
+}
+
+#[tokio::test]
+async fn ai_request_timeout_is_saved_shown_and_applied() {
+    let h = common::harness_requiring_login().await;
+    let cookie = session(&h, true, false).await;
+
+    let response = h
+        .app
+        .clone()
+        .oneshot(settings_request(
+            "POST",
+            "/settings/ai",
+            &cookie,
+            "openai_api_key=&anthropic_api_key=&request_timeout_secs=600",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = common::text(response).await;
+    assert!(html.contains("AI request timeout (seconds)"));
+    assert!(html.contains(r#"value="600""#), "{html}");
+
+    let row = h
+        .state
+        .settings_repo
+        .get("ai.request_timeout_secs")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.value, "600");
+    assert_eq!(
+        h.state.pipeline.settings().await.ai.request_timeout_secs,
+        600
+    );
+}
+
+#[tokio::test]
+async fn ai_request_timeout_outside_one_to_3600_is_rejected() {
+    let h = common::harness_requiring_login().await;
+    let cookie = session(&h, true, false).await;
+
+    for bad in ["0", "3601", "abc", "-1"] {
+        let response = h
+            .app
+            .clone()
+            .oneshot(settings_request(
+                "POST",
+                "/settings/ai",
+                &cookie,
+                &format!("openai_api_key=&anthropic_api_key=&request_timeout_secs={bad}"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{bad}");
+    }
+    assert!(h
+        .state
+        .settings_repo
+        .get("ai.request_timeout_secs")
+        .await
+        .unwrap()
+        .is_none());
 }

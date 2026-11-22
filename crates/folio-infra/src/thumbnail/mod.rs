@@ -13,6 +13,8 @@ use uuid::Uuid;
 use folio_core::error::{Error, Result};
 use folio_core::ports::{keys, DocumentStore};
 
+use crate::ai::process;
+
 /// Default thumbnail dimensions
 pub const THUMBNAIL_WIDTH: u32 = 300;
 pub const THUMBNAIL_HEIGHT: u32 = 300;
@@ -44,6 +46,34 @@ impl ThumbnailService {
         mime_type: &str,
         text_content: Option<&str>,
     ) -> Result<String> {
+        self.generate_to_key(keys::thumbnail(document_id), data, mime_type, text_content)
+            .await
+    }
+
+    /// Generate a thumbnail beneath an immutable processing-attempt namespace.
+    pub async fn generate_at(
+        &self,
+        prefix: &str,
+        data: &[u8],
+        mime_type: &str,
+        text_content: Option<&str>,
+    ) -> Result<String> {
+        self.generate_to_key(
+            format!("{prefix}/thumbnail.jpg"),
+            data,
+            mime_type,
+            text_content,
+        )
+        .await
+    }
+
+    async fn generate_to_key(
+        &self,
+        key: String,
+        data: &[u8],
+        mime_type: &str,
+        text_content: Option<&str>,
+    ) -> Result<String> {
         let thumbnail_data = if mime_type.starts_with("image/") {
             self.generate_image_thumbnail(data)?
         } else if mime_type == "application/pdf" {
@@ -56,9 +86,7 @@ impl ThumbnailService {
             ));
         };
 
-        let key = keys::thumbnail(document_id);
         self.store.put(&key, thumbnail_data.into()).await?;
-
         debug!("Generated thumbnail: {}", key);
         Ok(key)
     }
@@ -223,11 +251,7 @@ impl ThumbnailService {
 
     /// Get the number of pages in a PDF on local disk
     pub async fn get_pdf_page_count(&self, pdf: &Path) -> Result<u32> {
-        match Command::new("pdfinfo")
-            .kill_on_drop(true)
-            .arg(pdf)
-            .output()
-            .await
+        match process::output_within(Command::new("pdfinfo").arg(pdf), process::INFO_TIMEOUT).await
         {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -248,6 +272,17 @@ impl ThumbnailService {
     /// Generate a page thumbnail for a PDF on local disk and return its object key
     #[instrument(skip(self, page), fields(page = i64::from(page)))]
     pub async fn generate_page(&self, document_id: Uuid, pdf: &Path, page: u32) -> Result<String> {
+        self.generate_page_to_key(keys::page(document_id, page), pdf, page)
+            .await
+    }
+
+    /// Generate a PDF page beneath an immutable processing-attempt namespace.
+    pub async fn generate_page_at(&self, prefix: &str, pdf: &Path, page: u32) -> Result<String> {
+        self.generate_page_to_key(format!("{prefix}/pages/{page}.jpg"), pdf, page)
+            .await
+    }
+
+    async fn generate_page_to_key(&self, key: String, pdf: &Path, page: u32) -> Result<String> {
         let thumbnail_data = match render_pdf_page(pdf, page, PAGE_WIDTH, PAGE_HEIGHT).await {
             Some(jpeg) => jpeg,
             None => {
@@ -255,9 +290,7 @@ impl ThumbnailService {
             }
         };
 
-        let key = keys::page(document_id, page);
         self.store.put(&key, thumbnail_data.into()).await?;
-
         debug!("Generated page {} thumbnail: {}", page, key);
         Ok(key)
     }
@@ -280,14 +313,14 @@ async fn render_pdf_page(pdf: &Path, page: u32, width: u32, height: u32) -> Opti
 
     let page_str = page.to_string();
     let out_prefix = dir.path().join("out");
-    let result = Command::new("pdftoppm")
-        .kill_on_drop(true)
-        .args(["-jpeg", "-f", &page_str, "-l", &page_str, "-scale-to"])
-        .arg(width.to_string())
-        .arg(pdf)
-        .arg(&out_prefix)
-        .output()
-        .await;
+    let result = process::output(
+        Command::new("pdftoppm")
+            .args(["-jpeg", "-f", &page_str, "-l", &page_str, "-scale-to"])
+            .arg(width.to_string())
+            .arg(pdf)
+            .arg(&out_prefix),
+    )
+    .await;
     match result {
         Ok(output) if output.status.success() => {
             // pdftoppm appends a zero-padded page number to the prefix.
@@ -304,20 +337,20 @@ async fn render_pdf_page(pdf: &Path, page: u32, width: u32, height: u32) -> Opti
     }
 
     let fallback = dir.path().join("fallback.jpg");
-    let result = Command::new("convert")
-        .kill_on_drop(true)
-        .args(["-density", "150"])
-        // ImageMagick uses a 0-based page index
-        .arg(format!("{}[{}]", pdf.display(), page.saturating_sub(1)))
-        .args([
-            "-resize",
-            &format!("{}x{}", width, height),
-            "-quality",
-            "85",
-        ])
-        .arg(&fallback)
-        .output()
-        .await;
+    let result = process::output(
+        Command::new("convert")
+            .args(["-density", "150"])
+            // ImageMagick uses a 0-based page index
+            .arg(format!("{}[{}]", pdf.display(), page.saturating_sub(1)))
+            .args([
+                "-resize",
+                &format!("{}x{}", width, height),
+                "-quality",
+                "85",
+            ])
+            .arg(&fallback),
+    )
+    .await;
     match result {
         Ok(output) if output.status.success() => tokio::fs::read(&fallback).await.ok(),
         Ok(output) => {

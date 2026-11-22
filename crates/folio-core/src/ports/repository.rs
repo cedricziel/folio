@@ -6,9 +6,10 @@ use crate::error::Result;
 use crate::models::AuditEvent;
 use crate::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentType, ExternalRef, GroupId, Id, ImportedDocument, NewAuditEvent,
-    Principal, ProcessingStage, ProcessingStatus, Setting, Tag, UpdateCorrespondent,
-    UpdateDocument, UpdateDocumentType, UpdateTag, UserId, Vault, VaultId, VaultMember, VaultRole,
+    DocumentFilter, DocumentType, ExternalRef, FileIdentity, GroupId, Id, ImportedDocument,
+    NewAuditEvent, Principal, ProcessingStage, ProcessingStatus, Setting, Tag, UnverifiedOriginal,
+    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, UserId, Vault, VaultId,
+    VaultMember, VaultRole,
 };
 
 /// Repository for document operations
@@ -44,6 +45,10 @@ pub trait DocumentRepository: Send + Sync {
 
     /// Find a document by ID
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>>;
+
+    /// Latest committed thumbnail prefix in this live document's active vault, including prior runs.
+    /// Returns `None` when only legacy thumbnail storage exists or the document is unavailable.
+    async fn thumbnail_result_prefix(&self, vault: VaultId, id: Id) -> Result<Option<String>>;
 
     /// List all documents with optional filtering
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>>;
@@ -139,6 +144,15 @@ pub trait DocumentRepository: Send + Sync {
         file_size: u64,
     ) -> Result<()>;
 
+    /// Publish the verified original of a pending upload as revision one.
+    /// Returns false when the same original was already published.
+    async fn finalize_verified_upload(
+        &self,
+        vault: VaultId,
+        id: Id,
+        identity: &FileIdentity,
+    ) -> Result<bool>;
+
     /// Update the file path for a document; a new path forgets the recorded size
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()>;
 
@@ -151,6 +165,21 @@ pub trait DocumentRepository: Send + Sync {
     /// the document itself did not change.
     async fn set_file_size(&self, vault: VaultId, id: Id, file_path: &str, size: u64)
         -> Result<()>;
+
+    /// Page through current originals with unverified identity, including prior read failures.
+    async fn list_unverified_originals(
+        &self,
+        after: Option<Id>,
+        limit: u32,
+    ) -> Result<Vec<UnverifiedOriginal>>;
+
+    /// Record actual bytes or mark the source unavailable. Returns false if the file
+    /// was verified, moved, replaced, or marked for purge while storage was read.
+    async fn record_original_verification(
+        &self,
+        original: &UnverifiedOriginal,
+        identity: Option<&FileIdentity>,
+    ) -> Result<bool>;
 
     /// Update the page count for a document
     async fn set_page_count(&self, vault: VaultId, id: Id, page_count: u32) -> Result<()>;
@@ -417,4 +446,7 @@ pub trait AuditLog: Send + Sync {
 
     /// Newest first
     async fn list(&self, vault: VaultId, limit: u32) -> Result<Vec<AuditEvent>>;
+
+    /// Newest vault and membership facts, with filtering applied before the limit.
+    async fn list_lifecycle(&self, vault: VaultId, limit: u32) -> Result<Vec<AuditEvent>>;
 }

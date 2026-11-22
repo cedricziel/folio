@@ -18,6 +18,8 @@ folio-mcp = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
 chrono = { workspace = true }
 
 # Web framework
@@ -36,3 +38,7 @@ tracing-subscriber = { workspace = true }
 [features]
 # Local ONNX embeddings (embeddings.provider = "fastembed")
 fastembed = ["folio-infra/fastembed"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

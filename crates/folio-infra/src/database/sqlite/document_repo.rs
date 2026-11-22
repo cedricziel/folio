@@ -11,13 +11,16 @@ use uuid::Uuid;
 use super::outbox::{
     capture_document, insert_domain_event_with_origin, insert_event, insert_event_with_envelope,
 };
-use folio_core::document_transitions::{metadata_envelopes, move_envelopes};
+use folio_core::document_transitions::{
+    first_revision_envelope, metadata_envelopes, move_envelopes,
+};
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentSource, DocumentType, EntryKind, ExternalRef, Id, ImportedDocument,
-    ProcessingStage, ProcessingStatus, ReviewOrigin, SourceKind, Tag, UpdateCorrespondent,
-    UpdateDocument, UpdateDocumentType, UpdateTag, UserId, VaultId,
+    DocumentFilter, DocumentSource, DocumentType, EntryKind, ExternalRef, FileIdentity, Id,
+    ImportedDocument, ProcessingStage, ProcessingStatus, ReviewOrigin, SourceKind, Tag,
+    UnverifiedOriginal, UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, UserId,
+    VaultId,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -410,7 +413,7 @@ impl TryFrom<DocumentTypeRow> for DocumentType {
 }
 
 /// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
-fn push_filter(qb: &mut QueryBuilder<Sqlite>, filter: DocumentFilter) -> Result<()> {
+pub(super) fn push_filter(qb: &mut QueryBuilder<Sqlite>, filter: DocumentFilter) -> Result<()> {
     filter.validate()?;
     if let Some(reviewed) = filter.reviewed {
         qb.push(if reviewed {
@@ -659,6 +662,23 @@ impl DocumentRepository for SqliteDocumentRepository {
         row.map(TryInto::try_into).transpose()
     }
 
+    async fn thumbnail_result_prefix(&self, vault: VaultId, id: Id) -> Result<Option<String>> {
+        sqlx::query_scalar(
+            "SELECT r.result_prefix FROM processing_stage_runs r
+             JOIN documents d ON d.id = r.document_id AND d.vault_id = r.vault_id
+             JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
+             WHERE d.id = ? AND d.vault_id = ? AND d.deleted_at IS NULL
+               AND d.purge_requested_at IS NULL
+               AND r.stage = 'thumbnail' AND r.state = 'completed' AND r.result_prefix IS NOT NULL
+             ORDER BY r.created_at DESC, r.updated_at DESC, r.id DESC LIMIT 1",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)
+    }
+
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
         let mut qb = QueryBuilder::<Sqlite>::new(format!(
             "SELECT {DOC_COLS} FROM documents WHERE deleted_at IS NULL AND vault_id = "
@@ -741,7 +761,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         if let Some(filter) = filter {
             push_filter(&mut qb, filter)?;
         }
-        qb.push(" ORDER BY created_at DESC");
+        qb.push(" ORDER BY created_at DESC, id");
 
         let ids: Vec<String> = qb
             .build_query_scalar()
@@ -1348,13 +1368,18 @@ impl DocumentRepository for SqliteDocumentRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-        let (pending, existing_path): (bool, Option<String>) = sqlx::query_as("SELECT upload_pending, file_path FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
+        let (pending, existing_path, has_revision): (bool, Option<String>, bool) = sqlx::query_as("SELECT upload_pending, file_path, current_revision_id IS NOT NULL FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
             .bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?
             .ok_or_else(|| not_found("Document", id))?;
         if !pending && existing_path.as_deref() == Some(file_path) {
             sqlx::query("UPDATE documents SET file_size = ? WHERE id = ? AND vault_id = ? AND file_size IS NULL")
                 .bind(file_size as i64).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
             return self.commit(tx).await;
+        }
+        if has_revision {
+            return Err(Error::Conflict(
+                "A published original requires a new revision".into(),
+            ));
         }
         sqlx::query("UPDATE documents SET file_path = ?, file_size = ?, upload_pending = FALSE, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ?")
             .bind(file_path).bind(file_size as i64).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
@@ -1365,10 +1390,128 @@ impl DocumentRepository for SqliteDocumentRepository {
         self.commit(tx).await
     }
 
+    async fn finalize_verified_upload(
+        &self,
+        vault: VaultId,
+        id: Id,
+        identity: &FileIdentity,
+    ) -> Result<bool> {
+        let file_size = i64::try_from(identity.byte_size)
+            .map_err(|_| Error::Validation("Original byte size exceeds database range".into()))?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let (pending, path, revision): (bool, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT upload_pending, file_path, current_revision_id FROM documents
+             WHERE id = ?1 AND vault_id = ?2 AND deleted_at IS NULL",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?
+        .ok_or_else(|| not_found("Document", id))?;
+
+        if !pending {
+            if path.as_deref() != Some(identity.storage_key.as_str()) {
+                return Err(Error::Conflict(
+                    "Document already has a different original".into(),
+                ));
+            }
+            if let Some(revision) = revision {
+                let published: Option<(String, i64)> = sqlx::query_as(
+                    "SELECT f.sha256, f.byte_size FROM document_revisions r
+                     JOIN document_files f ON f.id = r.original_file_id
+                     WHERE r.id = ?1 AND f.verification_state = 'verified'",
+                )
+                .bind(revision)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+                if published
+                    .is_some_and(|(sha256, size)| sha256 != identity.sha256 || size != file_size)
+                {
+                    return Err(Error::Conflict(
+                        "Stored original differs from this upload".into(),
+                    ));
+                }
+            }
+            return Ok(false);
+        }
+        if revision.is_some() {
+            return Err(Error::Conflict(
+                "Pending document already has a revision".into(),
+            ));
+        }
+        let now = Utc::now();
+        let actor = folio_core::mutation::current_actor();
+        sqlx::query(
+            "INSERT INTO document_files (id, document_id, vault_id, role, storage_key,
+                 original_filename, mime_type, verification_state, sha256, byte_size)
+             SELECT d.id, d.id, d.vault_id, 'original', ?3, d.original_filename, ?4, 'verified', ?5, ?6
+             FROM documents d WHERE d.id = ?1 AND d.vault_id = ?2",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .bind(&identity.storage_key)
+        .bind(&identity.mime_type)
+        .bind(&identity.sha256)
+        .bind(file_size)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        sqlx::query(
+            "INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at, created_by)
+             VALUES (?1, ?1, ?2, 1, ?1, ?3, ?4)",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .bind(now.to_rfc3339())
+        .bind(actor.as_ref().map(UserId::as_str))
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        sqlx::query(
+            "UPDATE documents SET current_revision_id = ?1, file_path = ?3,
+                 file_size = ?4, upload_pending = FALSE, updated_at = ?5, updated_by = ?6
+             WHERE id = ?1 AND vault_id = ?2",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .bind(&identity.storage_key)
+        .bind(file_size)
+        .bind(now.to_rfc3339())
+        .bind(actor.as_ref().map(UserId::as_str))
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let context = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let event = DocumentEvent::Created { document_id: id };
+        let envelope = folio_core::events::document_event_envelope(&event, Some(&context))?
+            .ok_or_else(|| Error::Repository("Upload has no event envelope".into()))?;
+        let revision = first_revision_envelope(&envelope, &context, id, identity)?;
+        insert_event_with_envelope(&mut tx, &event, self.origin, Some(&context), &envelope).await?;
+        insert_domain_event_with_origin(&mut tx, &revision, self.origin).await?;
+        self.commit(tx).await?;
+        Ok(true)
+    }
+
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
-        let result = sqlx::query("UPDATE documents SET file_path = ?, file_size = NULL, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND file_path IS NOT ?").bind(file_path).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).bind(file_path).execute(&self.pool).await.map_err(map_sqlx_error)?;
-        if result.rows_affected() == 0 && self.find_by_id(vault, id).await?.is_none() {
-            return Err(not_found("Document", id));
+        let result = sqlx::query("UPDATE documents SET file_path = ?, file_size = NULL, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND current_revision_id IS NULL AND file_path IS NOT ?").bind(file_path).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).bind(file_path).execute(&self.pool).await.map_err(map_sqlx_error)?;
+        if result.rows_affected() == 0 {
+            let document = self
+                .find_by_id(vault, id)
+                .await?
+                .ok_or_else(|| not_found("Document", id))?;
+            if document.file_path.as_deref() != Some(file_path) {
+                return Err(Error::Conflict(
+                    "A published original requires a new revision".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -1405,6 +1548,84 @@ impl DocumentRepository for SqliteDocumentRepository {
         .await
         .map_err(map_sqlx_error)?;
         Ok(())
+    }
+
+    async fn list_unverified_originals(
+        &self,
+        after: Option<Id>,
+        limit: u32,
+    ) -> Result<Vec<UnverifiedOriginal>> {
+        let rows = sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT f.id, f.vault_id, f.storage_key, f.mime_type
+             FROM document_files f
+             JOIN documents d ON d.id = f.document_id AND d.vault_id = f.vault_id
+             JOIN document_revisions r ON r.id = d.current_revision_id AND r.original_file_id = f.id
+             WHERE f.verification_state <> 'verified' AND d.purge_requested_at IS NULL
+               AND d.file_path = f.storage_key AND (?1 IS NULL OR f.id > ?1)
+             ORDER BY f.id LIMIT ?2",
+        )
+        .bind(after.map(|id| id.to_string()))
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        rows.into_iter()
+            .map(|(id, vault_id, storage_key, mime_type)| {
+                Ok(UnverifiedOriginal {
+                    id: parse_uuid(&id)?,
+                    vault_id: VaultId(parse_uuid(&vault_id)?),
+                    storage_key,
+                    mime_type,
+                })
+            })
+            .collect()
+    }
+
+    async fn record_original_verification(
+        &self,
+        original: &UnverifiedOriginal,
+        identity: Option<&FileIdentity>,
+    ) -> Result<bool> {
+        if identity.is_some_and(|identity| {
+            identity.storage_key != original.storage_key || identity.mime_type != original.mime_type
+        }) {
+            return Err(Error::Validation(
+                "Identity does not match the original file".into(),
+            ));
+        }
+        let (state, sha256, byte_size) = match identity {
+            Some(identity) => (
+                "verified",
+                Some(identity.sha256.as_str()),
+                Some(i64::try_from(identity.byte_size).map_err(|_| {
+                    Error::Validation("Original byte size exceeds database range".into())
+                })?),
+            ),
+            None => ("unavailable", None, None),
+        };
+        let updated = sqlx::query(
+            "UPDATE document_files AS f
+             SET verification_state = ?1, sha256 = ?2, byte_size = ?3
+             WHERE f.id = ?4 AND f.vault_id = ?5 AND f.storage_key = ?6
+               AND f.verification_state <> 'verified'
+               AND EXISTS (
+                   SELECT 1 FROM documents d
+                   JOIN document_revisions r ON r.id = d.current_revision_id
+                   WHERE d.id = f.document_id AND d.vault_id = f.vault_id
+                     AND d.purge_requested_at IS NULL AND d.file_path = f.storage_key
+                     AND r.original_file_id = f.id
+               )",
+        )
+        .bind(state)
+        .bind(sha256)
+        .bind(byte_size)
+        .bind(original.id.to_string())
+        .bind(original.vault_id.to_string())
+        .bind(&original.storage_key)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        Ok(updated.rows_affected() != 0)
     }
 
     async fn set_page_count(&self, vault: VaultId, id: Id, page_count: u32) -> Result<()> {
