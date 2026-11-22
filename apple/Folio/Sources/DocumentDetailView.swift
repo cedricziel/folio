@@ -10,6 +10,9 @@ struct DocumentDetailView: View {
 
     @State private var model: DocumentDetailViewModel
     @State private var showingDiscussion = false
+    @State private var showingCustomFields = false
+    private let service: any FolioService
+    private let openLinkedDocument: (UUID) -> Void
     @State private var editingDate = false
     @State private var classifying = false
     /// The PDF preview's current page, handed over with the document.
@@ -27,12 +30,15 @@ struct DocumentDetailView: View {
     init(
         snapshot: Snapshot, service: any FolioService, vaultID: UUID,
         onDocumentChange: @escaping @MainActor (Document) -> Void = { _ in },
+        openLinkedDocument: @escaping (UUID) -> Void = { _ in },
         continuation: DocumentContinuation? = nil, onContinued: @escaping () -> Void = {}
     ) {
         _model = State(
             initialValue: DocumentDetailViewModel(
                 document: snapshot.document, lookups: snapshot.lookups, service: service))
         self.snapshot = snapshot
+        self.service = service
+        self.openLinkedDocument = openLinkedDocument
         self.vaultID = vaultID
         self.onDocumentChange = onDocumentChange
         self.continuation = continuation
@@ -51,6 +57,14 @@ struct DocumentDetailView: View {
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
+        .sheet(isPresented: $showingCustomFields) {
+            if let metadata = service as? any CustomMetadataService {
+                CustomMetadataView(
+                    documentID: model.document.id, metadata: metadata, documents: service,
+                    canEdit: model.document.canEditDocumentDate, openDocument: openLinkedDocument
+                )
+            }
+        }
         .sheet(isPresented: $showingDiscussion) { DocumentDiscussionView(model: model.discussion) }
         .sheet(isPresented: $editingDate) {
             DocumentDateEditor(documentDate: model.document.documentDate) { date in
@@ -68,7 +82,8 @@ struct DocumentDetailView: View {
         .task(id: model.summary.indexedFields) { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
         .documentActivity(
             model.summary, vaultID: vaultID, previewFile: model.previewFile, showingDiscussion: showingDiscussion,
-            page: page)
+            page: page
+        )
         .documentTransferCommands(model.summary, vaultID: vaultID)
         .telemetryScreen(.documentDetail)
         .onChange(of: continuation, initial: true) { _, continuation in
@@ -130,6 +145,9 @@ struct DocumentDetailView: View {
                                 .accessibilityIdentifier("metadata-\(field.label)")
                         }
                     }
+                }
+                if service is any CustomMetadataService {
+                    Button("Custom fields", systemImage: "list.bullet.rectangle") { showingCustomFields = true }
                 }
                 DocumentProcessingView(document: model.document)
                 Button("Notes and comments", systemImage: "text.bubble") { showingDiscussion = true }
