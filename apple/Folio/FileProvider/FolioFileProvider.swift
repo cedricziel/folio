@@ -98,13 +98,14 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         completionHandler: @escaping (URL?, NSFileProviderItem?, (any Error)?) -> Void
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
-        Task {
+        let task = Task {
             defer {
                 progress.completedUnitCount = 1
                 FolioTelemetry.shared.flush()
             }
             var phase = "staging"
             do {
+                try Task.checkCancellation()
                 let directory: URL
                 if let temporaryDirectory {
                     directory = try temporaryDirectory()
@@ -119,14 +120,22 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
                 guard let id = FolioItemID(providerIdentifier: itemIdentifier),
                     let node = try await catalog.node(for: id), node.document != nil
                 else { throw NSFileProviderError(.noSuchItem) }
+                try Task.checkCancellation()
                 phase = "download"
                 let url = try await catalog.downloadFile(for: node)
+                if progress.isCancelled || Task.isCancelled {
+                    try? FileManager.default.removeItem(at: url)
+                    throw CancellationError()
+                }
                 completionHandler(url, providerItem(node), nil)
             } catch {
-                ProviderDiagnostics.failure(operation: "fetchContents", phase: phase, error: error)
-                completionHandler(nil, nil, error.providerError)
+                let failure = progress.isCancelled || Task.isCancelled ? CancellationError() : error
+                ProviderDiagnostics.failure(operation: "fetchContents", phase: phase, error: failure)
+                completionHandler(nil, nil, failure.providerError)
             }
         }
+        progress.cancellationHandler = { task.cancel() }
+        if progress.isCancelled { task.cancel() }
         return progress
     }
 
