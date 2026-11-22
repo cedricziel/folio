@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Document, DocumentSource, Id, SourceConditions, UserId, VaultId, WorkflowEventConditions,
-    WorkflowEventIdentity, WorkflowTarget,
+    Document, DocumentSource, Id, SourceConditions, UserId, VaultId, WorkflowCadence,
+    WorkflowEventConditions, WorkflowEventIdentity, WorkflowTarget,
 };
 use crate::error::{Error, Result};
 
@@ -123,10 +123,12 @@ pub enum WorkflowTrigger {
     DocumentThumbnailSkipped,
     #[serde(rename = "document.processing.thumbnail.retry_scheduled")]
     DocumentThumbnailRetryScheduled,
+    #[serde(rename = "workflow.scheduled")]
+    Scheduled,
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 51] = [
+    pub const ALL: [WorkflowTrigger; 52] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -178,6 +180,7 @@ impl WorkflowTrigger {
         Self::DocumentThumbnailFailed,
         Self::DocumentThumbnailSkipped,
         Self::DocumentThumbnailRetryScheduled,
+        Self::Scheduled,
     ];
 
     /// The wire name, as used in payloads and the database
@@ -238,6 +241,7 @@ impl WorkflowTrigger {
             Self::DocumentThumbnailRetryScheduled => {
                 "document.processing.thumbnail.retry_scheduled"
             }
+            Self::Scheduled => "workflow.scheduled",
         }
     }
 
@@ -295,6 +299,7 @@ impl WorkflowTrigger {
             Self::DocumentThumbnailFailed => "Preview generation failed",
             Self::DocumentThumbnailSkipped => "Preview generation skipped",
             Self::DocumentThumbnailRetryScheduled => "Preview generation retry scheduled",
+            Self::Scheduled => "On a schedule",
         }
     }
 
@@ -349,7 +354,8 @@ impl WorkflowTrigger {
             | Self::IngestDuplicate
             | Self::IngestFailed
             | Self::SourceFailed
-            | Self::SourceRecovered => WorkflowTarget::Event,
+            | Self::SourceRecovered
+            | Self::Scheduled => WorkflowTarget::Event,
             Self::IngestReceived => WorkflowTarget::IngestCandidate,
         }
     }
@@ -785,6 +791,9 @@ pub struct Workflow {
     pub name: String,
     pub enabled: bool,
     pub trigger: WorkflowTrigger,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WorkflowCadence, required = false))]
+    pub cadence: Option<WorkflowCadence>,
     pub conditions: WorkflowConditions,
     pub actions: Vec<WorkflowAction>,
     pub created_at: DateTime<Utc>,
@@ -810,6 +819,9 @@ pub struct WorkflowInput {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     pub trigger: WorkflowTrigger,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WorkflowCadence, required = false))]
+    pub cadence: Option<WorkflowCadence>,
     #[serde(default)]
     pub conditions: WorkflowConditions,
     pub actions: Vec<WorkflowAction>,
@@ -831,6 +843,17 @@ impl WorkflowInput {
         if self.name.trim().is_empty() {
             return invalid("Workflow name must not be empty");
         }
+        match (self.trigger, self.cadence) {
+            (WorkflowTrigger::Scheduled, Some(cadence)) => {
+                cadence.validate()?;
+                if self.conditions != WorkflowConditions::default() {
+                    return invalid("A clock schedule has no document or event to filter");
+                }
+            }
+            (WorkflowTrigger::Scheduled, None) => return invalid("Set a schedule"),
+            (_, Some(_)) => return invalid("A cadence requires a scheduled trigger"),
+            (_, None) => {}
+        }
         if self.actions.is_empty() {
             return invalid("A workflow needs at least one action");
         }
@@ -850,6 +873,8 @@ impl WorkflowInput {
             if !self.trigger.target().accepts(action) {
                 return invalid(if self.trigger == WorkflowTrigger::DocumentDeleted {
                     "Only webhook actions can run when a document is deleted"
+                } else if self.trigger == WorkflowTrigger::Scheduled {
+                    "Scheduled workflows take only webhook actions"
                 } else if self.trigger.is_ingest_outcome() {
                     "Ingestion outcome workflows take only webhook actions"
                 } else if self.trigger.is_custom_metadata()
@@ -1440,6 +1465,7 @@ mod tests {
 
     fn input(trigger: WorkflowTrigger, actions: Vec<WorkflowAction>) -> WorkflowInput {
         WorkflowInput {
+            cadence: None,
             name: "n".into(),
             enabled: true,
             trigger,

@@ -28,6 +28,7 @@ async fn upload_listener(
         .create(
             vault,
             WorkflowInput {
+                cadence: None,
                 name: "uploaded".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUploaded,

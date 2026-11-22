@@ -343,6 +343,7 @@ async fn lifecycle_contract(db: Database) {
         .create(
             vault.id,
             WorkflowInput {
+                cadence: None,
                 name: "Retained workflow".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUpdated,
