@@ -33,7 +33,7 @@
             </select>
         </div>
 
-        <fieldset class="field">
+        <fieldset class="field" data-workflow-form-target="documentFilter">
             <legend class="legend">Only if the document matches</legend>
             <p class="hint">Leave a field empty to match any document.</p>
             <label for="mime_type">File type</label>
@@ -57,7 +57,7 @@
             </select>
         </fieldset>
 
-        <fieldset class="field">
+        <fieldset class="field" data-workflow-form-target="documentFilter">
             <legend class="legend">Only if it came from</legend>
             <label for="source_kind">Source</label>
             <select class="select" id="source_kind" name="source_kind" data-workflow-form-target="source" data-action="change->workflow-form#sync">
@@ -103,6 +103,22 @@
                 <input class="input" type="text" id="email_attachment_glob" name="email_attachment_glob" value="{{ values.email_attachment_glob }}" placeholder="*.pdf">
                 <label for="email_mailbox_glob">Mailbox</label>
                 <input class="input" type="text" id="email_mailbox_glob" name="email_mailbox_glob" value="{{ values.email_mailbox_glob }}" placeholder="INBOX/Invoices">
+            </div>
+        </fieldset>
+
+        <fieldset class="field" data-workflow-form-target="eventFilter">
+            <legend class="legend">Only if the event matches</legend>
+            <label for="event_subject_id">Subject ID</label>
+            <input class="input" type="text" id="event_subject_id" name="event_subject_id" value="{{ values.event_subject_id }}">
+            <label for="event_actor">Who made the change</label>
+            <select class="select" id="event_actor" name="event_actor" data-workflow-form-target="actor" data-action="change->workflow-form#sync">
+                <option value="">Anyone</option>
+                <option value="system"{% if values.is_system_actor() %} selected{% endif %}>Folio</option>
+                <option value="user"{% if values.is_user_actor() %} selected{% endif %}>Specific user</option>
+            </select>
+            <div data-workflow-form-target="actorUser">
+                <label for="event_user_id">User ID</label>
+                <input class="input" type="text" id="event_user_id" name="event_user_id" value="{{ values.event_user_id }}">
             </div>
         </fieldset>
 

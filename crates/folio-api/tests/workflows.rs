@@ -491,6 +491,11 @@ async fn pages_render_and_the_form_creates_a_workflow() {
     let (status, html) = send(&app, "GET", "/workflows/new", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(html.contains("document.processed"));
+    for kind in ["note", "comment"] {
+        for transition in ["created", "updated", "deleted"] {
+            assert!(html.contains(&format!("document_{kind}.{transition}")));
+        }
+    }
 
     let form = "name=Home+Assistant&trigger=document.uploaded&enabled=on&mime_type=application%2Fpdf\
                 &webhook_url=http%3A%2F%2F192.168.1.5%3A8123%2Fhook&webhook_secret=s3&webhook_headers=X-A%3A+b";
@@ -811,4 +816,40 @@ async fn typed_event_conditions_survive_api_storage_and_html_edits() {
     let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["conditions"], conditions);
+}
+
+#[tokio::test]
+async fn web_editor_creates_an_entry_workflow_with_occurrence_filters() {
+    let app = test_app().await;
+    let subject = Uuid::new_v4();
+    let form = format!(
+        "name=Comment+alert&trigger=document_comment.updated&enabled=on&event_actor=user&event_user_id=editor&event_subject_id={subject}&webhook_url=https%3A%2F%2Fexample.com%2Fhook"
+    );
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/workflows")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let id = response.headers()["location"]
+        .to_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["trigger"], "document_comment.updated");
+    assert_eq!(
+        stored["conditions"]["event"],
+        json!({
+            "subject_id": subject, "actor": {"type": "user", "user_id": "editor"}
+        })
+    );
 }

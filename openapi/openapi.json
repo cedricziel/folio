@@ -9321,6 +9321,49 @@
           }
         }
       },
+      "WebhookEntry": {
+        "type": "object",
+        "required": [
+          "entry_id",
+          "document_id",
+          "vault_id",
+          "entry_kind",
+          "transition"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entry_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entry_kind": {
+            "$ref": "#/components/schemas/EntryKind"
+          },
+          "transition": {
+            "type": "string"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "WebhookMethod": {
         "type": "string",
         "description": "HTTP method used for webhook delivery",
@@ -9334,12 +9377,28 @@
         "required": [
           "event",
           "version",
-          "occurred_at",
-          "document"
+          "occurred_at"
         ],
         "properties": {
           "document": {
-            "$ref": "#/components/schemas/WebhookDocument"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entry": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "event": {
             "$ref": "#/components/schemas/WorkflowTrigger",
@@ -9866,6 +9925,12 @@
           "document.tags_changed",
           "document.correspondent_changed",
           "document.document_type_changed",
+          "document_note.created",
+          "document_note.updated",
+          "document_note.deleted",
+          "document_comment.created",
+          "document_comment.updated",
+          "document_comment.deleted",
           "document.deleted",
           "ingest.received"
         ]

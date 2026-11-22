@@ -123,6 +123,7 @@ struct Harness {
     vault: folio_core::models::VaultId,
     workflows: Arc<dyn WorkflowRepository>,
     documents: Arc<dyn DocumentRepository>,
+    entries: Arc<dyn folio_core::ports::DocumentEntryRepository>,
     tags: Arc<dyn TagRepository>,
     document_types: Arc<dyn DocumentTypeRepository>,
     vaults: Arc<dyn VaultRepository>,
@@ -182,6 +183,7 @@ impl Harness {
             workflows,
             documents,
             tags,
+            entries: repos.entries,
             document_types: repos.document_types,
             vaults: repos.vaults,
             correspondents,
@@ -2284,4 +2286,75 @@ async fn imports_and_mirror_syncs_start_no_workflows_but_user_changes_do() {
         .unwrap();
     consume_pending(&h).await;
     assert_eq!(workflow_runs(&h, &tags_changed).await, 1);
+}
+
+#[tokio::test]
+async fn entry_workflow_requires_an_active_parent_in_its_originating_vault() {
+    use folio_core::models::{EntryBody, EntryKind};
+    use folio_core::mutation::with_actor;
+
+    let h = Harness::new().await;
+    let doc = h.document("discussion.pdf", "application/pdf").await;
+    let trigger = WorkflowTrigger::DocumentCommentCreated;
+    h.workflow(trigger, Default::default(), unreachable_hook())
+        .await;
+
+    with_actor(
+        Some("entry-author".into()),
+        h.entries.create(
+            h.vault,
+            doc.id,
+            EntryKind::Comment,
+            EntryBody::parse("private discussion text".into()).unwrap(),
+            Uuid::new_v4(),
+        ),
+    )
+    .await
+    .unwrap();
+    let event = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|event| {
+            event
+                .envelope
+                .as_ref()
+                .is_some_and(|source| source.event_type() == trigger.as_str())
+        })
+        .expect("committed producer occurrence");
+
+    for origin in [EventOrigin::Workflow, EventOrigin::Import] {
+        assert!(h
+            .engine
+            .handle(&OutboxEvent {
+                origin,
+                ..event.clone()
+            })
+            .await
+            .unwrap()
+            .is_empty());
+    }
+    let runs = h.engine.handle(&event).await.unwrap();
+    assert_eq!(runs.len(), 1);
+
+    let delayed = h
+        .workflow(trigger, Default::default(), unreachable_hook())
+        .await;
+    let destination = h.vaults.create("entry destination", None).await.unwrap().id;
+    h.documents
+        .move_to(doc.id, h.vault, destination, None)
+        .await
+        .unwrap();
+
+    assert!(h.engine.handle(&event).await.unwrap().is_empty());
+    assert!(h
+        .workflows
+        .list_runs(h.vault, delayed.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        h.runner.execute(runs[0].id).await.unwrap(),
+        RunOutcome::Failed
+    );
 }

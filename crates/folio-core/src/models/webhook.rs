@@ -81,6 +81,20 @@ impl From<&crate::DomainEventEnvelope> for WorkflowEventIdentity {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookEntry {
+    pub entry_id: uuid::Uuid,
+    pub document_id: uuid::Uuid,
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    pub entry_kind: super::EntryKind,
+    pub transition: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub actor_id: Option<super::UserId>,
+    pub causation_id: Option<uuid::Uuid>,
+}
+
 /// Body of every webhook delivery
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -91,7 +105,10 @@ pub struct WebhookPayload {
     #[cfg_attr(feature = "openapi", schema(example = 1))]
     pub version: u32,
     pub occurred_at: DateTime<Utc>,
-    pub document: WebhookDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<WebhookDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<WebhookEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_event: Option<WorkflowEventIdentity>,
 }
@@ -106,13 +123,46 @@ impl WebhookPayload {
             event,
             version: PAYLOAD_VERSION,
             occurred_at,
-            document,
+            document: Some(document),
+            entry: None,
             source_event: None,
+        }
+    }
+
+    pub fn for_entry(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        entry: WebhookEntry,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            event,
+            version: PAYLOAD_VERSION,
+            occurred_at,
+            document: None,
+            entry: Some(entry),
+            source_event,
         }
     }
 
     /// A payload with made-up content, for the "send test" action
     pub fn sample(event: WorkflowTrigger, base_url: &str) -> Self {
+        if let Some((entry_kind, transition)) = event.entry_transition() {
+            return Self::for_entry(
+                event,
+                Utc::now(),
+                WebhookEntry {
+                    entry_id: Id::nil(),
+                    document_id: Id::nil(),
+                    vault_id: VaultId(Id::nil()),
+                    entry_kind,
+                    transition: transition.into(),
+                    actor_id: None,
+                    causation_id: None,
+                },
+                None,
+            );
+        }
         let mut doc = Document::new(VaultId::new(), "Sample invoice")
             .with_filename("invoice-2025-03.pdf")
             .with_mime_type("application/pdf");

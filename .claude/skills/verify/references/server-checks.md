@@ -85,6 +85,14 @@ captured actors override ambient dispatcher context without granting private acc
 The shared repository contract also verifies concurrent mutation deduplication,
 separate workflows, distinct mutations sharing a correlation, invalid captured
 identity rejection, and legacy source-event deduplication on both databases.
+For note and comment workflow triggers, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_entries --test workflows`
+and `cargo test -p folio-api --test workflows --test openapi`. The repository
+tests dispatch actual entry occurrences on SQLite and PostgreSQL, verify
+body-free delivery and replay deduplication, and fence dispatch and runs after
+a parent move. The web fixture creates an entry workflow with actor and subject
+filters and reads it back through the API.
+
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run

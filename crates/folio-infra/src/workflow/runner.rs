@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use folio_core::error::Error;
 use folio_core::models::{
     validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WorkflowAction, WorkflowRun,
-    WorkflowTrigger,
+    WorkflowTarget,
 };
 use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::ports::{DocumentRepository, WorkflowRepository};
@@ -117,7 +117,7 @@ impl WorkflowRunner {
                 .await?;
                 return Ok(RunOutcome::Failed);
             }
-            if run.event != WorkflowTrigger::DocumentDeleted {
+            if run.event.target() == WorkflowTarget::Document {
                 if let Some(document_id) = run.document_id {
                     if self.documents.locate(document_id).await? != Some(vault) {
                         self.finish(
