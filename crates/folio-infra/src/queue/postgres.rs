@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
+use super::processing_scope::ProcessingRequest;
+
 use super::{
     damaged_row_message, payload_problem, FailOutcome, Job, JobClass, JobStatus, JobType,
     DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS, MAX_UNREADABLE_PER_DEQUEUE,
@@ -70,18 +72,18 @@ pub(crate) async fn insert_job(
     Ok(id)
 }
 
-async fn current_processing_job(
+async fn requested_processing_job(
     conn: &mut PgConnection,
     vault: folio_core::models::VaultId,
     document_id: Uuid,
-    force: bool,
+    request: ProcessingRequest,
 ) -> Result<JobType> {
     let document = super::processing_scope::postgres::document(conn, document_id).await?;
     super::processing_scope::bind_requested_processing(
         document.as_ref(),
         vault,
         document_id,
-        force,
+        request,
         super::REVISION_DISPATCH_ENABLED,
     )
 }
@@ -93,7 +95,13 @@ pub(crate) async fn insert_current_processing(
     force: bool,
     trace: Option<&super::JobTraceContext>,
 ) -> Result<Uuid> {
-    let job = current_processing_job(conn, vault, document_id, force).await?;
+    let job = requested_processing_job(
+        conn,
+        vault,
+        document_id,
+        ProcessingRequest::Current { force },
+    )
+    .await?;
     insert_job(conn, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, trace).await
 }
 
@@ -103,7 +111,13 @@ pub(crate) async fn insert_current_thumbnail(
     document_id: Uuid,
     trace: Option<&super::JobTraceContext>,
 ) -> Result<Uuid> {
-    let current = current_processing_job(conn, vault, document_id, false).await?;
+    let current = requested_processing_job(
+        conn,
+        vault,
+        document_id,
+        ProcessingRequest::Current { force: false },
+    )
+    .await?;
     let job = match current.revision_id() {
         Some(revision_id) => JobType::GenerateRevisionThumbnail {
             document_id,
@@ -220,7 +234,7 @@ impl PostgresJobQueue {
             document.as_ref(),
             vault,
             document_id,
-            false,
+            ProcessingRequest::Current { force: false },
             super::REVISION_DISPATCH_ENABLED,
         ) {
             Ok(job) => job,
@@ -269,11 +283,11 @@ impl PostgresJobQueue {
         Ok(true)
     }
 
-    pub(super) async fn enqueue_current_processing(
+    pub(super) async fn enqueue_requested_processing(
         &self,
         vault: folio_core::models::VaultId,
         document_id: Uuid,
-        force: bool,
+        request: ProcessingRequest,
         trace: Option<super::JobTraceContext>,
     ) -> Result<Uuid> {
         let mut tx = self
@@ -281,8 +295,15 @@ impl PostgresJobQueue {
             .begin()
             .await
             .map_err(repo_err("Failed to schedule current processing"))?;
-        let id =
-            insert_current_processing(&mut tx, vault, document_id, force, trace.as_ref()).await?;
+        let job = requested_processing_job(&mut tx, vault, document_id, request).await?;
+        let id = insert_job(
+            &mut tx,
+            job,
+            Utc::now(),
+            DEFAULT_MAX_ATTEMPTS,
+            trace.as_ref(),
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(repo_err("Failed to schedule current processing"))?;
@@ -356,7 +377,7 @@ impl PostgresJobQueue {
             scope.as_ref(),
             vault,
             document_id,
-            false,
+            ProcessingRequest::Current { force: false },
             super::REVISION_DISPATCH_ENABLED,
         ) {
             Ok(job) => job,

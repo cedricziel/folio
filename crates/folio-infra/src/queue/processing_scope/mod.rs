@@ -86,11 +86,17 @@ impl DocumentScope {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum ProcessingRequest {
+    Current { force: bool },
+    InitialUpload,
+}
+
 pub(super) fn bind_requested_processing(
     document: Option<&DocumentScope>,
     vault: VaultId,
     document_id: Uuid,
-    force: bool,
+    request: ProcessingRequest,
     revision_dispatch: bool,
 ) -> Result<JobType> {
     let document = document
@@ -99,6 +105,15 @@ pub(super) fn bind_requested_processing(
             entity_type: "Document",
             id: document_id.to_string(),
         })?;
+    let force = match request {
+        ProcessingRequest::Current { force } => force,
+        ProcessingRequest::InitialUpload if document.legacy_current => false,
+        ProcessingRequest::InitialUpload => {
+            return Err(Error::Conflict(
+                "Upload revision is no longer current".into(),
+            ));
+        }
+    };
     let revision = document
         .revision_id
         .as_deref()
