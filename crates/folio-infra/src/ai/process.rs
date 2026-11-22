@@ -4,6 +4,7 @@ use std::io;
 use std::process::{Output, Stdio};
 use std::time::Duration;
 
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 /// Upper bound for one tool run. Far above what a single page or small PDF
@@ -45,6 +46,22 @@ impl Drop for GroupKill {
 /// The error is `ErrorKind::TimedOut` on expiry; callers already wrap io
 /// errors with the tool name.
 pub async fn output_within(command: &mut Command, limit: Duration) -> io::Result<Output> {
+    capture(command, limit, None).await
+}
+
+pub async fn bounded_output(
+    command: &mut Command,
+    limit: Duration,
+    max_bytes: u64,
+) -> io::Result<Output> {
+    capture(command, limit, Some(max_bytes)).await
+}
+
+async fn capture(
+    command: &mut Command,
+    limit: Duration,
+    max_bytes: Option<u64>,
+) -> io::Result<Output> {
     command
         .kill_on_drop(true)
         .stdin(Stdio::null())
@@ -53,9 +70,26 @@ pub async fn output_within(command: &mut Command, limit: Duration) -> io::Result
     #[cfg(unix)]
     command.process_group(0);
 
-    let child = command.spawn()?;
+    let mut child = command.spawn()?;
     let mut guard = GroupKill(child.id());
-    let result = tokio::time::timeout(limit, child.wait_with_output()).await;
+    let result = tokio::time::timeout(limit, async {
+        let Some(max_bytes) = max_bytes else {
+            return child.wait_with_output().await;
+        };
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        let (status, stdout, stderr) = tokio::try_join!(
+            child.wait(),
+            read_limited(stdout, max_bytes),
+            read_limited(stderr, max_bytes)
+        )?;
+        Ok(Output {
+            status,
+            stdout,
+            stderr,
+        })
+    })
+    .await;
     match result {
         Ok(Ok(output)) => {
             guard.disarm();
@@ -67,6 +101,18 @@ pub async fn output_within(command: &mut Command, limit: Duration) -> io::Result
             format!("timed out after {}s", limit.as_secs_f32()),
         )),
     }
+}
+
+async fn read_limited(reader: impl AsyncRead + Unpin, max_bytes: u64) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader.take(max_bytes + 1).read_to_end(&mut bytes).await?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            "tool output exceeded its size limit",
+        ));
+    }
+    Ok(bytes)
 }
 
 pub async fn output(command: &mut Command) -> io::Result<Output> {

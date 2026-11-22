@@ -33,6 +33,37 @@ order, so scanned pages contribute searchable text even in a mostly digital PDF.
 Settings: `ocr.provider`, `ocr.model` (empty = provider default),
 `ocr.languages` (tesseract style, e.g. `deu+eng`), `ocr.base_url`.
 
+## PDF/A converter
+
+The document-level converter accepts PDF, JPEG, PNG and TIFF. It uses
+OCRmyPDF's skip-text mode to preserve digital pages and add text to scanned
+pages. Images are imported at 300 DPI. For PDFs, qpdf checks the object
+structure before conversion. Encrypted PDFs and PDFs containing signature or
+embedded attachment objects are skipped.
+
+veraPDF checks each candidate against PDF/A-2b. The converter can reuse
+the exact source bytes when that source passes the same check and has
+extractable text on every page. A successful result includes the validation
+profile and tool versions. Any skip or tool failure leaves the source available
+to the caller and produces no archival copy.
+
+The Folio container includes the tools. Native Unix installations need qpdf
+11+, Poppler's `pdftotext`, OCRmyPDF and its Tesseract language packs, and
+the veraPDF CLI with Java on the service's PATH.
+[veraPDF installation guide](https://docs.verapdf.org/install/)
+
+The converter uses a private temporary directory and caps input and
+individual scratch files at 128 MiB. During OCR it stops the process group if
+periodic checks find more than 512 MiB or 10,000 entries in that directory.
+It checks PDFs against a 500-page limit and stops conversion and validation
+tool invocations after five minutes each.
+
+Run the converter's regression tests with the tools on PATH.
+
+```sh
+FOLIO_REQUIRE_ARCHIVAL_TOOLS=1 cargo test -p folio-infra --lib archival
+```
+
 ## Embeddings
 
 Text is split into overlapping windows (1500 characters, 200 overlap) and each

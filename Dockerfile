@@ -1,5 +1,12 @@
 # syntax=docker/dockerfile:1
 
+FROM debian:bookworm-slim AS archival-tools
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip openjdk-17-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+COPY scripts/install-verapdf.sh /tmp/install-verapdf.sh
+RUN /tmp/install-verapdf.sh /opt/verapdf
+
 FROM rust:1-bookworm AS chef
 RUN apt-get update \
     && apt-get install -y --no-install-recommends pkg-config libssl-dev \
@@ -46,6 +53,8 @@ RUN apt-get update \
         imagemagick \
         ghostscript \
         ocrmypdf \
+        qpdf \
+        openjdk-17-jre-headless \
         tesseract-ocr \
         tesseract-ocr-eng \
         tesseract-ocr-deu \
@@ -57,6 +66,8 @@ RUN apt-get update \
     && chown folio:folio /data
 
 WORKDIR /app
+COPY --from=archival-tools /opt/verapdf /opt/verapdf
+RUN ln -s /opt/verapdf/verapdf /usr/local/bin/verapdf
 COPY --from=builder /build/target/release/folio-app /usr/local/bin/folio-app
 COPY config.toml ./config.toml
 
