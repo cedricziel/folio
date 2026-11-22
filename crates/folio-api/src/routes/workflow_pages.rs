@@ -15,8 +15,8 @@ use uuid::Uuid;
 
 use folio_core::models::{
     Id, RunStatus, SourceConditions, SourceKind, TextMatch, UserId, WebhookMethod, Workflow,
-    WorkflowAction, WorkflowActorCondition, WorkflowEventConditions, WorkflowInput, WorkflowRun,
-    WorkflowTrigger, WorkflowTriggerRegistry,
+    WorkflowAction, WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
+    WorkflowInput, WorkflowRun, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 
 use super::workflows::{find, find_retained, send_test, WorkflowListQuery, SECRET_MASK};
@@ -218,6 +218,10 @@ struct FormValues {
     event_subject_id: String,
     event_actor: Option<String>,
     event_user_id: String,
+    ingest_source_id: String,
+    ingest_source_kind: Option<String>,
+    ingest_reason: String,
+    ingest_retryable: String,
     source_kind: String,
     folder_path_glob: String,
     email_from_mode: String,
@@ -242,6 +246,10 @@ struct FormValues {
 const TAG_FIELD: &str = "action_tag_";
 
 impl FormValues {
+    fn ingest_kind_is(&self, kind: &str) -> bool {
+        self.ingest_source_kind.as_deref() == Some(kind)
+    }
+
     fn is_system_actor(&self) -> bool {
         self.event_actor.as_deref() == Some("system")
     }
@@ -334,6 +342,32 @@ impl FormValues {
                 .unwrap_or_default(),
             event_actor: Some(event_actor.into()),
             event_user_id,
+            ingest_source_id: c
+                .event
+                .as_ref()
+                .and_then(|event| event.ingest.as_ref())
+                .and_then(|ingest| ingest.source_id)
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            ingest_source_kind: c
+                .event
+                .as_ref()
+                .and_then(|event| event.ingest.as_ref())
+                .and_then(|ingest| ingest.source_kind)
+                .map(|kind| kind.as_str().into()),
+            ingest_reason: c
+                .event
+                .as_ref()
+                .and_then(|event| event.ingest.as_ref())
+                .and_then(|ingest| ingest.reason_code.clone())
+                .unwrap_or_default(),
+            ingest_retryable: c
+                .event
+                .as_ref()
+                .and_then(|event| event.ingest.as_ref())
+                .and_then(|ingest| ingest.retryable)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             source_kind: c
                 .source
                 .kind
@@ -380,15 +414,49 @@ impl FormValues {
                     }),
                     _ => return Err("Choose an event actor.".into()),
                 };
-                (subject_id.is_some() || actor.is_some())
-                    .then_some(WorkflowEventConditions { subject_id, actor })
+                let previous_ingest = existing
+                    .and_then(|workflow| workflow.conditions.event.as_ref())
+                    .and_then(|event| event.ingest.as_ref());
+                let ingest = if !trigger.is_ingest_outcome() {
+                    None
+                } else if let Some(kind) = self.ingest_source_kind.as_deref() {
+                    let source_kind = match kind {
+                        "" => None,
+                        "folder" => Some(SourceKind::Folder),
+                        "email" => Some(SourceKind::Email),
+                        _ => return Err("Choose an ingestion source kind.".into()),
+                    };
+                    let retryable = match self.ingest_retryable.as_str() {
+                        "" => None,
+                        "true" => Some(true),
+                        "false" => Some(false),
+                        _ => return Err("Choose a retry setting.".into()),
+                    };
+                    let filters = WorkflowIngestConditions {
+                        source_id: id(&self.ingest_source_id, "source ID")?,
+                        source_kind,
+                        outcome: previous_ingest.and_then(|ingest| ingest.outcome),
+                        reason_code: optional(&self.ingest_reason),
+                        retryable,
+                    };
+                    (filters != WorkflowIngestConditions::default()).then_some(filters)
+                } else {
+                    previous_ingest.cloned()
+                };
+                (subject_id.is_some() || actor.is_some() || ingest.is_some()).then_some(
+                    WorkflowEventConditions {
+                        subject_id,
+                        actor,
+                        ingest,
+                    },
+                )
             }
         };
         let mut conditions = existing
             .map(|workflow| workflow.conditions.clone())
             .unwrap_or_default();
         conditions.event = event;
-        if trigger.entry_transition().is_none() {
+        if trigger.entry_transition().is_none() && !trigger.is_ingest_outcome() {
             conditions.mime_type = optional(&self.mime_type);
             conditions.tag_id = id(&self.tag_id, "tag")?;
             conditions.correspondent_id = id(&self.correspondent_id, "correspondent")?;
@@ -403,7 +471,9 @@ impl FormValues {
                 email_attachment_glob: optional(&self.email_attachment_glob),
                 email_mailbox_glob: optional(&self.email_mailbox_glob),
             };
-        } else if existing.is_some_and(|workflow| workflow.trigger.entry_transition().is_none()) {
+        } else if existing.is_some_and(|workflow| {
+            workflow.trigger.entry_transition().is_none() && !workflow.trigger.is_ingest_outcome()
+        }) {
             conditions.mime_type = None;
             conditions.tag_id = None;
             conditions.correspondent_id = None;

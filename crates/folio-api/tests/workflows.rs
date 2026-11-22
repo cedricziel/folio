@@ -963,3 +963,41 @@ async fn trigger_catalog_matches_workflow_choices_and_describes_entry_filters() 
         }
     }
 }
+
+#[tokio::test]
+async fn web_editor_configures_typed_ingestion_outcome_filters() {
+    let app = test_app().await;
+    let source = Uuid::new_v4();
+    let form = format!(
+        "name=Failed+poll&trigger=ingest.failed&enabled=on&event_actor=&ingest_source_id={source}&ingest_source_kind=folder&ingest_retryable=true&webhook_url=https%3A%2F%2Fexample.com%2Fhook"
+    );
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/workflows")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let id = response.headers()["location"]
+        .to_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        stored["conditions"]["event"]["ingest"],
+        json!({
+            "source_id": source,
+            "source_kind": "folder",
+            "retryable": true,
+        })
+    );
+    assert_eq!(stored["actions"].as_array().unwrap().len(), 1);
+}

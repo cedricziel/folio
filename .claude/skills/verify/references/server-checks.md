@@ -103,6 +103,13 @@ and the generated schema describes the same choices. The infrastructure
 workflow suite dispatches a row with both a domain event and legacy projection,
 checks each trigger name in its payload, and replays the row.
 
+For owners-audience ingestion workflows, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_source_scope --test workflows`
+and `cargo test -p folio-api --test workflows --test openapi`. The shared
+database fixture dispatches distinct failed attempts and a source health
+transition, replays them, and checks that source trash fences queued delivery.
+The API fixture confirms typed source and retry filters survive the web form.
+
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run

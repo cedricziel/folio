@@ -909,6 +909,12 @@ Stimulus.register(
       "eventFilter",
       "actor",
       "actorUser",
+      "ingestFilter",
+      "ingestReasonLabel",
+      "ingestReason",
+      "ingestRetryLabel",
+      "ingestRetry",
+      "documentAction",
     ];
 
     connect() {
@@ -919,9 +925,26 @@ Stimulus.register(
       const trigger = this.triggerTarget.value;
       const ingest = trigger === "ingest.received";
       const entry = trigger.startsWith("document_note.") || trigger.startsWith("document_comment.");
+      const health = trigger === "source.failed" || trigger === "source.recovered";
+      const outcome = trigger.startsWith("ingest.") && !ingest;
+      const ingestEvent = outcome || health;
       for (const filter of this.documentFilterTargets) {
-        filter.hidden = entry;
-        filter.disabled = entry;
+        filter.hidden = entry || ingestEvent;
+        filter.disabled = filter.hidden;
+      }
+      this.ingestFilterTarget.hidden = !ingestEvent;
+      this.ingestFilterTarget.disabled = !ingestEvent;
+      this.ingestReasonLabelTarget.hidden = trigger === "source.recovered";
+      this.ingestReasonTarget.hidden = this.ingestReasonLabelTarget.hidden;
+      this.ingestReasonTarget.disabled = this.ingestReasonTarget.hidden;
+      this.ingestRetryLabelTarget.hidden = !outcome;
+      this.ingestRetryTarget.hidden = !outcome;
+      this.ingestRetryTarget.disabled = !outcome;
+      for (const action of this.documentActionTargets) {
+        action.hidden = ingestEvent;
+        for (const control of action.querySelectorAll("input, select")) {
+          control.disabled = action.hidden;
+        }
       }
       this.eventFilterTarget.hidden = ingest;
       this.eventFilterTarget.disabled = ingest;

@@ -11485,6 +11485,64 @@
           }
         }
       },
+      "WebhookIngest": {
+        "type": "object",
+        "required": [
+          "payload_version",
+          "source_id",
+          "source_kind"
+        ],
+        "properties": {
+          "attempt_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IngestResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retryable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "source_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_kind": {
+            "$ref": "#/components/schemas/SourceKind"
+          }
+        }
+      },
       "WebhookMethod": {
         "type": "string",
         "description": "HTTP method used for webhook delivery",
@@ -11524,6 +11582,16 @@
           "event": {
             "$ref": "#/components/schemas/WorkflowTrigger",
             "description": "Event name, for example `document.uploaded`"
+          },
+          "ingest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookIngest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "occurred_at": {
             "type": "string",
@@ -11926,6 +11994,16 @@
               }
             ]
           },
+          "ingest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowIngestConditions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "subject_id": {
             "type": [
               "string",
@@ -11957,6 +12035,51 @@
             "format": "uuid"
           }
         }
+      },
+      "WorkflowIngestConditions": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IngestResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retryable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "source_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "source_kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SourceKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "WorkflowInput": {
         "type": "object",
@@ -12093,7 +12216,13 @@
           "document_comment.updated",
           "document_comment.deleted",
           "document.deleted",
-          "ingest.received"
+          "ingest.received",
+          "ingest.imported",
+          "ingest.skipped",
+          "ingest.duplicate",
+          "ingest.failed",
+          "source.failed",
+          "source.recovered"
         ]
       },
       "WorkflowTriggerDefinition": {
