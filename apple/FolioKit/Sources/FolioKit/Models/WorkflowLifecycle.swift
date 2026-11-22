@@ -117,7 +117,7 @@ public struct WorkflowExecutionSummary: Identifiable, Decodable, Sendable, Equat
 }
 
 /// Owner-only workflow lifecycle operations in an explicitly selected vault.
-public protocol WorkflowLifecycleService {
+public protocol WorkflowLifecycleService: Sendable {
     func workflowConfigurations(vaultID: UUID, deleted: Bool) async throws -> [WorkflowConfigurationSummary]
     func workflowHistory(vaultID: UUID, workflowID: UUID) async throws -> [WorkflowExecutionSummary]
     func deleteWorkflow(vaultID: UUID, workflowID: UUID) async throws
