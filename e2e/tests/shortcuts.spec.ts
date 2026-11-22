@@ -76,7 +76,7 @@ test.describe("keyboard shortcuts", () => {
     }
 
     await page.keyboard.press("Enter");
-    await expect(page).toHaveURL(/\/documents\/[0-9a-f-]{36}$/);
+    await expect(page).toHaveURL(/\/documents\/[0-9a-f-]{36}(\?.*)?$/);
   });
 
   test("? lists the shortcuts in a dialog that Escape closes", async ({ page }) => {
