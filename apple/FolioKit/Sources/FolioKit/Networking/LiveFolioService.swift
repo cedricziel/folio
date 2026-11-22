@@ -1083,3 +1083,45 @@ private extension CustomFieldValue {
         }
     }
 }
+
+extension LiveFolioService: CustomMetadataWorkflowService {
+    public func customMetadataWorkflowTriggers() async throws -> [CustomMetadataWorkflowTrigger] {
+        try await call("workflows.metadata_triggers") {
+            _ = try metadataVault
+            let triggers = try await client.listWorkflowTriggers().ok.body.json
+            return triggers.compactMap { definition in
+                guard definition.conditionFields.contains(where: { $0.key == "event.metadata.field_id" }) else {
+                    return nil
+                }
+                return .init(
+                    id: definition.eventType, label: definition.label,
+                    supportsValues: definition.conditionFields.contains(where: { $0.key == "event.metadata.after" })
+                )
+            }
+        }
+    }
+
+    public func createCustomMetadataWorkflow(_ draft: CustomMetadataWorkflowDraft) async throws {
+        try await call("workflows.metadata_create") {
+            _ = try metadataVault
+            guard let trigger = Components.Schemas.WorkflowTrigger(rawValue: draft.trigger) else {
+                throw FolioError.unreadableResponse
+            }
+            let conditions = Components.Schemas.WorkflowMetadataConditions(
+                after: draft.after?.apiValue,
+                before: draft.before?.apiValue,
+                fieldId: draft.fieldID?.uuidString.lowercased(),
+                kind: draft.kind.flatMap { Components.Schemas.MetadataKind(rawValue: $0.rawValue) },
+                state: draft.state.flatMap { Components.Schemas.MetadataChangeState(rawValue: $0.rawValue) }
+            )
+            let action = Components.Schemas.WorkflowAction.case1(.init(_type: .webhook, url: draft.webhook))
+            _ = try await client.createWorkflow(
+                body: .json(
+                    .init(
+                        actions: [action], conditions: .init(event: .init(metadata: conditions)),
+                        enabled: draft.enabled, name: draft.name, trigger: trigger
+                    ))
+            ).created.body.json
+        }
+    }
+}

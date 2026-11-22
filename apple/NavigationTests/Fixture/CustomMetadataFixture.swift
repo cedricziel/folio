@@ -83,3 +83,41 @@ struct CustomMetadataFixture: View {
         }
     }
 }
+
+@MainActor @Observable
+private final class MetadataWorkflowFixtureService: CustomMetadataWorkflowService {
+    private(set) var saved = false
+
+    func customMetadataWorkflowTriggers() async throws -> [CustomMetadataWorkflowTrigger] {
+        [
+            .init(id: "metadata_field.created", label: "When a custom field is created", supportsValues: false),
+            .init(
+                id: "document.metadata.changed", label: "When custom field values change",
+                supportsValues: true
+            ),
+        ]
+    }
+
+    func createCustomMetadataWorkflow(_ draft: CustomMetadataWorkflowDraft) async throws {
+        guard draft.trigger == "document.metadata.changed",
+            draft.after == .decimal("9007199254740993.01"), draft.kind == .decimal, draft.fieldID != nil
+        else { throw FolioError.unreadableResponse }
+        saved = true
+    }
+}
+
+struct CustomMetadataWorkflowFixture: View {
+    @State private var metadata = MetadataFixtureService()
+    @State private var workflows = MetadataWorkflowFixtureService()
+    @State private var showing = false
+
+    var body: some View {
+        VStack {
+            Button("Open custom field workflow editor") { showing = true }
+            if workflows.saved { Text("Saved exact custom field workflow") }
+        }
+        .sheet(isPresented: $showing) {
+            CustomMetadataWorkflowEditor(workflows: workflows, metadata: metadata)
+        }
+    }
+}
