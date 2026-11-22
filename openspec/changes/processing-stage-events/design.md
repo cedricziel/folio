@@ -22,6 +22,8 @@ The shared registry exposes labels such as OCR completed, Embedding failed, and 
 
 JSON document detail adds read-only stage run summaries with revision, attempt, state, reason, and retry time. OpenAPI regeneration supplies the Swift client. HTML and native detail display the same states, distinguish Waiting to retry from Failed, and retain existing reprocessing authorization. Styling uses shared design tokens. No generic event dashboard is added.
 
+Current read-only stage summaries use `processing_stage_runs.is_current` and require matching run/document vaults, a live document without a purge request, and an active vault. Pending plans are visible only while a queue job can still start them. This keeps plans left by older workers from hiding legacy status. Thumbnail reads retain the latest completed result prefix in that same scope while a newer run is pending or unsuccessful. Bound stage summaries match the current revision. Legacy summaries remain visible for a document without a revision or with revision one current. Thumbnail reads must also switch to current-revision lookup before replacement is exposed. Preserve nullable revision identity for legacy processing; do not synthesize revision IDs or infer them from result keys.
+
 ## Dependency boundary
 
 Foundation supplies transactional envelope serialization and outbox insertion. Revision owner supplies immutable revision IDs, current-revision fencing, and revision-specific derived storage. Workflow owner supplies registry and builder extension points. Exact Rust signatures and migration numbers are selected from merged implementations rather than duplicated here.

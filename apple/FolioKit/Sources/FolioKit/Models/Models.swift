@@ -11,6 +11,7 @@ public struct Document: Identifiable, Hashable, Sendable {
     public var pageCount: Int?
     public var ocrStatus: ProcessingStatus
     public var embedStatus: ProcessingStatus
+    public var processingStages: [ProcessingStageSummary]
     /// Only the list and get endpoints report tags; search results and uploads come back without them.
     public var tags: [Tag]
     public var documentDate: DocumentDate?
@@ -40,6 +41,7 @@ public struct Document: Identifiable, Hashable, Sendable {
         pageCount: Int? = nil,
         ocrStatus: ProcessingStatus = .pending,
         embedStatus: ProcessingStatus = .pending,
+        processingStages: [ProcessingStageSummary] = [],
         tags: [Tag] = [],
         documentDate: DocumentDate? = nil,
         canEditDocumentDate: Bool = false,
@@ -65,6 +67,7 @@ public struct Document: Identifiable, Hashable, Sendable {
         self.pageCount = pageCount
         self.ocrStatus = ocrStatus
         self.embedStatus = embedStatus
+        self.processingStages = processingStages
         self.tags = tags
         self.documentDate = documentDate
         self.canEditDocumentDate = canEditDocumentDate

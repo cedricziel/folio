@@ -157,6 +157,15 @@ fn metadata_definitions_describe_scoped_lifecycle_and_typed_inputs() {
 }
 
 #[test]
+fn processing_reason_uses_nullable_string_for_generated_clients() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let reason =
+        &spec["components"]["schemas"]["ProcessingStageSummary"]["properties"]["reason_code"];
+    assert_eq!(reason["type"], serde_json::json!(["string", "null"]));
+    assert!(reason.get("oneOf").is_none());
+}
+
+#[test]
 fn document_metadata_updates_require_explicit_nullable_values_and_revision() {
     let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
     let schemas = &spec["components"]["schemas"];
