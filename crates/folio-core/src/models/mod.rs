@@ -95,8 +95,8 @@ pub use vault::{
     VaultMember, VaultRole,
 };
 pub use webhook::{
-    NamedRef, WebhookDocument, WebhookEntry, WebhookIngest, WebhookPayload, WebhookUrls,
-    WorkflowEventIdentity, PAYLOAD_VERSION,
+    NamedRef, WebhookDocument, WebhookEntry, WebhookIngest, WebhookMetadata, WebhookPayload,
+    WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
 };
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,
