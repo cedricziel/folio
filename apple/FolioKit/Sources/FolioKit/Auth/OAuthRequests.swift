@@ -2,13 +2,16 @@ import Foundation
 
 /// Builds the requests of the authorization code flow so they can be checked without a server.
 public enum OAuthRequests {
-    public static func registration(endpoint: URL, redirectURI: String, clientName: String) throws -> URLRequest {
+    public static func registration(
+        endpoint: URL, redirectURI: String, clientName: String, scopes: String = OAuthConfiguration.documentScopes
+    ) throws -> URLRequest {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(
             withJSONObject: [
                 "client_name": clientName,
+                "scope": scopes,
                 "redirect_uris": [redirectURI],
                 "token_endpoint_auth_method": "none",
                 "grant_types": ["authorization_code", "refresh_token"],
@@ -29,7 +32,7 @@ public enum OAuthRequests {
             URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "scope", value: OAuthConfiguration.scopes),
+            URLQueryItem(name: "scope", value: OAuthConfiguration.scopes(for: metadata)),
             URLQueryItem(name: "resource", value: resource),
             URLQueryItem(name: "state", value: state),
         ]

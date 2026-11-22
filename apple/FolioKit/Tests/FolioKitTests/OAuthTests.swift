@@ -48,12 +48,14 @@ struct OAuthRequestTests {
         authorizationEndpoint: URL(string: "https://folio.example.com/oauth/authorize")!,
         tokenEndpoint: URL(string: "https://folio.example.com/oauth/token")!,
         registrationEndpoint: URL(string: "https://folio.example.com/oauth/register")!,
-        revocationEndpoint: URL(string: "https://folio.example.com/oauth/revoke")
+        revocationEndpoint: URL(string: "https://folio.example.com/oauth/revoke"),
+        scopesSupported: ["documents:read", "documents:write", "vaults:manage"]
     )
 
     @Test func registrationRequestIsAPublicClientWithACustomSchemeRedirect() throws {
         let request = try OAuthRequests.registration(
-            endpoint: metadata.registrationEndpoint, redirectURI: OAuthConfiguration.redirectURI, clientName: "Folio"
+            endpoint: metadata.registrationEndpoint, redirectURI: OAuthConfiguration.redirectURI, clientName: "Folio",
+            scopes: OAuthConfiguration.scopes(for: metadata)
         )
         #expect(request.httpMethod == "POST")
         #expect(request.url == metadata.registrationEndpoint)
@@ -61,6 +63,7 @@ struct OAuthRequestTests {
         let data = try #require(request.httpBody)
         let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(body["client_name"] as? String == "Folio")
+        #expect(body["scope"] as? String == "documents:read documents:write vaults:manage")
         #expect(body["redirect_uris"] as? [String] == ["com.cedricziel.folio:/oauth/callback"])
         #expect(body["token_endpoint_auth_method"] as? String == "none")
         #expect(body["grant_types"] as? [String] == ["authorization_code", "refresh_token"])
@@ -80,9 +83,30 @@ struct OAuthRequestTests {
         #expect(items["redirect_uri"] == "com.cedricziel.folio:/oauth/callback")
         #expect(items["code_challenge"] == "chal")
         #expect(items["code_challenge_method"] == "S256")
-        #expect(items["scope"] == "documents:read documents:write")
+        #expect(items["scope"] == "documents:read documents:write vaults:manage")
         #expect(items["resource"] == "https://folio.example.com/api")
         #expect(items["state"] == "st")
+    }
+
+    @Test func olderMetadataKeepsSignInWithinDocumentScopes() throws {
+        let old = OAuthMetadata(
+            issuer: metadata.issuer, authorizationEndpoint: metadata.authorizationEndpoint,
+            tokenEndpoint: metadata.tokenEndpoint, registrationEndpoint: metadata.registrationEndpoint,
+            revocationEndpoint: metadata.revocationEndpoint
+        )
+        let request = try OAuthRequests.registration(
+            endpoint: old.registrationEndpoint, redirectURI: OAuthConfiguration.redirectURI,
+            clientName: "Folio", scopes: OAuthConfiguration.scopes(for: old)
+        )
+        let body = try #require(JSONSerialization.jsonObject(with: #require(request.httpBody)) as? [String: Any])
+        #expect(body["scope"] as? String == "documents:read documents:write")
+        let url = OAuthRequests.authorizationURL(
+            metadata: old, clientID: "cached-client", redirectURI: OAuthConfiguration.redirectURI,
+            resource: "https://folio.example.com/api", challenge: "chal", state: "st"
+        )
+        let scope = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "scope" }?
+            .value
+        #expect(scope == "documents:read documents:write")
     }
 
     @Test func tokenRequestsAreFormEncoded() throws {

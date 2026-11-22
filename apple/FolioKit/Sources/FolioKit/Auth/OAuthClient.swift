@@ -37,7 +37,7 @@ struct OAuthClient: Sendable {
     func register(_ metadata: OAuthMetadata) async throws -> String {
         let request = try OAuthRequests.registration(
             endpoint: metadata.registrationEndpoint, redirectURI: OAuthConfiguration.redirectURI,
-            clientName: OAuthConfiguration.clientName
+            clientName: OAuthConfiguration.clientName, scopes: OAuthConfiguration.scopes(for: metadata)
         )
         let (data, response) = try await fetch(request)
         guard (200..<300).contains((response as? HTTPURLResponse)?.statusCode ?? 0),

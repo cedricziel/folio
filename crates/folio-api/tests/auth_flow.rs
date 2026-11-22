@@ -2293,3 +2293,197 @@ mod forward {
         setup_and_login(app).await
     }
 }
+
+#[tokio::test]
+async fn vault_management_scope_is_explicit_api_only_and_requires_consent() {
+    let app = app().await;
+    let session = setup_and_login(&app).await;
+    let registered = send(
+        &app,
+        Request::post("/oauth/register")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({"client_name":"Folio", "redirect_uris":[REDIRECT],
+            "scope":"documents:read documents:write vaults:manage"})
+                .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        registered.status,
+        StatusCode::CREATED,
+        "{}",
+        registered.body
+    );
+    assert_eq!(
+        registered.json()["scope"],
+        "documents:read documents:write vaults:manage"
+    );
+    let client = registered.json()["client_id"].as_str().unwrap().to_string();
+    let query = authorize_query(&client)
+        .replace(&enc(&format!("{BASE}/mcp")), &enc(&format!("{BASE}/api")))
+        + "&scope=documents%3Aread%20documents%3Awrite%20vaults%3Amanage";
+    let page = send(
+        &app,
+        get_req(&format!("/oauth/authorize?{query}"), &session),
+    )
+    .await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert!(page.body.contains("manage your vaults"));
+    assert!(page.body.contains("manage access to your vaults"));
+    let done = send(
+        &app,
+        form_req(
+            "/oauth/authorize",
+            &session,
+            &format!("{query}&csrf={}&decision=allow", csrf_from(&page.body)),
+        ),
+    )
+    .await;
+    let location = url::Url::parse(&done.location()).unwrap();
+    let code = location
+        .query_pairs()
+        .find(|(key, _)| key == "code")
+        .unwrap()
+        .1
+        .into_owned();
+    let tokens = exchange(
+        &app,
+        &code_body(&client, &code, VERIFIER)
+            .replace(&enc(&format!("{BASE}/mcp")), &enc(&format!("{BASE}/api"))),
+    )
+    .await;
+    assert_eq!(tokens.status, StatusCode::OK, "{}", tokens.body);
+    assert_eq!(
+        tokens.json()["scope"],
+        "documents:read documents:write vaults:manage"
+    );
+    let access = tokens.json()["access_token"].as_str().unwrap().to_string();
+    let create = send(
+        &app,
+        Request::post("/api/vaults")
+            .header(header::AUTHORIZATION, format!("Bearer {access}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"name":"Native vault"}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(create.status, StatusCode::CREATED, "{}", create.body);
+
+    let vault_only_query = query.replace(
+        "documents%3Aread%20documents%3Awrite%20vaults%3Amanage",
+        "vaults%3Amanage",
+    );
+    let vault_only = send(
+        &app,
+        get_req(&format!("/oauth/authorize?{vault_only_query}"), &session),
+    )
+    .await;
+    assert_eq!(vault_only.status, StatusCode::OK);
+    assert!(vault_only
+        .body
+        .contains("Allow Folio to manage your vaults?"));
+    assert!(!vault_only.body.contains("read your documents"));
+
+    let mcp = send(
+        &app,
+        get_req(
+            &format!(
+                "/oauth/authorize?{}&scope=vaults%3Amanage",
+                authorize_query(&client)
+            ),
+            &session,
+        ),
+    )
+    .await;
+    assert_eq!(mcp.status, StatusCode::SEE_OTHER);
+    assert!(mcp.location().contains("error=invalid_scope"));
+}
+
+#[tokio::test]
+async fn registration_without_scope_keeps_document_defaults_and_rejects_unknown_scopes() {
+    let app = app().await;
+    let default = send(
+        &app,
+        Request::post("/oauth/register")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({"client_name":"Unrelated", "redirect_uris":[REDIRECT]}).to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(default.status, StatusCode::CREATED);
+    assert_eq!(default.json()["scope"], "documents:read documents:write");
+    let invalid = send(
+        &app,
+        Request::post("/oauth/register")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({"redirect_uris":[REDIRECT], "scope":"admin:all"}).to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid.json()["error"], "invalid_scope");
+}
+
+#[tokio::test]
+async fn document_write_oauth_grant_cannot_create_a_vault_or_widen_on_refresh() {
+    let app = app().await;
+    let session = setup_and_login(&app).await;
+    let client = register(&app).await;
+    let query = authorize_query(&client)
+        .replace(&enc(&format!("{BASE}/mcp")), &enc(&format!("{BASE}/api")))
+        + "&scope=documents%3Awrite";
+    let page = send(
+        &app,
+        get_req(&format!("/oauth/authorize?{query}"), &session),
+    )
+    .await;
+    let done = send(
+        &app,
+        form_req(
+            "/oauth/authorize",
+            &session,
+            &format!("{query}&csrf={}&decision=allow", csrf_from(&page.body)),
+        ),
+    )
+    .await;
+    let location = url::Url::parse(&done.location()).unwrap();
+    let code = location
+        .query_pairs()
+        .find(|(key, _)| key == "code")
+        .unwrap()
+        .1
+        .into_owned();
+    let tokens = exchange(
+        &app,
+        &code_body(&client, &code, VERIFIER)
+            .replace(&enc(&format!("{BASE}/mcp")), &enc(&format!("{BASE}/api"))),
+    )
+    .await
+    .json();
+    assert_eq!(tokens["scope"], "documents:write");
+    let access = tokens["access_token"].as_str().unwrap();
+    let denied = send(
+        &app,
+        Request::post("/api/vaults")
+            .header(header::AUTHORIZATION, format!("Bearer {access}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"name":"Denied"}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN);
+    assert!(denied.headers[header::WWW_AUTHENTICATE]
+        .to_str()
+        .unwrap()
+        .contains("vaults:manage"));
+    let refresh = tokens["refresh_token"].as_str().unwrap();
+    let widened = exchange(&app, &format!("grant_type=refresh_token&client_id={client}&refresh_token={refresh}&scope=vaults%3Amanage")).await;
+    assert_eq!(widened.status, StatusCode::BAD_REQUEST);
+    assert_eq!(widened.json()["error"], "invalid_scope");
+}

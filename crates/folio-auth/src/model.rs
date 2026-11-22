@@ -2,8 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Scopes the authorization server can grant.
+/// Scopes granted when a client omits an explicit scope request.
 pub const SCOPES: [&str; 2] = ["documents:read", "documents:write"];
+pub const VAULT_MANAGEMENT_SCOPE: &str = "vaults:manage";
+pub const SUPPORTED_SCOPES: [&str; 3] =
+    ["documents:read", "documents:write", VAULT_MANAGEMENT_SCOPE];
 
 #[derive(Debug, Clone)]
 pub struct User {

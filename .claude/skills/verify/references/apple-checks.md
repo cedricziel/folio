@@ -48,6 +48,14 @@ The tests exercise authentication completion from a background queue without
 launching the app, opening a browser, or accessing credentials.
 Do not launch the app against existing App Group or keychain state.
 
+## Apple OAuth scope negotiation
+
+Run the package suite with `--filter OAuthRequestTests` using the isolated
+package settings above. The requests include `vaults:manage` only when discovery
+advertises it. Metadata without that scope keeps registration and authorization
+within document scopes, including authorization with an existing client ID.
+These tests use constructed requests and do not open a browser or access Keychain.
+
 ## Apple session recovery
 
 The package suite covers Keychain read, write, and delete failures through injected
