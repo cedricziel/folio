@@ -4,8 +4,8 @@ import XCTest
     func testTrashAndRestoreRetainConfigurationAndFailedRunHistory() {
         let app = launch()
         openWorkflow(app)
-        XCTAssertTrue(app.staticTexts["Taylor"].waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertTrue(app.staticTexts["Morgan"].exists, app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Created by, Taylor"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Updated by, Morgan"].exists, app.debugDescription)
         let failedRun = app.staticTexts["Receiver unavailable"]
         XCTAssertTrue(scroll(app, until: failedRun), app.debugDescription)
         capture(app, name: "Workflow configuration and failed run history")
@@ -13,7 +13,7 @@ import XCTest
         XCTAssertTrue(app.staticTexts["No workflows"].waitForExistence(timeout: 5), app.debugDescription)
         showTrash(app)
         openWorkflow(app)
-        XCTAssertTrue(app.staticTexts["In Trash"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["State, In Trash"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(scroll(app, until: failedRun), app.debugDescription)
         capture(app, name: "Retained workflow history in Trash")
         let restore = app.buttons["Restore workflow"]
