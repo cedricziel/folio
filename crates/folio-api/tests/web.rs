@@ -869,3 +869,138 @@ async fn field_management_forms_preserve_invalid_drafts_and_restore_options() {
     assert!(page.contains(&format!("action=\"{editor}\"")));
     assert!(page.contains("value=\"987\""));
 }
+
+#[tokio::test]
+async fn custom_field_editor_keeps_invalid_exact_drafts_and_lists_live_links() {
+    use axum::{body::Body, http::Request};
+    use folio_core::models::{
+        CreateDocument, MetadataChange, MetadataFieldInput, MetadataKind, MetadataValue,
+    };
+
+    let h = harness().await;
+    let head = h
+        .state
+        .document_repo
+        .create(
+            h.vault,
+            CreateDocument {
+                title: "Invoice".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let target = h
+        .state
+        .document_repo
+        .create(
+            h.vault,
+            CreateDocument {
+                title: "Receipt".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let make = |kind, name: &str| MetadataFieldInput {
+        kind,
+        name: name.into(),
+        required: false,
+        unique: false,
+    };
+    let amount = h
+        .state
+        .metadata_fields
+        .create(h.vault, make(MetadataKind::Decimal, "Amount"))
+        .await
+        .unwrap();
+    let paid = h
+        .state
+        .metadata_fields
+        .create(h.vault, make(MetadataKind::Boolean, "Paid"))
+        .await
+        .unwrap();
+    let link = h
+        .state
+        .metadata_fields
+        .create(h.vault, make(MetadataKind::DocumentLink, "Receipt link"))
+        .await
+        .unwrap();
+    let initial = h
+        .state
+        .metadata_values
+        .patch(
+            h.vault,
+            head.id,
+            None,
+            vec![
+                MetadataChange {
+                    field_id: link.id,
+                    value: Some(MetadataValue::DocumentLink(target.id)),
+                },
+                MetadataChange {
+                    field_id: paid.id,
+                    value: Some(MetadataValue::Boolean(false)),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    let revision = initial.revision.unwrap();
+    let panel = format!("/documents/{}/custom-fields", head.id);
+    let editor = format!("{panel}/{}", amount.id);
+    let submit = |value: &str| {
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("revision", &revision.to_string())
+            .append_pair("operation", "save")
+            .append_pair("value", value)
+            .finish();
+        Request::post(&editor)
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let page = text(h.app.clone().oneshot(get(&panel)).await.unwrap()).await;
+    assert!(page.contains("Custom fields"));
+    assert!(page.contains("<span>No</span>"));
+    assert!(page.contains(&format!("/documents/{}", target.id)));
+    assert!(page.contains("Not set"));
+
+    let invalid = h.app.clone().oneshot(submit("1e3")).await.unwrap();
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let failed = text(invalid).await;
+    assert!(failed.contains("role=\"alert\""));
+    assert!(failed.contains("value=\"1e3\""));
+
+    let saved = h
+        .app
+        .clone()
+        .oneshot(submit("9007199254740993.010"))
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+    let saved = text(h.app.clone().oneshot(get(&panel)).await.unwrap()).await;
+    assert!(saved.contains("9007199254740993.01"));
+
+    let stale = h
+        .app
+        .clone()
+        .oneshot(submit("9007199254740993.02"))
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let draft = text(stale).await;
+    assert!(draft.contains("value=\"9007199254740993.02\""));
+    assert!(draft.contains("Reload the current value"));
+
+    h.state
+        .document_repo
+        .delete(h.vault, target.id)
+        .await
+        .unwrap();
+    let trashed = text(h.app.clone().oneshot(get(&panel)).await.unwrap()).await;
+    assert!(trashed.contains("Receipt (in Trash)"));
+    assert!(!trashed.contains(&format!("/documents/{}", target.id)));
+}

@@ -1023,6 +1023,29 @@ dialog.palette {
   flex: none;
   white-space: nowrap;
 }
+#custom-fields:not(:has(> *)) {
+  display: none;
+}
+
+.custom-field-form {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  margin-block: var(--space-3);
+}
+
+.custom-field-form .f-field {
+  width: 100%;
+}
+
+.custom-field-value {
+  overflow-wrap: anywhere;
+}
+
+.custom-field-value > span {
+  white-space: pre-wrap;
+}
+
 .f-row-plain .f-row-sub {
   display: flex;
   flex-wrap: wrap;

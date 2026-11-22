@@ -1866,6 +1866,87 @@ async fn event_stream_rejects_moved_and_unknown_origins_without_exposing_context
 }
 
 #[tokio::test]
+async fn viewer_reads_custom_fields_without_editor_access() {
+    use folio_core::models::{MetadataChange, MetadataFieldInput, MetadataKind, MetadataValue};
+
+    let h = harness_requiring_login().await;
+    let owner = sign_in(&h, "custom-field-owner").await;
+    let viewer = sign_in(&h, "custom-field-viewer").await;
+    h.members
+        .grant(
+            owner.vault,
+            &Principal::User(viewer.user.clone()),
+            VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+    let doc = h
+        .state
+        .document_repo
+        .create(
+            owner.vault,
+            CreateDocument {
+                title: "Archive record".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let field = h
+        .state
+        .metadata_fields
+        .create(
+            owner.vault,
+            MetadataFieldInput {
+                name: "Archive status".into(),
+                kind: MetadataKind::Text,
+                required: false,
+                unique: false,
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .metadata_values
+        .patch(
+            owner.vault,
+            doc.id,
+            None,
+            vec![MetadataChange {
+                field_id: field.id,
+                value: Some(MetadataValue::Text("Approved".into())),
+            }],
+        )
+        .await
+        .unwrap();
+
+    let panel = format!("/vaults/{}/documents/{}/custom-fields", owner.vault, doc.id);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &panel, &viewer, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("Archive status"));
+    assert!(html.contains("Approved"));
+    assert!(!html.contains("Edit Archive status"));
+
+    let editor = format!("{panel}/{}", field.id);
+    for method in ["GET", "POST"] {
+        let response = h
+            .app
+            .clone()
+            .oneshot(request(method, &editor, &viewer, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+}
+
+#[tokio::test]
 async fn viewer_cannot_change_document_date_or_receive_edit_capability() {
     let h = harness_requiring_login().await;
     let owner = sign_in(&h, "date-owner").await;
