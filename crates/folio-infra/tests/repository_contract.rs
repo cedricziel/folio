@@ -906,6 +906,104 @@ async fn search_contract(
     }
 }
 
+async fn revision_search_contract(db: &Database, repos: &Repositories, search: &dyn SearchService) {
+    let vault = repos
+        .vaults
+        .create(&format!("Revision search {}", Id::new_v4()), None)
+        .await
+        .unwrap()
+        .id;
+    let document = repos
+        .documents
+        .create_for_upload(vault, new_document("Versioned scan"))
+        .await
+        .unwrap();
+    let first =
+        folio_core::models::FileIdentity::from_bytes("original", "application/pdf", b"first");
+    assert!(repos
+        .documents
+        .finalize_verified_upload(vault, document.id, &first)
+        .await
+        .unwrap());
+    let model = "revision-search";
+    let vector = [1.0, 0.0, 0.0];
+    search
+        .store_chunks(
+            vault,
+            document.id,
+            model,
+            &[chunk(0, "earlier text", &vector)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        search
+            .search(vault, model, &vector, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let current = Id::new_v4();
+    let replace = format!(
+        "INSERT INTO document_revisions
+            (id, document_id, vault_id, number, original_file_id, created_at, restored_from_revision_id)
+          VALUES ('{current}', '{id}', '{vault}', 2, '{id}', '2026-11-22T19:00:00Z', '{id}');
+         UPDATE documents SET current_revision_id = '{current}' WHERE id = '{id}'",
+        id=document.id,
+    );
+    async fn execute(db: &Database, sql: String) {
+        match db {
+            Database::Sqlite(pool) => sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                .execute(pool)
+                .await
+                .map(|_| ()),
+            Database::Postgres(pool) => sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+                .execute(pool)
+                .await
+                .map(|_| ()),
+        }
+        .unwrap();
+    }
+    execute(db, replace).await;
+
+    assert!(search
+        .search(vault, model, &vector, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    execute(
+        db,
+        format!(
+            "UPDATE document_chunks SET revision_id = '{id}' WHERE document_id = '{id}'",
+            id = document.id
+        ),
+    )
+    .await;
+    assert!(search
+        .search(vault, model, &vector, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    execute(db, format!("UPDATE document_chunks SET revision_id = '{current}', text = 'current text' WHERE document_id = '{}'", document.id)).await;
+    assert!(matches!(
+        search
+            .store_chunks(
+                vault,
+                document.id,
+                model,
+                &[chunk(0, "late legacy text", &vector)]
+            )
+            .await,
+        Err(Error::Conflict(_))
+    ));
+    search.delete_embedding(vault, document.id).await.unwrap();
+    let results = search.search(vault, model, &vector, 10).await.unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].snippet.as_deref(), Some("current text"));
+}
+
 struct FixedEmbeddings(String);
 
 #[async_trait]
@@ -4271,6 +4369,7 @@ async fn sqlite_satisfies_the_contract() {
     run_contract(&db).await;
     let repos = db.repositories().await;
     library_semantic_filter_contract(&db, &repos, repos.search.clone()).await;
+    revision_search_contract(&db, &repos, repos.search.as_ref()).await;
 }
 
 #[tokio::test]
@@ -4452,6 +4551,8 @@ async fn postgres_satisfies_the_contract() {
     )
     .await;
     library_semantic_filter_contract(&db, &repos, repos.search.clone()).await;
+    revision_search_contract(&db, &repos, repos.search.as_ref()).await;
+    revision_search_contract(&db, &repos, &fallback).await;
 }
 
 #[tokio::test]
@@ -4480,6 +4581,7 @@ async fn postgres_without_the_vector_extension_falls_back() {
         .uses_pgvector());
     let repos = db.repositories().await;
     library_semantic_filter_contract(&db, &repos, repos.search.clone()).await;
+    revision_search_contract(&db, &repos, repos.search.as_ref()).await;
 }
 
 #[tokio::test]
