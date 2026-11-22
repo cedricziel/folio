@@ -552,6 +552,13 @@ and restoration of the same option ID and position. Run `npx playwright test
 metadata-fields.spec.ts` from `e2e/` against the disposable Folio instance to
 check field and option management at a narrow viewport.
 
+Run `cargo test -p folio-api --test web --test vaults custom_field` for the
+document editor. Check false and empty states, retained invalid and conflicting
+drafts, read-only access, and active and trashed logical links. Run
+`npx playwright test metadata-document.spec.ts` from `e2e/` on the disposable
+instance to verify exact decimal editing and same-vault link search and navigation
+at a narrow viewport.
+
 ## Verify SQLite trash contention
 
 Run `cargo test -p folio-infra --test trash_lock` with an isolated target.

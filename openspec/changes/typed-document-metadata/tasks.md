@@ -18,8 +18,8 @@
 - [x] Merge scoped document metadata reads and atomic revision-checked updates in #528. Local API, vault, token, SQLite and required PostgreSQL tests passed. Hosted workspace CI confirmed explicit-null OpenAPI, E2E and architecture builds.
 
 - [ ] Write failing router tests for manager/editor/viewer permissions, contributor ownership, revoked membership, cross-vault targets, errors, and CSRF; implement documented JSON and HTML routes.
-- [ ] In progress: verify and merge exact canonical metadata search, bounded continuation, vault scoping, and retired field handling.
-- [ ] Add web management and typed document forms with retained failed drafts; verify create, edit, retirement, restore, and link navigation through isolated Playwright fixtures.
+- [x] Merge exact metadata search as #531. Both required backend regressions, the metadata router and OpenAPI suites, workspace CI, end-to-end tests, and both architecture builds passed.
+- [ ] In progress: verify and merge web management and typed document forms with retained failed drafts; verify create, edit, retirement, restore, and link navigation through isolated Playwright fixtures.
 - [ ] Regenerate OpenAPI and verify MCP compatibility using the existing protocol suite.
 
 ## 4. Apple

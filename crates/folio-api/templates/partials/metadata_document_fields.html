@@ -1,0 +1,25 @@
+<turbo-frame id="custom-fields">
+    {% if !rows.is_empty() || next.is_some() %}
+    <section class="panel" aria-labelledby="custom-fields-heading">
+        <h2 id="custom-fields-heading" class="heading">Custom fields</h2>
+        <dl class="f-meta-list">
+            {% for row in rows %}
+            <dt>{{ row.name }}{% if row.retired %} (retired){% endif %}</dt>
+            <dd class="custom-field-value">
+                {% if let Some(href) = row.href %}
+                <a href="{{ href }}" data-turbo-frame="_top" rel="noreferrer">{{ row.display }}</a>
+                {% else %}
+                <span>{{ row.display }}</span>
+                {% endif %}
+                {% if let Some(href) = row.edit_href %}
+                <a class="f-btn f-btn-quiet" href="{{ href }}" data-turbo-frame="_top" aria-label="Edit {{ row.name }}">Edit</a>
+                {% endif %}
+            </dd>
+            {% endfor %}
+        </dl>
+        {% if let Some(href) = next %}
+        <a class="f-btn" href="{{ href }}">More custom fields</a>
+        {% endif %}
+    </section>
+    {% endif %}
+</turbo-frame>
