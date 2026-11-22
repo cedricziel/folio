@@ -507,6 +507,20 @@ when outbox publication fails, option identity, and select-field integrity. Even
 vault-visible non-document events. A Docker access failure requires rerunning the
 PostgreSQL case with socket access; a skipped backend is not verified parity.
 
+For field/option JSON routes, run
+`RUSTC_WRAPPER= cargo test -p folio-api --test metadata --test vaults --test personal_tokens --test routes`
+with the same isolated build settings. The metadata fixture uses temporary SQLite
+and test accounts. It covers Editor/Owner management, Viewer/Contributor reads,
+revoked membership, cross-vault IDs, option parent scope, audit attribution,
+validation and lifecycle conflicts, bounded pagination, CSRF, and independent
+bearer read/write scopes. PATCH replaces editable properties through the repository
+transaction. Field name/kind and option label are required; omitted field flags
+become false and omitted option position becomes zero. Do not merge partial PATCH
+properties from an unlocked read before a full repository update.
+
+Run `RUSTC_WRAPPER= UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi`,
+then rerun without `UPDATE_OPENAPI` to check the committed generated contract.
+
 ## Verify SQLite trash contention
 
 Run `cargo test -p folio-infra --test trash_lock` with an isolated target.

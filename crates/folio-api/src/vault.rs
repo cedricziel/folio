@@ -334,6 +334,16 @@ async fn action(state: &AppState, request: &mut Request, vault: VaultId) -> ApiR
     {
         return Ok(VaultAction::ManageWorkflows);
     }
+    if mutation
+        && path
+            .strip_prefix("/vaults/")
+            .and_then(|tail| tail.split_once('/'))
+            .is_some_and(|(_, tail)| {
+                tail == "metadata-fields" || tail.starts_with("metadata-fields/")
+            })
+    {
+        return Ok(VaultAction::ManageVocabulary);
+    }
     if !mutation || path == "/documents/search" {
         return Ok(VaultAction::Read);
     }

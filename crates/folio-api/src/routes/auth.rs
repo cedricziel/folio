@@ -557,6 +557,7 @@ pub(crate) const VAULT_MANAGEMENT_SCOPE: &str = "vaults:manage";
 fn manages_vault(path: &str) -> bool {
     let parts: Vec<_> = path.trim_end_matches('/').split('/').collect();
     match parts.as_slice() {
+        ["", "api", "vaults", _, "metadata-fields", ..] => false,
         ["", "api", "vaults", ..] => {
             !matches!(parts.as_slice(), ["", "api", "vaults", _, "default"])
         }
@@ -575,6 +576,32 @@ fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
     let classified = match parts.as_slice() {
         ["", "api", "vaults"] => read,
         ["", "api", "vaults", vault, "documents"] if id(vault) => read,
+        ["", "api", "vaults", vault, "metadata-fields"] if id(vault) => {
+            read || *method == Method::POST
+        }
+        ["", "api", "vaults", vault, "metadata-fields", field] if id(vault) && id(field) => {
+            read || matches!(*method, Method::PATCH | Method::DELETE)
+        }
+        ["", "api", "vaults", vault, "metadata-fields", field, "restore"]
+            if id(vault) && id(field) =>
+        {
+            *method == Method::POST
+        }
+        ["", "api", "vaults", vault, "metadata-fields", field, "options"]
+            if id(vault) && id(field) =>
+        {
+            read || *method == Method::POST
+        }
+        ["", "api", "vaults", vault, "metadata-fields", field, "options", option]
+            if id(vault) && id(field) && id(option) =>
+        {
+            read || matches!(*method, Method::PATCH | Method::DELETE)
+        }
+        ["", "api", "vaults", vault, "metadata-fields", field, "options", option, "restore"]
+            if id(vault) && id(field) && id(option) =>
+        {
+            *method == Method::POST
+        }
         ["", "api", "documents"] => read || *method == Method::POST,
         ["", "api", "documents", "search"] => read || *method == Method::POST,
         ["", "api", "documents", "browse" | "trash" | "ids"] => read,

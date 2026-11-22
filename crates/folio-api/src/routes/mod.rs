@@ -16,6 +16,7 @@ mod file_response;
 mod health;
 mod integrations;
 mod manage;
+pub(crate) mod metadata;
 mod mfa;
 mod oidc;
 mod pages;
@@ -172,6 +173,7 @@ fn api_router() -> Router<AppState> {
         )
         .route("/vaults/{vault_id}/history", get(vaults::list_history))
         .merge(saved_views::router())
+        .merge(metadata::router())
         .merge(devices::router())
         .nest("/telemetry", crate::client_telemetry::router())
         .nest("/documents", documents::router())
