@@ -662,6 +662,23 @@ impl DocumentRepository for SqliteDocumentRepository {
         row.map(TryInto::try_into).transpose()
     }
 
+    async fn thumbnail_result_prefix(&self, vault: VaultId, id: Id) -> Result<Option<String>> {
+        sqlx::query_scalar(
+            "SELECT r.result_prefix FROM processing_stage_runs r
+             JOIN documents d ON d.id = r.document_id AND d.vault_id = r.vault_id
+             JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
+             WHERE d.id = ? AND d.vault_id = ? AND d.deleted_at IS NULL
+               AND d.purge_requested_at IS NULL
+               AND r.stage = 'thumbnail' AND r.state = 'completed' AND r.result_prefix IS NOT NULL
+             ORDER BY r.created_at DESC, r.updated_at DESC, r.id DESC LIMIT 1",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)
+    }
+
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
         let mut qb = QueryBuilder::<Sqlite>::new(format!(
             "SELECT {DOC_COLS} FROM documents WHERE deleted_at IS NULL AND vault_id = "
