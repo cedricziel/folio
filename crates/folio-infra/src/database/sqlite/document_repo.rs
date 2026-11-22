@@ -655,6 +655,17 @@ impl DocumentRepository for SqliteDocumentRepository {
             .map_err(map_sqlx_error)?;
         super::prepare_move(&mut tx, from, id).await?;
 
+        let resume_thumbnail: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM processing_stage_runs
+             WHERE document_id = ?1 AND vault_id = ?2 AND stage = 'thumbnail' AND is_current
+               AND state IN ('pending', 'running', 'waiting_to_retry'))",
+        )
+        .bind(id.to_string())
+        .bind(from.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
         let before = capture_document(&mut tx, id, None)
             .await?
             .ok_or_else(|| not_found("Document", id))?;
@@ -736,6 +747,8 @@ impl DocumentRepository for SqliteDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET vault_id = ?, correspondent_id = ?, document_type_id = ?,
+                                  ocr_status = CASE WHEN ocr_status = 'running' THEN 'pending' ELSE ocr_status END,
+                                  embed_status = CASE WHEN embed_status = 'running' THEN 'pending' ELSE embed_status END,
                                   updated_at = ?, updated_by = ?
              WHERE id = ?",
         )
@@ -745,6 +758,27 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(Utc::now().to_rfc3339())
         .bind(actor.map(UserId::as_str))
         .bind(id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if resume_thumbnail && doc.file_path.is_some() {
+            crate::queue::insert_current_thumbnail_sqlite(
+                &mut tx,
+                to,
+                id,
+                crate::queue::JobTraceContext::current().as_ref(),
+            )
+            .await?;
+        }
+        sqlx::query(
+            "UPDATE processing_stage_runs SET vault_id = ?1,
+                 is_current = CASE WHEN state IN ('pending', 'running', 'waiting_to_retry') THEN FALSE ELSE is_current END
+             WHERE document_id = ?2 AND vault_id = ?3",
+        )
+        .bind(to.to_string())
+        .bind(id.to_string())
+        .bind(from.to_string())
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -1069,6 +1103,39 @@ impl DocumentRepository for SqliteDocumentRepository {
             actor.as_ref(),
         )
         .await?;
+        if let Some(archive) = &document.archive {
+            let identity = &archive.identity;
+            let byte_size = i64::try_from(identity.byte_size).map_err(|_| {
+                Error::Validation("Archive byte size exceeds database range".into())
+            })?;
+            sqlx::query(
+                "INSERT INTO document_files (
+                    id, document_id, vault_id, role, storage_key, original_filename, mime_type,
+                    verification_state, sha256, byte_size)
+                 VALUES (?1, ?2, ?3, 'archival', ?4, ?5, ?6, 'verified', ?7, ?8)",
+            )
+            .bind(archive.id.to_string())
+            .bind(id.to_string())
+            .bind(vault.to_string())
+            .bind(&identity.storage_key)
+            .bind(&archive.filename)
+            .bind(&identity.mime_type)
+            .bind(&identity.sha256)
+            .bind(byte_size)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+            sqlx::query(
+                "INSERT INTO document_revision_artifacts (file_id, document_id, vault_id, revision_id)
+                 VALUES (?1, ?2, ?3, ?2)",
+            )
+            .bind(archive.id.to_string())
+            .bind(id.to_string())
+            .bind(vault.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        }
         sqlx::query(
             "UPDATE documents SET current_revision_id = ?1, file_size = ?3
              WHERE id = ?1 AND vault_id = ?2",
@@ -1415,7 +1482,11 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn restore(&self, vault: VaultId, id: Id) -> Result<Document> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
         let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {DOC_COLS} FROM documents
              WHERE id = ? AND vault_id = ?"
@@ -1440,11 +1511,11 @@ impl DocumentRepository for SqliteDocumentRepository {
                  updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND purge_requested_at IS NULL")
             .bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
         if document.file_path.is_some() {
-            crate::queue::insert_job_sqlite(
+            crate::queue::insert_current_processing_sqlite(
                 &mut tx,
-                crate::queue::JobType::process_document(id),
-                Utc::now(),
-                crate::queue::DEFAULT_MAX_ATTEMPTS,
+                vault,
+                id,
+                false,
                 crate::queue::JobTraceContext::current().as_ref(),
             )
             .await?;

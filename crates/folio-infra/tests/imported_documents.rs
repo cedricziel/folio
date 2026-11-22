@@ -3,9 +3,9 @@ mod common;
 use chrono::{Duration, SubsecRound, Utc};
 use folio_core::models::{
     CreateCorrespondent, CreateDocumentType, CreateTag, DocumentStatus, EntryBody, EntryKind,
-    EntryPageQuery, FileIdentity, Id, ImportedDocument, ImportedNote, MetadataFieldInput,
-    MetadataKind, MetadataValue, ProcessingStage, ProcessingStatus, ReviewOrigin, SourceKind,
-    UserId,
+    EntryPageQuery, FileIdentity, Id, ImportedArchive, ImportedDocument, ImportedNote,
+    MetadataFieldInput, MetadataKind, MetadataValue, ProcessingStage, ProcessingStatus,
+    ReviewOrigin, SourceKind, UserId,
 };
 use folio_core::mutation::with_actor;
 use folio_core::ports::{MetadataFieldRepository, MetadataValueRepository};
@@ -51,6 +51,38 @@ async fn original_revision_identity(db: &Database, id: Id) -> (String, String, i
     }
 }
 
+fn imported_archive(document_id: Id) -> ImportedArchive {
+    use folio_core::ports::keys;
+
+    let file_id = Id::new_v4();
+    ImportedArchive {
+        id: file_id,
+        filename: Some("archive.pdf".into()),
+        identity: FileIdentity::from_bytes(
+            keys::revision_artifact(document_id, document_id, file_id),
+            "application/pdf",
+            b"verified archival derivative",
+        ),
+    }
+}
+
+async fn archival_identity(db: &Database, id: Id) -> (String, String, i64, String, String) {
+    let sql = "SELECT f.storage_key, f.sha256, f.byte_size, f.mime_type, f.verification_state
+               FROM document_revision_artifacts a JOIN document_files f
+                 ON f.id = a.file_id AND f.document_id = a.document_id AND f.vault_id = a.vault_id
+               WHERE a.document_id = $1 AND a.revision_id = $1 AND f.role = 'archival'";
+    match db {
+        Database::Sqlite(pool) => {
+            sqlx::query_as(sql)
+                .bind(id.to_string())
+                .fetch_one(pool)
+                .await
+        }
+        Database::Postgres(pool) => sqlx::query_as(sql).bind(id).fetch_one(pool).await,
+    }
+    .unwrap()
+}
+
 async fn execute_failure_trigger(db: &Database) {
     let (sqlite, postgres) = (
         "CREATE TRIGGER refuse_import_embedding BEFORE INSERT ON jobs
@@ -75,11 +107,12 @@ async fn execute_failure_trigger(db: &Database) {
     };
 }
 
-async fn imported_storage_counts(db: &Database, id: Id) -> (i64, i64, i64) {
+async fn imported_storage_counts(db: &Database, id: Id) -> (i64, i64, i64, i64) {
     let sql = "SELECT
                  (SELECT COUNT(*) FROM documents WHERE id = $1),
                  (SELECT COUNT(*) FROM document_files WHERE document_id = $1),
-                 (SELECT COUNT(*) FROM document_revisions WHERE document_id = $1)";
+                 (SELECT COUNT(*) FROM document_revisions WHERE document_id = $1),
+                 (SELECT COUNT(*) FROM document_revision_artifacts WHERE document_id = $1)";
     match db {
         Database::Sqlite(pool) => sqlx::query_as(sql)
             .bind(id.to_string())
@@ -156,6 +189,8 @@ async fn contract(db: Database) {
     let original = b"verified Paperless original";
     let identity =
         FileIdentity::from_bytes(document.file_path.clone(), "application/pdf", original);
+    let archive = imported_archive(document.id);
+    document.archive = Some(archive.clone());
     document.file_size = identity.byte_size;
     document.content_sha256 = identity.sha256.clone();
     document.correspondent_id = Some(correspondent.id);
@@ -204,6 +239,16 @@ async fn contract(db: Database) {
             identity.byte_size as i64,
             "verified".into(),
             1,
+        )
+    );
+    assert_eq!(
+        archival_identity(&db, document.id).await,
+        (
+            archive.identity.storage_key,
+            archive.identity.sha256,
+            archive.identity.byte_size as i64,
+            "application/pdf".into(),
+            "verified".into()
         )
     );
     assert_eq!(read.created_by, Some(admin.clone()));
@@ -306,6 +351,7 @@ async fn contract(db: Database) {
     assert!(matches!(again, Err(Error::Conflict(_))), "{again:?}");
     let mut renamed = document.clone();
     renamed.id = Id::new_v4();
+    renamed.archive = None;
     let duplicate_ref = r.documents.create_imported(vault, renamed).await;
     assert!(
         matches!(duplicate_ref, Err(Error::Conflict(_))),
@@ -396,14 +442,15 @@ async fn contract(db: Database) {
     assert!(r.jobs.dequeue().await.unwrap().is_none());
 
     execute_failure_trigger(&db).await;
-    let failed = common::imported_document(vault, "transaction-failure", added);
+    let mut failed = common::imported_document(vault, "transaction-failure", added);
+    failed.archive = Some(imported_archive(failed.id));
     let failed_id = failed.id;
     assert!(r
         .documents
         .create_imported(vault, failed.clone())
         .await
         .is_err());
-    assert_eq!(imported_storage_counts(&db, failed_id).await, (0, 0, 0));
+    assert_eq!(imported_storage_counts(&db, failed_id).await, (0, 0, 0, 0));
     assert_eq!(
         r.documents
             .find_by_external_ref(vault, &failed.external_ref)

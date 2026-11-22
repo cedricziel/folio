@@ -57,7 +57,9 @@ pub use import_run::{
     LibrarySample, NewImportItem, NewImportRun, PaperlessLedgerEntry, PaperlessSyncState,
     RunTransition, TaxonomyKind, TaxonomyMapping, IMPORT_CLAIM_TIMEOUT,
 };
-pub use imported_document::{ExternalRef, ImportSource, ImportedDocument, ImportedNote};
+pub use imported_document::{
+    ExternalRef, ImportSource, ImportedArchive, ImportedDocument, ImportedNote,
+};
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
     IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PaperlessConfig,

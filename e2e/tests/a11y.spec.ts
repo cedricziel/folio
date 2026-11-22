@@ -51,6 +51,13 @@ for (const screen of authScreens) {
         );
         const page = await context.newPage();
         await tour.openScreen(page, screen);
+        if (screen.name === "consent-vaults") {
+          await page.screenshot({
+            path: `test-results/consent-evidence/${viewport.name}-${theme}.png`,
+            fullPage: true,
+            animations: "disabled",
+          });
+        }
         const results = await new AxeBuilder({ page })
           .withTags(tour.axeTags)
           .analyze();

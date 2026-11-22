@@ -410,17 +410,13 @@ impl Worker {
             .list_pending(ProcessingStage::Ocr)
             .await?
         {
-            if doc.file_path.is_none() {
-                continue;
+            if self
+                .queue
+                .repair_current_processing(doc.vault_id, doc.id, ProcessingStage::Ocr)
+                .await?
+            {
+                repaired_count += 1;
             }
-            if self.has_active_job(doc.id).await? {
-                continue;
-            }
-            info!("Repairing orphaned document {} ({})", doc.id, doc.title);
-            self.queue
-                .enqueue(JobType::process_document(doc.id))
-                .await?;
-            repaired_count += 1;
         }
 
         for doc in self
@@ -429,13 +425,13 @@ impl Worker {
             .await?
         {
             if doc.content.as_deref().is_some_and(|c| !c.is_empty()) {
-                if self.has_active_job(doc.id).await? {
-                    continue;
+                if self
+                    .queue
+                    .repair_current_processing(doc.vault_id, doc.id, ProcessingStage::Embed)
+                    .await?
+                {
+                    repaired_count += 1;
                 }
-                self.queue
-                    .enqueue(JobType::generate_embedding(doc.id))
-                    .await?;
-                repaired_count += 1;
             } else if doc.ocr_status != ProcessingStatus::Pending
                 && doc.ocr_status != ProcessingStatus::Running
             {
@@ -459,14 +455,6 @@ impl Worker {
             .locate(document_id)
             .await?
             .ok_or("Document not found")?)
-    }
-
-    async fn has_active_job(&self, document_id: uuid::Uuid) -> Result<bool, BoxError> {
-        Ok(!self
-            .queue
-            .find_active_jobs_for_document(document_id)
-            .await?
-            .is_empty())
     }
 
     async fn process_claim(&self, job: &Job) -> Result<(), BoxError> {
@@ -2906,6 +2894,7 @@ mod tests {
                     file_path: path,
                     content_sha256: identity.sha256,
                     file_size: identity.byte_size,
+                    archive: None,
                     document_date: None,
                     created_at: now,
                     updated_at: now,
