@@ -25,7 +25,7 @@ struct CustomFieldsManager: View {
                     } label: {
                         VStack(alignment: .leading, spacing: FolioTheme.Spacing.space1) {
                             Text(field.draft.name)
-                            Text(field.isRetired ? "\(field.draft.kind.label) · Retired" : field.draft.kind.label)
+                            Text(fieldDetails(field))
                                 .foregroundStyle(Color.inkMuted)
                         }
                     }
@@ -54,6 +54,15 @@ struct CustomFieldsManager: View {
             }
             .task { if !loaded { await load() } }
         }
+    }
+
+    private func fieldDetails(_ field: CustomFieldDefinition) -> String {
+        [
+            field.draft.kind.label,
+            field.draft.required ? "Required" : nil,
+            field.draft.unique ? "Unique" : nil,
+            field.isRetired ? "Retired" : nil,
+        ].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func load() async {
