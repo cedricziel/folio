@@ -15,9 +15,26 @@ private final class TransferProtocol: URLProtocol {
         request
     }
 
-    override func stopLoading() {}
+    private var stalledPath: String? {
+        let path = request.url!.path
+        return path.hasPrefix("/stall-") && path.hasSuffix("/download") ? path : nil
+    }
+
+    static func stalledEvent(_ event: String, _ path: String) -> Notification.Name {
+        Notification.Name("provider-test.\(event).\(path)")
+    }
+
+    override func stopLoading() {
+        if let stalledPath {
+            NotificationCenter.default.post(name: Self.stalledEvent("stop", stalledPath), object: nil)
+        }
+    }
 
     override func startLoading() {
+        if let stalledPath {
+            NotificationCenter.default.post(name: Self.stalledEvent("start", stalledPath), object: nil)
+            return
+        }
         let download = request.url!.path.hasSuffix("/download")
         let discovery = request.url!.path.hasSuffix("/api/vaults")
         let missing = download && request.url!.path.contains("/missing/")
@@ -114,6 +131,32 @@ final class DownloadTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: first), original)
         XCTAssertEqual(try Data(contentsOf: second), original)
         XCTAssertEqual(PDFDocument(url: second)?.pageCount, 1)
+    }
+
+    func testCancelledDownloadStopsTransferAndAllowsReopening() async throws {
+        let prefix = "stall-\(UUID().uuidString.lowercased())"
+        let path = "/\(prefix)/api/documents/\(downloadID.uuidString.lowercased())/download"
+        let started = expectation(forNotification: TransferProtocol.stalledEvent("start", path), object: nil)
+        let stopped = expectation(forNotification: TransferProtocol.stalledEvent("stop", path), object: nil)
+        let cancelled = expectation(description: "Files received cancellation")
+        cancelled.assertForOverFulfill = true
+
+        let progress = provider(path: prefix).fetchContents(
+            for: FolioItemID.document(downloadID, in: .scoped(downloadVaultID, .all)).providerIdentifier,
+            version: nil, request: NSFileProviderRequest()
+        ) { url, item, error in
+            XCTAssertNil(url)
+            XCTAssertNil(item)
+            XCTAssertEqual((error as NSError?)?.domain, NSCocoaErrorDomain)
+            XCTAssertEqual((error as NSError?)?.code, NSUserCancelledError)
+            cancelled.fulfill()
+        }
+        await fulfillment(of: [started], timeout: 5)
+        progress.cancel()
+        await fulfillment(of: [cancelled, stopped], timeout: 5)
+
+        let reopened = try await fetch(provider())
+        XCTAssertEqual(PDFDocument(url: reopened)?.pageCount, 1)
     }
 
     func testMissingServerOriginalReturnsNoSuchItem() async {
