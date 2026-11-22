@@ -1926,6 +1926,28 @@ impl DocumentRepository for SqliteDocumentRepository {
         })
     }
 
+    async fn retains_revision_original(&self, document: Id, candidate: Id) -> Result<bool> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let retained = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM document_files
+                WHERE document_id = ?1 AND id = ?2 AND storage_key = ?3)",
+        )
+        .bind(document.to_string())
+        .bind(candidate.to_string())
+        .bind(folio_core::ports::keys::revision_original(
+            document, candidate,
+        ))
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(retained)
+    }
+
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
         let result = sqlx::query("UPDATE documents SET file_path = ?, file_size = NULL, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND current_revision_id IS NULL AND file_path IS NOT ?").bind(file_path).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).bind(file_path).execute(&self.pool).await.map_err(map_sqlx_error)?;
         if result.rows_affected() == 0 {

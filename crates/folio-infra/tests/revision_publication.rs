@@ -3,9 +3,10 @@ mod common;
 use folio_core::models::{
     CreateDocument, FileIdentity, Id, RevisionPublication, RevisionPublicationSource,
 };
-use folio_core::ports::keys;
+use folio_core::ports::{keys, DocumentStore};
+use folio_core::services::{replace_document_original, NewRevisionOriginal};
 use folio_core::Error;
-use folio_infra::Database;
+use folio_infra::{Database, ObjectStoreDocumentStore};
 
 async fn persistence_counts(db: &Database) -> (i64, i64, i64) {
     let sql = "SELECT (SELECT COUNT(*) FROM document_revisions),
@@ -83,6 +84,32 @@ async fn publication_contract(db: Database) {
 
     assert_eq!(persistence_counts(&db).await, before);
 
+    let store = ObjectStoreDocumentStore::in_memory();
+    store
+        .put(&original.storage_key, bytes::Bytes::from_static(b"old"))
+        .await
+        .unwrap();
+    let upload = || NewRevisionOriginal {
+        key,
+        expected_current: document.id,
+        filename: "revision.pdf".into(),
+        mime_type: "application/pdf".into(),
+        bytes: bytes::Bytes::from_static(b"new"),
+    };
+    assert!(matches!(
+        replace_document_original(documents.as_ref(), &store, vault, document.id, upload()).await,
+        Err(Error::Conflict(_))
+    ));
+    assert_eq!(
+        store
+            .list(&keys::document_prefix(document.id))
+            .await
+            .unwrap()
+            .as_slice(),
+        std::slice::from_ref(&original.storage_key)
+    );
+    assert_eq!(persistence_counts(&db).await, before);
+
     let published = Id::new_v4();
     let digest = request.fingerprint();
     let id = document.id;
@@ -107,6 +134,20 @@ async fn publication_contract(db: Database) {
         .unwrap();
     assert_eq!(result.revision_id, published);
     assert!(!result.created);
+    assert_eq!(
+        replace_document_original(documents.as_ref(), &store, vault, document.id, upload())
+            .await
+            .unwrap(),
+        result
+    );
+    assert_eq!(
+        store
+            .list(&keys::document_prefix(document.id))
+            .await
+            .unwrap()
+            .as_slice(),
+        std::slice::from_ref(&original.storage_key)
+    );
     assert!(matches!(
         documents
             .publish_revision(other_vault, document.id, &retry)
