@@ -32,6 +32,18 @@ pub enum WorkflowTrigger {
     DocumentCorrespondentChanged,
     #[serde(rename = "document.document_type_changed")]
     DocumentTypeChanged,
+    #[serde(rename = "document_note.created")]
+    DocumentNoteCreated,
+    #[serde(rename = "document_note.updated")]
+    DocumentNoteUpdated,
+    #[serde(rename = "document_note.deleted")]
+    DocumentNoteDeleted,
+    #[serde(rename = "document_comment.created")]
+    DocumentCommentCreated,
+    #[serde(rename = "document_comment.updated")]
+    DocumentCommentUpdated,
+    #[serde(rename = "document_comment.deleted")]
+    DocumentCommentDeleted,
     /// A document was deleted
     #[serde(rename = "document.deleted")]
     DocumentDeleted,
@@ -42,7 +54,7 @@ pub enum WorkflowTrigger {
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 9] = [
+    pub const ALL: [WorkflowTrigger; 15] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -50,6 +62,12 @@ impl WorkflowTrigger {
         Self::DocumentTagsChanged,
         Self::DocumentCorrespondentChanged,
         Self::DocumentTypeChanged,
+        Self::DocumentNoteCreated,
+        Self::DocumentNoteUpdated,
+        Self::DocumentNoteDeleted,
+        Self::DocumentCommentCreated,
+        Self::DocumentCommentUpdated,
+        Self::DocumentCommentDeleted,
         Self::DocumentDeleted,
         Self::IngestReceived,
     ];
@@ -64,6 +82,12 @@ impl WorkflowTrigger {
             Self::DocumentTagsChanged => "document.tags_changed",
             Self::DocumentCorrespondentChanged => "document.correspondent_changed",
             Self::DocumentTypeChanged => "document.document_type_changed",
+            Self::DocumentNoteCreated => "document_note.created",
+            Self::DocumentNoteUpdated => "document_note.updated",
+            Self::DocumentNoteDeleted => "document_note.deleted",
+            Self::DocumentCommentCreated => "document_comment.created",
+            Self::DocumentCommentUpdated => "document_comment.updated",
+            Self::DocumentCommentDeleted => "document_comment.deleted",
             Self::DocumentDeleted => "document.deleted",
             Self::IngestReceived => "ingest.received",
         }
@@ -79,6 +103,12 @@ impl WorkflowTrigger {
             Self::DocumentTagsChanged => "When document tags change",
             Self::DocumentCorrespondentChanged => "When a document correspondent changes",
             Self::DocumentTypeChanged => "When a document type changes",
+            Self::DocumentNoteCreated => "When a note is created",
+            Self::DocumentNoteUpdated => "When a note is updated",
+            Self::DocumentNoteDeleted => "When a note is deleted",
+            Self::DocumentCommentCreated => "When a comment is created",
+            Self::DocumentCommentUpdated => "When a comment is updated",
+            Self::DocumentCommentDeleted => "When a comment is deleted",
             Self::DocumentDeleted => "When a document is deleted",
             Self::IngestReceived => "When a file arrives, before import",
         }
@@ -92,9 +122,27 @@ impl WorkflowTrigger {
             | Self::DocumentTitleChanged
             | Self::DocumentTagsChanged
             | Self::DocumentCorrespondentChanged
-            | Self::DocumentTypeChanged => WorkflowTarget::Document,
+            | Self::DocumentTypeChanged
+            | Self::DocumentNoteCreated
+            | Self::DocumentNoteUpdated
+            | Self::DocumentNoteDeleted
+            | Self::DocumentCommentCreated
+            | Self::DocumentCommentUpdated
+            | Self::DocumentCommentDeleted => WorkflowTarget::Document,
             Self::DocumentDeleted => WorkflowTarget::Event,
             Self::IngestReceived => WorkflowTarget::IngestCandidate,
+        }
+    }
+
+    pub fn entry_transition(self) -> Option<(super::EntryKind, &'static str)> {
+        match self {
+            Self::DocumentNoteCreated => Some((super::EntryKind::Note, "created")),
+            Self::DocumentNoteUpdated => Some((super::EntryKind::Note, "updated")),
+            Self::DocumentNoteDeleted => Some((super::EntryKind::Note, "deleted")),
+            Self::DocumentCommentCreated => Some((super::EntryKind::Comment, "created")),
+            Self::DocumentCommentUpdated => Some((super::EntryKind::Comment, "updated")),
+            Self::DocumentCommentDeleted => Some((super::EntryKind::Comment, "deleted")),
+            _ => None,
         }
     }
 
