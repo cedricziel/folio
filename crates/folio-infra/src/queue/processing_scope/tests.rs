@@ -859,6 +859,23 @@ async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
         3
     );
     assert_eq!(f.rows("TRUE").await, 3);
+    execute(db, format!(
+        "UPDATE documents SET content = 'indexable text', ocr_status = 'done', embed_status = 'done' WHERE id = '{}'",
+        f.document
+    )).await;
+    f.queue.reembed_documents().await.unwrap();
+    assert_eq!(
+        count(
+            db,
+            format!(
+                "SELECT COUNT(*) FROM documents WHERE id = '{}' AND embed_status = 'done'",
+                f.document
+            )
+        )
+        .await,
+        1
+    );
+    assert_eq!(f.rows("TRUE").await, 3);
 
     execute(
         db,
