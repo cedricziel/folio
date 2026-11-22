@@ -973,8 +973,8 @@ async fn repair_enqueues_only_for_live_idle_pending_work(db: &Database) {
 }
 
 async fn contract(db: &Database) {
-    repair_enqueues_only_for_live_idle_pending_work(db).await;
     db.migrate().await.unwrap();
+    repair_enqueues_only_for_live_idle_pending_work(db).await;
     revision_jobs_cannot_enqueue_or_prepare_until_fenced(db).await;
     revision_enqueue_plan_seeds_only_the_current_revision(db).await;
     partial_supersession_keeps_the_current_parent_stage_live(db).await;
