@@ -439,14 +439,8 @@ impl Worker {
             } else if doc.ocr_status != ProcessingStatus::Pending
                 && doc.ocr_status != ProcessingStatus::Running
             {
-                // OCR is over and left no text, so there is nothing to embed.
                 self.document_repo
-                    .set_stage_status(
-                        doc.vault_id,
-                        doc.id,
-                        ProcessingStage::Embed,
-                        ProcessingStatus::Skipped,
-                    )
+                    .skip_empty_embedding(doc.vault_id, doc.id)
                     .await?;
             }
         }

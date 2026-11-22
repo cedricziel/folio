@@ -1197,7 +1197,7 @@ async fn one_failing_workflow_does_not_skip_the_others() {
 }
 
 #[tokio::test]
-async fn editing_a_workflow_does_not_change_queued_runs() {
+async fn editing_a_workflow_cancels_queued_runs_and_retains_their_inputs() {
     let h = Harness::new().await;
     let server = TestServer::start().await;
     let workflow = h.webhook_workflow(server.url("before"), None).await;
@@ -1224,10 +1224,19 @@ async fn editing_a_workflow_does_not_change_queued_runs() {
         .unwrap();
     assert_eq!(
         h.runner.execute(runs[0].id).await.unwrap(),
-        RunOutcome::Succeeded
+        RunOutcome::Failed
     );
 
-    assert_eq!(server.hits("before"), 1);
+    let retained = h.run(runs[0].id).await;
+    assert_eq!(retained.status, RunStatus::Failed);
+    assert_eq!(
+        retained.last_error.as_deref(),
+        Some("Workflow definition changed")
+    );
+    assert_eq!(retained.attempts, 0);
+    assert_eq!(retained.actions, runs[0].actions);
+    assert_eq!(retained.payload, runs[0].payload);
+    assert_eq!(server.hits("before"), 0);
     assert_eq!(server.hits("after"), 0);
 }
 
@@ -2416,4 +2425,112 @@ async fn a_domain_and_compatibility_projection_each_keep_their_selected_trigger(
         assert_eq!(payload["document"]["title"], "after");
     }
     assert!(h.engine.handle(&combined).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn metadata_workflows_use_the_committed_occurrence_and_run_once() {
+    use folio_core::models::{MetadataChange, MetadataFieldInput, MetadataKind, MetadataValue};
+    use folio_core::ports::{MetadataFieldRepository, MetadataValueRepository};
+    use folio_infra::database::sqlite::{
+        SqliteMetadataFieldRepository, SqliteMetadataValueRepository,
+    };
+    use serde_json::json;
+
+    let h = Harness::new().await;
+    let doc = h.document("invoice.pdf", "application/pdf").await;
+    let fields = SqliteMetadataFieldRepository::new(h.pool.clone());
+    let values = SqliteMetadataValueRepository::new(h.pool.clone());
+    let field_workflow = h
+        .workflow(
+            WorkflowTrigger::MetadataFieldCreated,
+            Default::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let value_workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentMetadataChanged,
+            Default::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let field = fields
+        .create(
+            h.vault,
+            MetadataFieldInput {
+                name: "Amount".into(),
+                kind: MetadataKind::Decimal,
+                required: false,
+                unique: false,
+            },
+        )
+        .await
+        .unwrap();
+    let updated = values
+        .patch(
+            h.vault,
+            doc.id,
+            None,
+            vec![MetadataChange {
+                field_id: field.id,
+                value: Some(MetadataValue::Decimal("9007199254740993.010".into())),
+            }],
+        )
+        .await
+        .unwrap();
+    values
+        .patch(
+            h.vault,
+            doc.id,
+            updated.revision,
+            vec![MetadataChange {
+                field_id: field.id,
+                value: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let events = h.pending_events().await;
+    let occurrence = |name: &str| {
+        events
+            .iter()
+            .find(|item| {
+                item.envelope
+                    .as_ref()
+                    .is_some_and(|event| event.event_type() == name)
+            })
+            .expect("committed metadata occurrence")
+    };
+    let created = occurrence("metadata_field.created");
+    let changed = occurrence("document.metadata.changed");
+    let field_run = h.engine.handle(created).await.unwrap().remove(0);
+    assert_eq!(field_run.workflow_id, field_workflow.id);
+    assert_eq!(field_run.document_id, None);
+
+    let value_run = h.engine.handle(changed).await.unwrap().remove(0);
+    assert_eq!(value_run.workflow_id, value_workflow.id);
+    assert_eq!(value_run.document_id, Some(doc.id));
+    let payload: serde_json::Value = serde_json::from_str(&value_run.payload).unwrap();
+    assert_eq!(
+        payload["metadata"]["data"]["changes"][0]["after"],
+        json!({
+            "kind": "decimal", "value": "9007199254740993.01"
+        })
+    );
+    assert_eq!(
+        payload["source_event"]["event_id"],
+        json!(changed.envelope.as_ref().unwrap().event_id())
+    );
+    assert!(h.engine.handle(changed).await.unwrap().is_empty());
+    assert!(h.engine.handle(created).await.unwrap().is_empty());
+    assert!(h
+        .engine
+        .handle(&OutboxEvent {
+            origin: EventOrigin::Workflow,
+            ..changed.clone()
+        })
+        .await
+        .unwrap()
+        .is_empty());
 }

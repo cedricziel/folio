@@ -22,6 +22,7 @@ mod metadata_value;
 mod processing_attempt;
 mod processing_summary;
 mod push;
+mod revision_publication;
 mod saved_view;
 mod settings;
 mod source;
@@ -83,6 +84,9 @@ pub use push::{
     NotificationPreferences, NotificationScope, PendingNotification, PushDevice, PushDeviceState,
     PushEnvironment, PushToken, PushTokenKind, VaultSelection,
 };
+pub use revision_publication::{
+    RevisionPublication, RevisionPublicationResult, RevisionPublicationSource,
+};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
     AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,
@@ -97,8 +101,8 @@ pub use vault::{
     VaultMember, VaultRole,
 };
 pub use webhook::{
-    NamedRef, WebhookDocument, WebhookEntry, WebhookIngest, WebhookPayload, WebhookUrls,
-    WorkflowEventIdentity, PAYLOAD_VERSION,
+    NamedRef, WebhookDocument, WebhookEntry, WebhookIngest, WebhookMetadata, WebhookPayload,
+    WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
 };
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,
@@ -106,7 +110,8 @@ pub use workflow::{
 };
 
 pub use workflow_event_conditions::{
-    WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
+    MetadataChangeState, WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
+    WorkflowMetadataConditions,
 };
 pub use workflow_trigger::{
     WorkflowConditionField, WorkflowConditionType, WorkflowTarget, WorkflowTriggerDefinition,

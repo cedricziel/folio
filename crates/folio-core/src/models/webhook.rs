@@ -113,6 +113,19 @@ pub struct WebhookIngest {
     pub retryable: Option<bool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookMetadata {
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    pub subject_id: uuid::Uuid,
+    pub document_id: Option<uuid::Uuid>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub actor_id: Option<super::UserId>,
+    pub causation_id: Option<uuid::Uuid>,
+    pub data: serde_json::Value,
+}
+
 /// Body of every webhook delivery
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -130,6 +143,8 @@ pub struct WebhookPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingest: Option<WebhookIngest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<WebhookMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_event: Option<WorkflowEventIdentity>,
 }
 
@@ -146,6 +161,7 @@ impl WebhookPayload {
             document: Some(document),
             entry: None,
             ingest: None,
+            metadata: None,
             source_event: None,
         }
     }
@@ -163,6 +179,7 @@ impl WebhookPayload {
             document: None,
             entry: Some(entry),
             ingest: None,
+            metadata: None,
             source_event,
         }
     }
@@ -180,12 +197,64 @@ impl WebhookPayload {
             document: None,
             entry: None,
             ingest: Some(ingest),
+            metadata: None,
+            source_event,
+        }
+    }
+
+    pub fn for_metadata(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        metadata: WebhookMetadata,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            event,
+            version: PAYLOAD_VERSION,
+            occurred_at,
+            document: None,
+            entry: None,
+            ingest: None,
+            metadata: Some(metadata),
             source_event,
         }
     }
 
     /// A payload with made-up content, for the "send test" action
     pub fn sample(event: WorkflowTrigger, base_url: &str) -> Self {
+        if event.is_custom_metadata() {
+            let id = Id::nil();
+            let data = match event.as_str().split('.').next() {
+                Some("metadata_field") => serde_json::json!({
+                    "field_id": id, "name": "Approved", "kind": "boolean",
+                    "required": false, "unique": false, "deleted_at": null
+                }),
+                Some("metadata_option") => serde_json::json!({
+                    "option_id": id, "field_id": id, "label": "Pending",
+                    "position": 0, "deleted_at": null
+                }),
+                _ => serde_json::json!({
+                    "revision": id,
+                    "changes": [{
+                        "field_id": id, "kind": "boolean", "before": null,
+                        "after": {"kind": "boolean", "value": false}
+                    }]
+                }),
+            };
+            return Self::for_metadata(
+                event,
+                Utc::now(),
+                WebhookMetadata {
+                    vault_id: VaultId(id),
+                    subject_id: id,
+                    document_id: (event.target() == super::WorkflowTarget::Document).then_some(id),
+                    data,
+                    actor_id: None,
+                    causation_id: None,
+                },
+                None,
+            );
+        }
         if let Some((entry_kind, transition)) = event.entry_transition() {
             return Self::for_entry(
                 event,

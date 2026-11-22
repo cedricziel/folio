@@ -182,3 +182,27 @@ fn document_metadata_updates_require_explicit_nullable_values_and_revision() {
         serde_json::json!(["revision", "changes"])
     );
 }
+
+#[test]
+fn custom_workflow_conditions_preserve_generated_typed_values() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let schemas = &spec["components"]["schemas"];
+    for (schema, property, target) in [
+        ("WorkflowConditions", "event", "WorkflowEventConditions"),
+        (
+            "WorkflowEventConditions",
+            "metadata",
+            "WorkflowMetadataConditions",
+        ),
+        ("WorkflowMetadataConditions", "before", "MetadataValue"),
+        ("WorkflowMetadataConditions", "after", "MetadataValue"),
+    ] {
+        assert_eq!(
+            schemas[schema]["properties"][property]["$ref"],
+            format!("#/components/schemas/{target}")
+        );
+        assert!(schemas[schema]["required"]
+            .as_array()
+            .is_none_or(|fields| { fields.iter().all(|field| field != property) }));
+    }
+}

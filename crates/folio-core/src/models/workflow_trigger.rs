@@ -39,6 +39,7 @@ pub enum WorkflowConditionType {
     Timestamp,
     Identifier,
     IdentifierSet,
+    MetadataValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,7 +110,7 @@ impl WorkflowTriggerRegistry {
                 .filter(|trigger| !trigger.is_ingest_outcome())
                 .map(|trigger| {
                     let event_type = trigger.as_str();
-                    WorkflowTriggerDefinition {
+                    let mut definition = WorkflowTriggerDefinition {
                         event_type: event_type.into(),
                         label: trigger.label().into(),
                         subject_type: event_type
@@ -139,7 +140,29 @@ impl WorkflowTriggerRegistry {
                                 },
                             ]
                         },
+                    };
+                    if trigger.is_custom_metadata() {
+                        use WorkflowConditionType::{Identifier, MetadataValue, Text};
+                        let mut fields = vec![
+                            ("event.metadata.field_id", "Custom field", Identifier),
+                            ("event.metadata.kind", "Field type", Text),
+                        ];
+                        if trigger == WorkflowTrigger::DocumentMetadataChanged {
+                            fields.extend([
+                                ("event.metadata.state", "Change", Text),
+                                ("event.metadata.before", "Previous value", MetadataValue),
+                                ("event.metadata.after", "New value", MetadataValue),
+                            ]);
+                        }
+                        definition.condition_fields.extend(fields.into_iter().map(
+                            |(key, label, value_type)| WorkflowConditionField {
+                                key: key.into(),
+                                label: label.into(),
+                                value_type,
+                            },
+                        ));
                     }
+                    definition
                 })
                 .collect();
             definitions.extend(crate::ingestion_triggers::workflow_trigger_definitions());
