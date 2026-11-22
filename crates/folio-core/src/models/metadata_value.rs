@@ -44,6 +44,7 @@ pub struct MetadataChange {
     pub field_id: uuid::Uuid,
     /// Required: an explicit `null` clears, so a missing key cannot clear by accident.
     #[serde(deserialize_with = "Option::deserialize")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub value: Option<MetadataValue>,
 }
 

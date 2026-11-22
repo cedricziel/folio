@@ -9611,7 +9611,8 @@
         "type": "object",
         "description": "One explicit replacement (`Some`) or clear (`None`); fields absent from a patch stay unchanged.",
         "required": [
-          "field_id"
+          "field_id",
+          "value"
         ],
         "properties": {
           "field_id": {

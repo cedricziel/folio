@@ -155,3 +155,21 @@ fn metadata_definitions_describe_scoped_lifecycle_and_typed_inputs() {
         false
     );
 }
+
+#[test]
+fn document_metadata_updates_require_explicit_nullable_values_and_revision() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let schemas = &spec["components"]["schemas"];
+    assert_eq!(
+        schemas["MetadataChange"]["required"],
+        serde_json::json!(["field_id", "value"])
+    );
+    let alternatives = schemas["MetadataChange"]["properties"]["value"]["oneOf"]
+        .as_array()
+        .unwrap();
+    assert!(alternatives.iter().any(|schema| schema["type"] == "null"));
+    assert_eq!(
+        schemas["PatchDocumentMetadata"]["required"],
+        serde_json::json!(["revision", "changes"])
+    );
+}
