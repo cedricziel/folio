@@ -10,7 +10,7 @@
 
 - [x] Write failing `metadata_validation` tests for exact decimals, false/null, date validity, currency, URL, and type mismatches; implement domain types and validation. All 22 regressions and 46 existing core tests pass with the openapi feature. Workspace make lint and make format also pass.
 - [x] Write failing shared `metadata_repository_contract` tests for audit actors, live uniqueness, option identity, atomic patches, concurrent edits, vault isolation, trash/purge, and move rejection; implement new SQLite/PostgreSQL migrations and adapters.
-- [ ] Run relevant checks and commit the independently usable persistence unit.
+- [x] Merge the independently usable typed persistence in #310. Shared SQLite and PostgreSQL contracts cover transactional writes, vault scope, move guards, and purge clearing.
 
 ## 3. API and web
 
@@ -19,7 +19,7 @@
 
 - [ ] Write failing router tests for manager/editor/viewer permissions, contributor ownership, revoked membership, cross-vault targets, errors, and CSRF; implement documented JSON and HTML routes.
 - [x] Merge exact metadata search as #531. Both required backend regressions, the metadata router and OpenAPI suites, workspace CI, end-to-end tests, and both architecture builds passed.
-- [ ] In progress: verify and merge web management and typed document forms with retained failed drafts; verify create, edit, retirement, restore, and link navigation through isolated Playwright fixtures.
+- [x] Merge web field management and typed document editing in #535 and #539. Verify option paging, retained drafts, Viewer access, exact decimal strings, and logical link navigation in disposable router and browser fixtures.
 - [ ] Regenerate OpenAPI and verify MCP compatibility using the existing protocol suite.
 
 ## 4. Apple
@@ -39,9 +39,9 @@
 
 ## 6. Workflow event amendment
 
-- [ ] Align event envelope and trigger dependency contracts with foundation and workflow slices.
+- [x] Align and merge the event budget, bounded replay, and workflow dispatch in #296, #520, and #543.
 - [ ] Write failing outbox contract tests for committed metadata transitions, no-op suppression, rollback, retry identity, purge clearing, vault scope, and causation; publish events in mutation transactions.
-- [ ] Verify metadata triggers and typed conditions are selectable in web and Apple workflows; reject document-only actions for field/option events.
+- [ ] In progress: verify metadata triggers and typed conditions are selectable in web and Apple workflows; reject document-only actions for field/option events.
 - [ ] Include event integration, CI, and merged PR verification in completion criteria.
 
 ## Current verification checkpoint
