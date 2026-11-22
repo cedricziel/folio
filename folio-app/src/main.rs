@@ -343,6 +343,7 @@ async fn main() -> Result<()> {
     let mut state = AppState::new(
         repos.metadata_fields,
         repos.metadata_options,
+        repos.metadata_values,
         repos.saved_views,
         document_repo.clone(),
         entry_repo,

@@ -521,6 +521,12 @@ properties from an unlocked read before a full repository update.
 Run `RUSTC_WRAPPER= UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi`,
 then rerun without `UPDATE_OPENAPI` to check the committed generated contract.
 
+For document assignments, run
+`RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_values`
+and the API metadata suite. These checks cover exact amounts, false, revision
+conflicts, link scope, retained Trash state, move and purge rules, and atomic
+rollback without a value-change event when a transition exceeds the event budget.
+
 ## Verify SQLite trash contention
 
 Run `cargo test -p folio-infra --test trash_lock` with an isolated target.

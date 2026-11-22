@@ -4,9 +4,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use folio_core::models::{MetadataField, MetadataFieldInput, MetadataOption, MetadataOptionInput};
+use folio_core::models::{
+    DocumentMetadata, MetadataChange, MetadataField, MetadataFieldInput, MetadataOption,
+    MetadataOptionInput,
+};
 use serde::{de::DeserializeOwned, Deserialize};
-use utoipa::IntoParams;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::{
@@ -37,6 +40,10 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for MetadataJson<T> {
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route(
+            "/vaults/{vault_id}/documents/{document_id}/metadata",
+            get(get_document_metadata).patch(patch_document_metadata),
+        )
         .route(
             "/vaults/{vault_id}/metadata-fields",
             get(list_fields).post(create_field),
@@ -267,5 +274,57 @@ pub(crate) async fn restore_option(
             .metadata_options
             .set_deleted(vault, field_id, option_id, false)
             .await?,
+    ))
+}
+
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PatchDocumentMetadata {
+    /// Revision returned by the last read. Send null before the first change.
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[schema(required = true)]
+    revision: Option<Uuid>,
+    changes: Vec<MetadataChange>,
+}
+
+#[utoipa::path(get, path = "/api/vaults/{vault_id}/documents/{document_id}/metadata",
+    operation_id = "getDocumentMetadata", tag = "metadata",
+    params(("vault_id" = Uuid, Path), ("document_id" = Uuid, Path)),
+    responses((status = 200, description = "Retained assignments and their revision", body = DocumentMetadata),
+        crate::openapi::NotFound, crate::openapi::InternalError))]
+pub(crate) async fn get_document_metadata(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath((_vault_id, document)): ApiPath<(Uuid, Uuid)>,
+) -> ApiResult<Json<DocumentMetadata>> {
+    Ok(Json(state.metadata_values.get(vault, document).await?))
+}
+
+#[utoipa::path(patch, path = "/api/vaults/{vault_id}/documents/{document_id}/metadata",
+    operation_id = "patchDocumentMetadata", tag = "metadata",
+    params(("vault_id" = Uuid, Path), ("document_id" = Uuid, Path)),
+    request_body = PatchDocumentMetadata,
+    responses((status = 200, description = "Assignments after the atomic update", body = DocumentMetadata),
+        crate::openapi::BadRequest, crate::openapi::NotFound,
+        (status = 409, description = "Stale metadata revision, uniqueness, or lifecycle conflict"),
+        crate::openapi::InternalError))]
+pub(crate) async fn patch_document_metadata(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath((_vault_id, document)): ApiPath<(Uuid, Uuid)>,
+    MetadataJson(input): MetadataJson<PatchDocumentMetadata>,
+) -> ApiResult<Json<DocumentMetadata>> {
+    Ok(Json(
+        state
+            .metadata_values
+            .patch(vault, document, input.revision, input.changes)
+            .await
+            .map_err(|error| match error {
+                folio_core::Error::NotFound {
+                    entity_type: "Document",
+                    ..
+                } => ApiError::not_found("Document not found"),
+                other => other.into(),
+            })?,
     ))
 }
