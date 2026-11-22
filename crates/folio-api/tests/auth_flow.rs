@@ -1,5 +1,7 @@
 //! End-to-end tests of the auth routes against a temp SQLite database.
 
+mod common;
+
 use std::sync::Arc;
 
 use axum::{
@@ -26,11 +28,24 @@ const SETUP_TOKEN: &str = "test-setup-token";
 
 struct App {
     router: Router,
-    _dir: tempfile::TempDir,
+    _fixture: Box<dyn std::any::Any + Send + Sync>,
 }
 
 async fn app() -> App {
     app_at(Some(BASE)).await
+}
+
+async fn app_with_vault_routes() -> App {
+    let fixture = common::harness_with(Vec::new(), |store| {
+        AuthState::new(store, Some(BASE.into()))
+            .with_setup_token(SETUP_TOKEN)
+            .with_required(true)
+    })
+    .await;
+    App {
+        router: fixture.app.clone(),
+        _fixture: Box::new(fixture),
+    }
 }
 
 async fn app_at(public_url: Option<&str>) -> App {
@@ -52,7 +67,7 @@ async fn app_at(public_url: Option<&str>) -> App {
             ));
     App {
         router: auth_router(auth).merge(protected),
-        _dir: dir,
+        _fixture: Box::new(dir),
     }
 }
 
@@ -1165,7 +1180,7 @@ mod enforcement {
             router: auth_router(auth.clone())
                 .merge(pages)
                 .layer(middleware::from_fn_with_state(auth, enforce_auth)),
-            _dir: dir,
+            _fixture: Box::new(dir),
         }
     }
 
@@ -1597,7 +1612,10 @@ mod forward {
             .layer(middleware::from_fn_with_state(auth.clone(), enforce_auth))
             .layer(middleware::from_fn_with_state(auth, forward_auth));
         Fwd {
-            app: App { router, _dir: dir },
+            app: App {
+                router,
+                _fixture: Box::new(dir),
+            },
             store,
             pool,
         }
@@ -2296,7 +2314,7 @@ mod forward {
 
 #[tokio::test]
 async fn vault_management_scope_is_explicit_api_only_and_requires_consent() {
-    let app = app().await;
+    let app = app_with_vault_routes().await;
     let session = setup_and_login(&app).await;
     let registered = send(
         &app,
@@ -2432,7 +2450,7 @@ async fn registration_without_scope_keeps_document_defaults_and_rejects_unknown_
 
 #[tokio::test]
 async fn document_write_oauth_grant_cannot_create_a_vault_or_widen_on_refresh() {
-    let app = app().await;
+    let app = app_with_vault_routes().await;
     let session = setup_and_login(&app).await;
     let client = register(&app).await;
     let query = authorize_query(&client)
