@@ -70,6 +70,22 @@ pub(crate) async fn insert_job(
     Ok(id)
 }
 
+async fn current_processing_job(
+    conn: &mut PgConnection,
+    vault: folio_core::models::VaultId,
+    document_id: Uuid,
+    force: bool,
+) -> Result<JobType> {
+    let document = super::processing_scope::postgres::document(conn, document_id).await?;
+    super::processing_scope::bind_requested_processing(
+        document.as_ref(),
+        vault,
+        document_id,
+        force,
+        super::REVISION_DISPATCH_ENABLED,
+    )
+}
+
 pub(crate) async fn insert_current_processing(
     conn: &mut PgConnection,
     vault: folio_core::models::VaultId,
@@ -77,14 +93,24 @@ pub(crate) async fn insert_current_processing(
     force: bool,
     trace: Option<&super::JobTraceContext>,
 ) -> Result<Uuid> {
-    let document = super::processing_scope::postgres::document(conn, document_id).await?;
-    let job = super::processing_scope::bind_requested_processing(
-        document.as_ref(),
-        vault,
-        document_id,
-        force,
-        super::REVISION_DISPATCH_ENABLED,
-    )?;
+    let job = current_processing_job(conn, vault, document_id, force).await?;
+    insert_job(conn, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, trace).await
+}
+
+pub(crate) async fn insert_current_thumbnail(
+    conn: &mut PgConnection,
+    vault: folio_core::models::VaultId,
+    document_id: Uuid,
+    trace: Option<&super::JobTraceContext>,
+) -> Result<Uuid> {
+    let current = current_processing_job(conn, vault, document_id, false).await?;
+    let job = match current.revision_id() {
+        Some(revision_id) => JobType::GenerateRevisionThumbnail {
+            document_id,
+            revision_id,
+        },
+        None => JobType::GenerateThumbnail { document_id },
+    };
     insert_job(conn, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, trace).await
 }
 

@@ -623,6 +623,17 @@ impl DocumentRepository for PostgresDocumentRepository {
         }
         super::prepare_move(&mut tx, from, id).await?;
 
+        let resume_thumbnail: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM processing_stage_runs
+             WHERE document_id = $1 AND vault_id = $2 AND stage = 'thumbnail' AND is_current
+               AND state IN ('pending', 'running', 'waiting_to_retry'))",
+        )
+        .bind(id)
+        .bind(from.0)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+
         let before = capture_document(&mut tx, id, None)
             .await?
             .ok_or_else(|| not_found("Document", id))?;
@@ -691,6 +702,8 @@ impl DocumentRepository for PostgresDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET vault_id = $1, correspondent_id = $2, document_type_id = $3,
+                                  ocr_status = CASE WHEN ocr_status = 'running' THEN 'pending' ELSE ocr_status END,
+                                  embed_status = CASE WHEN embed_status = 'running' THEN 'pending' ELSE embed_status END,
                                   updated_at = now(), updated_by = $5
              WHERE id = $4",
         )
@@ -699,6 +712,27 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(document_type)
         .bind(id)
         .bind(actor.map(UserId::as_str))
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+
+        if resume_thumbnail && doc.file_path.is_some() {
+            crate::queue::insert_current_thumbnail_postgres(
+                &mut tx,
+                to,
+                id,
+                crate::queue::JobTraceContext::current().as_ref(),
+            )
+            .await?;
+        }
+        sqlx::query(
+            "UPDATE processing_stage_runs SET vault_id = $1,
+                 is_current = CASE WHEN state IN ('pending', 'running', 'waiting_to_retry') THEN FALSE ELSE is_current END
+             WHERE document_id = $2 AND vault_id = $3",
+        )
+        .bind(to.0)
+        .bind(id)
+        .bind(from.0)
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;

@@ -367,6 +367,104 @@ async fn moved_document_retains_original_audience(db: &Database) {
     assert_eq!(count(db, "SELECT COUNT(*) FROM jobs".into()).await, 1);
 }
 
+async fn moving_keeps_completed_preview_and_releases_interrupted_ocr(db: &Database) {
+    use folio_core::models::ProcessingStatus;
+    use folio_core::ports::ThumbnailLocation;
+    use folio_core::processing_events::ProcessingEventStage;
+
+    let f = Fixture::new(db).await;
+    let repositories = db.repositories().await;
+    let destination = repositories
+        .vaults
+        .create("New owner", None)
+        .await
+        .unwrap()
+        .id;
+    let docs = repositories.documents;
+    docs.set_file_path(f.vault, f.document, "original")
+        .await
+        .unwrap();
+    let (parent, scope) = f.claim_root().await;
+    let preview = f
+        .queue
+        .start_derived(&parent, ProcessingEventStage::Thumbnail)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(f.queue.complete_thumbnail(&preview, Some(7)).await.unwrap());
+    let child = f.ocr(scope).await.unwrap();
+    let job = f.queue.dequeue().await.unwrap().unwrap();
+    assert_eq!(job.id, child);
+    let fence = f.queue.start_ocr(&job).await.unwrap().unwrap();
+
+    let moved = docs
+        .move_to(f.document, f.vault, destination, None)
+        .await
+        .unwrap();
+    assert_eq!(moved.ocr_status, ProcessingStatus::Pending);
+    assert_eq!(moved.page_count, Some(7));
+    assert_eq!(
+        docs.thumbnail_location(f.vault, f.document).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        docs.thumbnail_location(destination, f.document)
+            .await
+            .unwrap(),
+        Some(ThumbnailLocation::Committed(preview.result_prefix()))
+    );
+    assert!(!f
+        .queue
+        .complete_ocr(&fence, "Obsolete output", true)
+        .await
+        .unwrap());
+    assert_eq!(
+        f.queue.context(child).await.unwrap().unwrap().vault_id,
+        Some(f.vault)
+    );
+    assert_eq!(
+        f.rows(&format!(
+            "vault_id = '{destination}' AND is_current = FALSE"
+        ))
+        .await,
+        2
+    );
+}
+
+async fn moving_a_pending_preview_queues_the_new_vault(db: &Database) {
+    let f = Fixture::new(db).await;
+    let repositories = db.repositories().await;
+    repositories
+        .documents
+        .set_file_path(f.vault, f.document, "original")
+        .await
+        .unwrap();
+    let old = f
+        .queue
+        .enqueue(JobType::GenerateThumbnail {
+            document_id: f.document,
+        })
+        .await
+        .unwrap();
+    let destination = repositories
+        .vaults
+        .create("Preview owner", None)
+        .await
+        .unwrap()
+        .id;
+
+    repositories
+        .documents
+        .move_to(f.document, f.vault, destination, None)
+        .await
+        .unwrap();
+    assert_eq!(f.rows(&format!("vault_id = '{destination}' AND stage = 'thumbnail' AND is_current AND job_id <> '{old}'")).await, 1);
+    assert_eq!(
+        f.queue.context(old).await.unwrap().unwrap().vault_id,
+        Some(f.vault)
+    );
+}
+
 async fn unrelated_processing_roots_do_not_inherit_group(db: &Database) {
     let f = Fixture::new(db).await;
     let (job, scope) = f.claim_root().await;
@@ -968,6 +1066,8 @@ async fn contract(db: &Database) {
     completed_parent_cannot_schedule_children(db).await;
     superseded_parent_cannot_displace_new_work(db).await;
     moved_document_retains_original_audience(db).await;
+    moving_keeps_completed_preview_and_releases_interrupted_ocr(db).await;
+    moving_a_pending_preview_queues_the_new_vault(db).await;
     unrelated_processing_roots_do_not_inherit_group(db).await;
     root_enqueue_rolls_back_job_and_supersession(db).await;
     child_enqueue_rolls_back_assignment_with_job(db).await;
