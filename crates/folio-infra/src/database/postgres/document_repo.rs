@@ -356,6 +356,52 @@ impl PostgresDocumentRepository {
             .map(|_| ())
     }
 
+    async fn verified_revision_original(
+        tx: &mut Transaction<'_, Postgres>,
+        vault: VaultId,
+        id: Id,
+        revision: Id,
+    ) -> Result<Option<(Id, Option<String>, FileIdentity)>> {
+        #[derive(sqlx::FromRow)]
+        struct VerifiedOriginal {
+            id: Id,
+            original_filename: Option<String>,
+            storage_key: String,
+            mime_type: String,
+            sha256: String,
+            byte_size: i64,
+        }
+        let file = sqlx::query_as::<_, VerifiedOriginal>(
+            "SELECT f.id, f.original_filename, f.storage_key, f.mime_type, f.sha256, f.byte_size
+             FROM document_revisions r
+             JOIN document_files f ON f.id = r.original_file_id AND f.document_id = r.document_id
+                                   AND f.vault_id = r.vault_id
+             WHERE r.id = $1 AND r.document_id = $2 AND r.vault_id = $3
+               AND f.role = 'original' AND f.verification_state = 'verified'",
+        )
+        .bind(revision)
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(repo_err)?;
+        file.map(|file| {
+            let byte_size = u64::try_from(file.byte_size)
+                .map_err(|_| Error::Repository("Invalid verified original size".into()))?;
+            Ok((
+                file.id,
+                file.original_filename,
+                FileIdentity {
+                    storage_key: file.storage_key,
+                    mime_type: file.mime_type,
+                    sha256: file.sha256,
+                    byte_size,
+                },
+            ))
+        })
+        .transpose()
+    }
+
     async fn insert_first_revision_rows(
         tx: &mut Transaction<'_, Postgres>,
         vault: VaultId,
@@ -420,7 +466,17 @@ impl PostgresDocumentRepository {
         let after = capture_document(tx, before.document_id, None)
             .await?
             .ok_or_else(|| not_found("Document", before.document_id))?;
-        for envelope in metadata_envelopes(before, &after)? {
+        let events = metadata_envelopes(before, &after)?;
+        self.emit_metadata_envelopes_in(tx, &after, &events).await
+    }
+
+    async fn emit_metadata_envelopes_in(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        after: &EventSnapshot,
+        events: &[folio_core::domain_event::DomainEventEnvelope],
+    ) -> Result<()> {
+        for envelope in events {
             if envelope.event_type() == "document.updated" {
                 insert_event_with_envelope(
                     tx,
@@ -428,12 +484,12 @@ impl PostgresDocumentRepository {
                         document_id: after.document_id,
                     },
                     self.origin,
-                    Some(&after),
-                    &envelope,
+                    Some(after),
+                    envelope,
                 )
                 .await?;
             } else {
-                insert_domain_event_with_origin(tx, &envelope, self.origin).await?;
+                insert_domain_event_with_origin(tx, envelope, self.origin).await?;
             }
         }
         Ok(())
@@ -1550,6 +1606,237 @@ impl DocumentRepository for PostgresDocumentRepository {
         Self::emit_first_revision_in(&mut tx, id, identity, self.origin).await?;
         self.commit(tx).await?;
         Ok(true)
+    }
+
+    async fn publish_revision(
+        &self,
+        vault: VaultId,
+        id: Id,
+        publication: &folio_core::models::RevisionPublication,
+    ) -> Result<folio_core::models::RevisionPublicationResult> {
+        use folio_core::document_transitions::{
+            revision_publication_envelopes, RevisionOccurrence,
+        };
+        use folio_core::models::{RevisionPublicationResult, RevisionPublicationSource};
+
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let current: Option<Id> = sqlx::query_scalar(
+            "SELECT d.current_revision_id FROM documents d
+             JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
+             WHERE d.id = $1 AND d.vault_id = $2 AND d.deleted_at IS NULL
+               AND d.purge_requested_at IS NULL AND NOT d.upload_pending
+             FOR UPDATE OF d FOR SHARE OF v",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?
+        .ok_or_else(|| not_found("Document", id))?;
+
+        let fingerprint = publication.fingerprint();
+        let receipt: Option<(Id, String)> = sqlx::query_as(
+            "SELECT id, publication_fingerprint FROM document_revisions
+             WHERE document_id = $1 AND vault_id = $2 AND publication_key = $3",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .bind(publication.key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        if let Some((revision_id, recorded_fingerprint)) = receipt {
+            if recorded_fingerprint != fingerprint {
+                return Err(Error::Conflict(
+                    "Publication key was used for another request".into(),
+                ));
+            }
+            return Ok(RevisionPublicationResult {
+                revision_id,
+                created: false,
+            });
+        }
+
+        let current =
+            current.ok_or_else(|| Error::Conflict("Document has no current revision".into()))?;
+        if current != publication.expected_current {
+            return Err(Error::Conflict("The current file revision changed".into()));
+        }
+        if Self::verified_revision_original(&mut tx, vault, id, current)
+            .await?
+            .is_none()
+        {
+            return Err(Error::Conflict(
+                "Verify the current original before changing it".into(),
+            ));
+        }
+
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let now = Utc::now();
+        let actor = folio_core::mutation::current_actor();
+        let (revision_id, file_id, filename, original, restored_from) = match &publication.source {
+            RevisionPublicationSource::Replacement {
+                revision,
+                filename,
+                identity,
+            } => {
+                if identity.storage_key != folio_core::ports::keys::revision_original(id, *revision)
+                {
+                    return Err(Error::Validation(
+                        "Invalid replacement original storage key".into(),
+                    ));
+                }
+                let byte_size = i64::try_from(identity.byte_size).map_err(|_| {
+                    Error::Validation("Original byte size exceeds database range".into())
+                })?;
+                sqlx::query(
+                    "INSERT INTO document_files (
+                        id, document_id, vault_id, role, storage_key, original_filename, mime_type,
+                        verification_state, sha256, byte_size)
+                     VALUES ($1, $2, $3, 'original', $4, $5, $6, 'verified', $7, $8)",
+                )
+                .bind(revision)
+                .bind(id)
+                .bind(vault.0)
+                .bind(&identity.storage_key)
+                .bind(filename)
+                .bind(&identity.mime_type)
+                .bind(&identity.sha256)
+                .bind(byte_size)
+                .execute(&mut *tx)
+                .await
+                .map_err(repo_err)?;
+                (
+                    *revision,
+                    *revision,
+                    Some(filename.clone()),
+                    identity.clone(),
+                    None,
+                )
+            }
+            RevisionPublicationSource::Restore { revision } => {
+                if *revision == current {
+                    return Err(Error::Conflict(
+                        "The selected original is already current".into(),
+                    ));
+                }
+                let (file_id, filename, original) =
+                    Self::verified_revision_original(&mut tx, vault, id, *revision)
+                        .await?
+                        .ok_or_else(|| not_found("Document revision", *revision))?;
+                (Id::new_v4(), file_id, filename, original, Some(*revision))
+            }
+        };
+
+        let last_number: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(number), 0) FROM document_revisions
+             WHERE document_id = $1 AND vault_id = $2",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        let revision_number = last_number
+            .checked_add(1)
+            .ok_or_else(|| Error::Conflict("File revision number exhausted".into()))?;
+        sqlx::query(
+            "INSERT INTO document_revisions (
+                id, document_id, vault_id, number, original_file_id, created_at, created_by,
+                restored_from_revision_id, publication_key, publication_fingerprint)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(revision_id)
+        .bind(id)
+        .bind(vault.0)
+        .bind(revision_number)
+        .bind(file_id)
+        .bind(now)
+        .bind(actor.as_ref().map(UserId::as_str))
+        .bind(restored_from)
+        .bind(publication.key)
+        .bind(fingerprint)
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+
+        let byte_size = i64::try_from(original.byte_size)
+            .map_err(|_| Error::Validation("Original byte size exceeds database range".into()))?;
+        let changed = sqlx::query(
+            "UPDATE documents
+             SET current_revision_id = $1, file_path = $2, original_filename = $3,
+                 mime_type = $4, file_size = $5, content = NULL, page_count = NULL,
+                 reviewed_at = NULL, reviewed_by = NULL, review_origin = NULL,
+                 ocr_status = 'pending', embed_status = 'pending', updated_at = $6, updated_by = $7
+             WHERE id = $8 AND vault_id = $9 AND current_revision_id = $10",
+        )
+        .bind(revision_id)
+        .bind(&original.storage_key)
+        .bind(&filename)
+        .bind(&original.mime_type)
+        .bind(byte_size)
+        .bind(now)
+        .bind(actor.as_ref().map(UserId::as_str))
+        .bind(id)
+        .bind(vault.0)
+        .bind(current)
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        if changed.rows_affected() != 1 {
+            return Err(Error::Conflict("The current file revision changed".into()));
+        }
+        sqlx::query("DELETE FROM document_chunks WHERE document_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+
+        let after = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let events = revision_publication_envelopes(
+            &before,
+            &after,
+            RevisionOccurrence {
+                revision_id,
+                revision_number,
+                previous_revision_id: Some(current),
+                restored_from_revision_id: restored_from,
+                original: &original,
+            },
+        )?;
+        let update = events
+            .last()
+            .ok_or_else(|| Error::Repository("Missing revision update occurrence".into()))?;
+        let lineage = folio_core::mutation::MutationLineage {
+            correlation_id: update.correlation_id(),
+            causation_id: update.causation_id(),
+        };
+        folio_core::mutation::with_lineage(
+            Some(lineage),
+            crate::queue::insert_job_postgres(
+                &mut tx,
+                crate::queue::JobType::ProcessDocumentRevision {
+                    document_id: id,
+                    revision_id,
+                    force: false,
+                },
+                now,
+                crate::queue::DEFAULT_MAX_ATTEMPTS,
+                crate::queue::JobTraceContext::current().as_ref(),
+            ),
+        )
+        .await?;
+        self.emit_metadata_envelopes_in(&mut tx, &after, &events)
+            .await?;
+        self.commit(tx).await?;
+        Ok(RevisionPublicationResult {
+            revision_id,
+            created: true,
+        })
     }
 
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {

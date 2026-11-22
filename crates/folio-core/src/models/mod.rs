@@ -21,6 +21,7 @@ mod metadata_value;
 mod processing_attempt;
 mod processing_summary;
 mod push;
+mod revision_publication;
 mod saved_view;
 mod settings;
 mod source;
@@ -80,6 +81,9 @@ pub use push::{
     valid_push_token, DevicePlatform, DeviceRegistration, DocumentOutcome, NotificationKind,
     NotificationPreferences, NotificationScope, PendingNotification, PushDevice, PushDeviceState,
     PushEnvironment, PushToken, PushTokenKind, VaultSelection,
+};
+pub use revision_publication::{
+    RevisionPublication, RevisionPublicationResult, RevisionPublicationSource,
 };
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
