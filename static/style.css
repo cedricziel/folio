@@ -451,10 +451,12 @@ a:not([class]):hover,
 }
 @media (max-width: 768px) {
   .trash-row,
-  .source-row {
+  .source-row,
+  .workflow-row {
     grid-template-columns: minmax(0, 1fr);
   }
-  .source-row .form-actions {
+  .source-row .form-actions,
+  .workflow-row .form-actions {
     flex-wrap: wrap;
   }
 }

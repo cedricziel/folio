@@ -106,6 +106,13 @@ for (const viewport of config.viewports.filter((candidate) => ["desktop", "mobil
         await page.goto(`${scope}/workflows`);
         const activeWorkflow = page.locator(".f-row").filter({ has: page.locator(`a[href$='/${workflow.id}/history']`) });
         await expect(activeWorkflow).toContainText(`by ${workflow.created_by}`);
+        if (viewport.name === "mobile") {
+          const details = await activeWorkflow.locator(".row-main").boundingBox();
+          const actions = await activeWorkflow.locator(".form-actions").boundingBox();
+          expect(details).not.toBeNull();
+          expect(actions).not.toBeNull();
+          expect(actions!.y).toBeGreaterThanOrEqual(details!.y + details!.height);
+        }
         await expect(page.locator(".lifecycle-meta").filter({ hasText: "System or unknown" })).toContainText(legacyActor);
         await capture(page, info, `${prefix}-workflows-active`);
         expect((await page.request.delete(`${scope}/api/workflows/${workflow.id}`)).status()).toBe(204);

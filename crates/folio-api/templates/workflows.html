@@ -24,7 +24,7 @@
     {% else %}
     <div class="f-list">
         {% for row in rows %}
-        <div class="f-row f-row-plain">
+        <div class="f-row f-row-plain workflow-row">
             <div class="row-main">
                 {% if deleted %}<span class="f-row-title">{{ row.name }}</span>{% else %}<a href="{{ "/workflows"|vault_url }}/{{ row.id }}" class="f-row-title">{{ row.name }}</a>{% endif %}
                 <div class="f-row-sub lifecycle-meta"><span class="f-meta">{{ row.lifecycle_summary }}</span></div>
