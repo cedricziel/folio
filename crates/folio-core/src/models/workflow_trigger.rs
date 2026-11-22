@@ -104,8 +104,9 @@ impl WorkflowTriggerRegistry {
     pub fn built_in() -> &'static Self {
         static REGISTRY: std::sync::OnceLock<WorkflowTriggerRegistry> = std::sync::OnceLock::new();
         REGISTRY.get_or_init(|| {
-            let definitions = WorkflowTrigger::ALL
+            let mut definitions: Vec<_> = WorkflowTrigger::ALL
                 .into_iter()
+                .filter(|trigger| !trigger.is_ingest_outcome())
                 .map(|trigger| {
                     let event_type = trigger.as_str();
                     WorkflowTriggerDefinition {
@@ -141,6 +142,7 @@ impl WorkflowTriggerRegistry {
                     }
                 })
                 .collect();
+            definitions.extend(crate::ingestion_triggers::workflow_trigger_definitions());
             Self::new(definitions).expect("valid built-in workflow triggers")
         })
     }
