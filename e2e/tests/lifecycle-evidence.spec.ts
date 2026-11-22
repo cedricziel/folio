@@ -42,7 +42,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
   const axe = await new AxeBuilder({ page }).withTags(tour.axeTags).analyze();
   const blocking = axe.violations.filter((violation) => ["serious", "critical"].includes(violation.impact ?? ""));
   const overflow = await tour.hasHorizontalOverflow(page);
-  const clipped = await page.locator(".lifecycle-meta").evaluateAll((elements) =>
+  const clipped = await page.locator(".lifecycle-meta, .outcome-explanation").evaluateAll((elements) =>
     elements.filter((element) => element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1)
       .map((element) => element.textContent),
   );
@@ -52,7 +52,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
   await info.attach(`${name}-accessibility`, { path: `${stem}.json`, contentType: "application/json" });
   expect(blocking, `${name}: serious/critical accessibility violations`).toEqual([]);
   expect(overflow, `${name}: horizontal page overflow`).toBe(false);
-  expect(clipped, `${name}: lifecycle attribution is clipped`).toEqual([]);
+  expect(clipped, `${name}: lifecycle text is clipped`).toEqual([]);
 }
 
 for (const viewport of config.viewports.filter((candidate) => ["desktop", "mobile"].includes(candidate.name))) {

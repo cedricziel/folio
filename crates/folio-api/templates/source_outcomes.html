@@ -35,10 +35,10 @@
     {% else %}
     <div class="f-list" aria-label="Item outcomes">
         {% for row in rows %}
-        <div class="f-row f-row-plain">
+        <div class="f-row f-row-plain source-outcome-row">
             <div class="row-main">
                 <span class="f-row-title">{{ row.title }}</span>
-                <div class="f-row-sub"><span class="f-meta">{{ row.explanation }}</span></div>
+                <div class="f-row-sub outcome-explanation"><span class="f-meta">{{ row.explanation }}</span></div>
                 <div class="f-row-sub"><time class="f-meta" datetime="{{ row.occurred_at }}">{{ row.time_label }}</time></div>
             </div>
             {% match row.document_id %}

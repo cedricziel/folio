@@ -435,7 +435,8 @@ a:not([class]):hover,
   gap: 2px;
   min-width: 0;
 }
-.lifecycle-meta {
+.lifecycle-meta,
+.outcome-explanation {
   white-space: normal;
   overflow-wrap: anywhere;
 }
@@ -452,6 +453,7 @@ a:not([class]):hover,
 @media (max-width: 768px) {
   .trash-row,
   .source-row,
+  .source-outcome-row,
   .workflow-row {
     grid-template-columns: minmax(0, 1fr);
   }
