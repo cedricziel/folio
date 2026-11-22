@@ -163,8 +163,9 @@ private final class RestoreFailingStore: CredentialStore, @unchecked Sendable {
 
     @Test(arguments: [
         (404, "<html>not found</html>"), (403, ""), (405, "nope"), (410, ""), (200, "<html>portal</html>"),
+        (200, #"{"access_token":""}"#),
     ])
-    func aProxyAnswerOnTheTokenEndpointNeverLooksLikeAnAPIStatus(status: Int, body: String) async throws {
+    func anUnusableTokenReplyNeverLooksLikeAnAPIStatus(status: Int, body: String) async throws {
         TokenEndpointURLProtocol.reset(.reply(status: status, body: body))
         let store = InMemoryCredentialStore(credentials())
         let oauth = oauth(store)

@@ -64,7 +64,7 @@ struct OAuthClient: Sendable {
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        guard status == 200, let access = object?["access_token"] as? String else {
+        guard status == 200, let access = object?["access_token"] as? String, !access.isEmpty else {
             let code = object?["error"] as? String
             if code == "invalid_grant" { throw OAuthFailure.invalidGrant }
             if let code, Self.definitiveErrors.contains(code) {
