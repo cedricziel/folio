@@ -233,6 +233,13 @@ Before reusing a Rust target directory from another checkout, run `cargo clean -
 for each workspace package, replacing `PACKAGE` with its name. Retain the dependency cache, but rebuild workspace
 packages so stale artifacts from the other checkout cannot satisfy a check.
 
+## Verify processing trigger definitions
+
+Run `cargo test -p folio-core --test processing_trigger_catalog --test processing_events`
+for producer event names, retry versus terminal failure choices, and bounded typed
+condition fields. Catalog tests do not establish registry dispatch or builder UI;
+verify those through the workflow suites above when registering the catalog.
+
 ## Verify worker leases
 
 Run `cargo test -p folio-infra --test processing_job_context` for enqueue-time vault
