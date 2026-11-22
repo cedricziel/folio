@@ -131,6 +131,7 @@ private struct CustomValueEditor: View {
     @State private var text = ""
     @State private var currency = ""
     @State private var boolean: Bool?
+    @State private var date: Date?
     @State private var reference: UUID?
     @State private var options: [CustomFieldOption] = []
     @State private var optionsCursor: UUID?
@@ -219,7 +220,17 @@ private struct CustomValueEditor: View {
             TextField("Amount", text: $text)
             TextField("Currency code", text: $currency)
         case .date:
-            TextField("Date (YYYY-MM-DD)", text: $text)
+            if let date {
+                DatePicker(
+                    "Date",
+                    selection: Binding(get: { self.date ?? date }, set: { self.date = $0 }),
+                    displayedComponents: .date
+                )
+                .environment(\.calendar, Self.dateCalendar)
+                .environment(\.timeZone, Self.dateCalendar.timeZone)
+            } else {
+                Button("Set date") { date = .now }
+            }
         case .select:
             Picker("Value", selection: $reference) {
                 Text("Choose an option").tag(UUID?.none)
@@ -261,7 +272,7 @@ private struct CustomValueEditor: View {
         case .boolean: boolean.map(CustomFieldValue.boolean)
         case .integer: .integer(text)
         case .decimal: .decimal(text)
-        case .date: .date(text)
+        case .date: date.map(Self.calendarDate)
         case .money: .money(amount: text, currency: currency)
         case .select: reference.map(CustomFieldValue.select)
         case .url: .url(text)
@@ -269,11 +280,22 @@ private struct CustomValueEditor: View {
         }
     }
 
+    private static let dateCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        return calendar
+    }()
+
+    private static func calendarDate(_ date: Date) -> CustomFieldValue {
+        .date(date.formatted(.iso8601.year().month().day().dateSeparator(.dash)))
+    }
+
     private func restoreDraft() {
         switch current {
-        case let .text(value), let .longText(value), let .integer(value), let .decimal(value),
-            let .date(value), let .url(value):
+        case let .text(value), let .longText(value), let .integer(value), let .decimal(value), let .url(value):
             text = value
+        case let .date(value):
+            date = DocumentDate(rawValue: value)?.start(in: Self.dateCalendar.timeZone)
         case let .boolean(value): boolean = value
         case let .money(amount, code):
             text = amount
