@@ -79,6 +79,62 @@ impl SqliteDocumentRepository {
             .map(|_| ())
     }
 
+    async fn insert_first_revision_rows(
+        tx: &mut Transaction<'_, Sqlite>,
+        vault: VaultId,
+        id: Id,
+        identity: &FileIdentity,
+        file_size: i64,
+        now: DateTime<Utc>,
+        actor: Option<&UserId>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO document_files (id, document_id, vault_id, role, storage_key,
+                 original_filename, mime_type, verification_state, sha256, byte_size)
+             SELECT d.id, d.id, d.vault_id, 'original', ?3, d.original_filename, ?4, 'verified', ?5, ?6
+             FROM documents d WHERE d.id = ?1 AND d.vault_id = ?2",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .bind(&identity.storage_key)
+        .bind(&identity.mime_type)
+        .bind(&identity.sha256)
+        .bind(file_size)
+        .execute(&mut **tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        sqlx::query(
+            "INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at, created_by)
+             VALUES (?1, ?1, ?2, 1, ?1, ?3, ?4)",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .bind(now.to_rfc3339())
+        .bind(actor.map(UserId::as_str))
+        .execute(&mut **tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        Ok(())
+    }
+
+    async fn emit_first_revision_in(
+        tx: &mut Transaction<'_, Sqlite>,
+        id: Id,
+        identity: &FileIdentity,
+        origin: EventOrigin,
+    ) -> Result<()> {
+        let context = capture_document(tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let event = DocumentEvent::Created { document_id: id };
+        let envelope = folio_core::events::document_event_envelope(&event, Some(&context))?
+            .ok_or_else(|| Error::Repository("Upload has no event envelope".into()))?;
+        let revision = first_revision_envelope(&envelope, &context, id, identity)?;
+        insert_event_with_envelope(tx, &event, origin, Some(&context), &envelope).await?;
+        insert_domain_event_with_origin(tx, &revision, origin).await?;
+        Ok(())
+    }
+
     async fn emit_metadata_in(
         &self,
         tx: &mut Transaction<'_, Sqlite>,
@@ -855,6 +911,30 @@ impl DocumentRepository for SqliteDocumentRepository {
             }
             return Err(map_sqlx_error(error));
         }
+        let identity = document.original_identity();
+        let file_size = i64::try_from(identity.byte_size)
+            .map_err(|_| Error::Validation("Original byte size exceeds database range".into()))?;
+        Self::insert_first_revision_rows(
+            &mut tx,
+            vault,
+            id,
+            &identity,
+            file_size,
+            now,
+            actor.as_ref(),
+        )
+        .await?;
+        sqlx::query(
+            "UPDATE documents SET current_revision_id = ?1, file_size = ?3
+             WHERE id = ?1 AND vault_id = ?2",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .bind(file_size)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
         for tag_id in &document.tag_ids {
             sqlx::query(
                 "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
@@ -905,12 +985,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             )
             .await?;
         }
-        self.emit_as(
-            &mut tx,
-            DocumentEvent::Created { document_id: id },
-            EventOrigin::Import,
-        )
-        .await?;
+        Self::emit_first_revision_in(&mut tx, id, &identity, EventOrigin::Import).await?;
         let row: DocumentRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ?"
         )))
@@ -1447,32 +1522,16 @@ impl DocumentRepository for SqliteDocumentRepository {
         }
         let now = Utc::now();
         let actor = folio_core::mutation::current_actor();
-        sqlx::query(
-            "INSERT INTO document_files (id, document_id, vault_id, role, storage_key,
-                 original_filename, mime_type, verification_state, sha256, byte_size)
-             SELECT d.id, d.id, d.vault_id, 'original', ?3, d.original_filename, ?4, 'verified', ?5, ?6
-             FROM documents d WHERE d.id = ?1 AND d.vault_id = ?2",
+        Self::insert_first_revision_rows(
+            &mut tx,
+            vault,
+            id,
+            identity,
+            file_size,
+            now,
+            actor.as_ref(),
         )
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .bind(&identity.storage_key)
-        .bind(&identity.mime_type)
-        .bind(&identity.sha256)
-        .bind(file_size)
-        .execute(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        sqlx::query(
-            "INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at, created_by)
-             VALUES (?1, ?1, ?2, 1, ?1, ?3, ?4)",
-        )
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .bind(now.to_rfc3339())
-        .bind(actor.as_ref().map(UserId::as_str))
-        .execute(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
+        .await?;
         sqlx::query(
             "UPDATE documents SET current_revision_id = ?1, file_path = ?3,
                  file_size = ?4, upload_pending = FALSE, updated_at = ?5, updated_by = ?6
@@ -1487,15 +1546,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        let context = capture_document(&mut tx, id, None)
-            .await?
-            .ok_or_else(|| not_found("Document", id))?;
-        let event = DocumentEvent::Created { document_id: id };
-        let envelope = folio_core::events::document_event_envelope(&event, Some(&context))?
-            .ok_or_else(|| Error::Repository("Upload has no event envelope".into()))?;
-        let revision = first_revision_envelope(&envelope, &context, id, identity)?;
-        insert_event_with_envelope(&mut tx, &event, self.origin, Some(&context), &envelope).await?;
-        insert_domain_event_with_origin(&mut tx, &revision, self.origin).await?;
+        Self::emit_first_revision_in(&mut tx, id, identity, self.origin).await?;
         self.commit(tx).await?;
         Ok(true)
     }
