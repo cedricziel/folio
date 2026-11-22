@@ -14,6 +14,8 @@
 
 ## 3. API and web
 
+- [ ] In progress: expose manager-authorized field/option JSON lifecycle routes, bounded reads, and generated OpenAPI with isolated API regressions. Document value writes remain blocked on SSE replay.
+
 - [ ] Write failing router tests for manager/editor/viewer permissions, contributor ownership, revoked membership, cross-vault targets, errors, and CSRF; implement documented JSON and HTML routes.
 - [ ] Write failing search tests for canonical equality, bounds, cursor binding, and retired fields; implement exact metadata filtering.
 - [ ] Add web management and typed document forms with retained failed drafts; verify create, edit, retirement, restore, and link navigation through isolated Playwright fixtures.

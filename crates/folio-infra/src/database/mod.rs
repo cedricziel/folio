@@ -123,6 +123,8 @@ impl From<PgPool> for Database {
 
 /// The ports Folio needs, implemented for one backend
 pub struct Repositories {
+    pub metadata_fields: Arc<dyn folio_core::ports::MetadataFieldRepository>,
+    pub metadata_options: Arc<dyn folio_core::ports::MetadataOptionRepository>,
     pub entries: Arc<dyn folio_core::ports::DocumentEntryRepository>,
     pub upload_receipts: Arc<dyn folio_core::ports::UploadReceiptRepository>,
     pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
@@ -196,6 +198,14 @@ impl Database {
                     )
                 };
                 Repositories {
+                    metadata_fields: Arc::new(
+                        sqlite::SqliteMetadataFieldRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_options: Arc::new(
+                        sqlite::SqliteMetadataOptionRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     entries: Arc::new(
                         sqlite::SqliteDocumentEntryRepository::new(pool.clone())
                             .with_wake(wake.clone()),
@@ -247,6 +257,14 @@ impl Database {
                     )
                 };
                 Repositories {
+                    metadata_fields: Arc::new(
+                        postgres::PostgresMetadataFieldRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_options: Arc::new(
+                        postgres::PostgresMetadataOptionRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     entries: Arc::new(
                         postgres::PostgresDocumentEntryRepository::new(pool.clone())
                             .with_wake(wake.clone()),
