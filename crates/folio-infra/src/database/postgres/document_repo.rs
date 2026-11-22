@@ -1839,6 +1839,29 @@ impl DocumentRepository for PostgresDocumentRepository {
         })
     }
 
+    async fn retains_revision_original(&self, document: Id, candidate: Id) -> Result<bool> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        sqlx::query("SELECT id FROM documents WHERE id = $1 FOR SHARE")
+            .bind(document)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        let retained = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM document_files
+                WHERE document_id = $1 AND id = $2 AND storage_key = $3)",
+        )
+        .bind(document)
+        .bind(candidate)
+        .bind(folio_core::ports::keys::revision_original(
+            document, candidate,
+        ))
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(retained)
+    }
+
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
         let result = sqlx::query("UPDATE documents SET file_path = $1, file_size = NULL, updated_at = $2, updated_by = $5 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL AND current_revision_id IS NULL AND file_path IS DISTINCT FROM $1").bind(file_path).bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).execute(&self.pool).await.map_err(repo_err)?;
         if result.rows_affected() == 0 {
