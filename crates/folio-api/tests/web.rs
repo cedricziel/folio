@@ -722,3 +722,150 @@ async fn long_pdfs_offer_only_the_pages_that_have_previews() {
     let beyond = h.app.clone().oneshot(thumbnail(pages)).await.unwrap();
     assert_eq!(beyond.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn field_management_forms_preserve_invalid_drafts_and_restore_options() {
+    use axum::{body::Body, http::Request};
+
+    let h = harness().await;
+    let form = |path: &str, body: Body| {
+        Request::post(path)
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(body)
+            .unwrap()
+    };
+    let index = "/manage/fields";
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(
+            index,
+            Body::from("name=Phase&kind=select&required=true"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::SEE_OTHER);
+    let field = result.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let page = text(h.app.clone().oneshot(get(&field)).await.unwrap()).await;
+    assert!(page.contains("<h1 class=\"title\">Phase</h1>"));
+    assert!(page.contains("Retire field"));
+
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(index, Body::from("name=PHASE&kind=select")))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::CONFLICT);
+    let page = text(result).await;
+    assert!(page.contains("role=\"alert\""));
+    assert!(page.contains("value=\"PHASE\""));
+
+    let options = format!("{field}/options");
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(&options, Body::from("label=Pending&position=4")))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::SEE_OTHER);
+    let field_record = h
+        .state
+        .metadata_fields
+        .list(h.vault, false, None, 10)
+        .await
+        .unwrap()
+        .remove(0);
+    let option = h
+        .state
+        .metadata_options
+        .list(h.vault, field_record.id, false, None, 10)
+        .await
+        .unwrap()
+        .remove(0);
+
+    let retired = h
+        .app
+        .clone()
+        .oneshot(form(
+            &format!("{options}/{}/retire", option.id),
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(retired.status(), StatusCode::SEE_OTHER);
+    let page = text(h.app.clone().oneshot(get(&field)).await.unwrap()).await;
+    assert!(page.contains("Restore option"));
+    let restored = h
+        .app
+        .clone()
+        .oneshot(form(
+            &format!("{options}/{}/restore", option.id),
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(restored.status(), StatusCode::SEE_OTHER);
+    let current = h
+        .state
+        .metadata_options
+        .find(h.vault, field_record.id, option.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.label, "Pending");
+    assert_eq!(current.position, 4);
+    assert!(current.deleted_at.is_none());
+
+    for number in 0..50 {
+        h.state
+            .metadata_options
+            .create(
+                h.vault,
+                field_record.id,
+                folio_core::models::MetadataOptionInput {
+                    label: format!("Option {number}"),
+                    position: number,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let ordered = h
+        .state
+        .metadata_options
+        .list(h.vault, field_record.id, false, None, 51)
+        .await
+        .unwrap();
+    let after = ordered[49].id;
+    let last = &ordered[50];
+    let conflict = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("label", &ordered[0].label)
+        .append_pair("position", "987")
+        .finish();
+    let editor = format!("{options}/{}?after={after}", last.id);
+    let page = text(
+        h.app
+            .clone()
+            .oneshot(get(&format!("{field}?after={after}")))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(page.contains(&format!("action=\"{editor}\"")));
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(&editor, Body::from(conflict)))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::CONFLICT);
+    let page = text(result).await;
+    assert!(page.contains(&format!("action=\"{editor}\"")));
+    assert!(page.contains("value=\"987\""));
+}

@@ -1,0 +1,1 @@
+{% if let Some(user) = sidebar.user %}<input type="hidden" name="csrf" value="{{ user.csrf }}">{% endif %}

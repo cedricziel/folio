@@ -546,6 +546,12 @@ Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_search`
 and the API metadata suite for exact filtering. Verify canonical amounts, false
 versus missing, unavailable fields, vault isolation, and cursor binding.
 
+Run `cargo test -p folio-api --test web field_management_forms` for the Fields
+forms. The isolated fixture checks retained form drafts after a name conflict
+and restoration of the same option ID and position. Run `npx playwright test
+metadata-fields.spec.ts` from `e2e/` against the disposable Folio instance to
+check field and option management at a narrow viewport.
+
 ## Verify SQLite trash contention
 
 Run `cargo test -p folio-infra --test trash_lock` with an isolated target.
