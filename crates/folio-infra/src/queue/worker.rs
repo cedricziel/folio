@@ -2479,10 +2479,9 @@ mod tests {
             }
         };
         let path = folio_core::ports::keys::original(id);
-        f.storage
-            .put(&path, b"not a real png".as_slice().into())
-            .await
-            .unwrap();
+        let bytes = b"not a real png";
+        let identity = folio_core::models::FileIdentity::from_bytes(&path, "image/png", bytes);
+        f.storage.put(&path, bytes.as_slice().into()).await.unwrap();
         let now = chrono::Utc::now();
         f.repo
             .create_imported(
@@ -2498,7 +2497,8 @@ mod tests {
                     original_filename: Some("scan.png".into()),
                     mime_type: Some("image/png".into()),
                     file_path: path,
-                    content_sha256: "ab".repeat(32),
+                    content_sha256: identity.sha256,
+                    file_size: identity.byte_size,
                     document_date: None,
                     created_at: now,
                     updated_at: now,
