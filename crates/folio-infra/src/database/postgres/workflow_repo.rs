@@ -47,6 +47,7 @@ struct WorkflowRow {
     actions: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    revision: i64,
     deleted_at: Option<DateTime<Utc>>,
     created_by: Option<String>,
     updated_by: Option<String>,
@@ -66,6 +67,7 @@ impl TryFrom<WorkflowRow> for Workflow {
             actions: serde_json::from_str(&row.actions).map_err(repo_err)?,
             created_at: row.created_at,
             updated_at: row.updated_at,
+            revision: row.revision,
             deleted_at: row.deleted_at,
             created_by: row.created_by.map(UserId),
             updated_by: row.updated_by.map(UserId),
@@ -88,6 +90,7 @@ struct RunRow {
     payload: String,
     actions: String,
     source_event_id: Option<i64>,
+    definition_revision: Option<i64>,
     created_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
 }
@@ -110,6 +113,7 @@ impl TryFrom<RunRow> for WorkflowRun {
             payload: row.payload,
             actions: serde_json::from_str(&row.actions).map_err(repo_err)?,
             source_event_id: row.source_event_id,
+            definition_revision: row.definition_revision,
             created_at: row.created_at,
             finished_at: row.finished_at,
         })
@@ -256,7 +260,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         }
         let actor = folio_core::mutation::current_actor();
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "UPDATE workflows SET name = $1, enabled = $2, trigger_event = $3, conditions = $4, actions = $5, updated_at = $6, updated_by = $7 WHERE id = $8 AND vault_id = $9 RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, name = $1, enabled = $2, trigger_event = $3, conditions = $4, actions = $5, updated_at = $6, updated_by = $7 WHERE id = $8 AND vault_id = $9 RETURNING *",
         )
         .bind(&input.name)
         .bind(input.enabled)
@@ -271,6 +275,15 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .await
         .map_err(repo_err)?;
         let workflow = Workflow::try_from(row)?;
+        sqlx::query(
+            "UPDATE workflow_runs SET status = 'failed', last_error = 'Workflow definition changed',
+             finished_at = $1 WHERE workflow_id = $2 AND status = 'pending'",
+        )
+        .bind(workflow.updated_at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
         insert_domain_event(&mut tx, &workflow_event(&workflow, "updated")?).await?;
         tx.commit().await.map_err(repo_err)?;
         Ok(workflow)
@@ -294,7 +307,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         let actor = folio_core::mutation::current_actor();
         let now = Utc::now();
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "UPDATE workflows SET deleted_at = $1, updated_at = $2, updated_by = $3 WHERE id = $4 AND vault_id = $5 RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, deleted_at = $1, updated_at = $2, updated_by = $3 WHERE id = $4 AND vault_id = $5 RETURNING *",
         )
         .bind(Some(now))
         .bind(now)
@@ -336,7 +349,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         let actor = folio_core::mutation::current_actor();
         let now = Utc::now();
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "UPDATE workflows SET deleted_at = $1, updated_at = $2, updated_by = $3 WHERE id = $4 AND vault_id = $5 RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, deleted_at = $1, updated_at = $2, updated_by = $3 WHERE id = $4 AND vault_id = $5 RETURNING *",
         )
         .bind(None::<DateTime<Utc>>)
         .bind(now)
@@ -355,26 +368,34 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     #[instrument(skip(self, run))]
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
-        let owner: Option<Id> = sqlx::query_scalar(
-            "SELECT w.vault_id FROM workflows w JOIN vaults v ON v.id = w.vault_id
+        let definition: Option<(Id, i64, bool)> = sqlx::query_as(
+            "SELECT w.vault_id, w.revision, w.enabled FROM workflows w JOIN vaults v ON v.id = w.vault_id
              WHERE w.id = $1 AND w.deleted_at IS NULL AND v.deleted_at IS NULL FOR SHARE OF w, v",
         )
         .bind(run.workflow_id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(repo_err)?;
-        if owner != Some(run.vault_id.0) {
+        let Some((_, revision, enabled)) =
+            definition.filter(|(owner, _, _)| *owner == run.vault_id.0)
+        else {
             return Err(Error::Validation(
                 "Workflow run belongs to an inactive workflow or vault, or a different vault"
                     .into(),
             ));
+        };
+        if run
+            .definition_revision
+            .is_some_and(|captured| !enabled || revision != captured)
+        {
+            return Ok(false);
         }
         let mutation_id = run.source_identity()?.map(|source| source.mutation_id);
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts,
                                         completed_actions, last_error, response_status, payload,
-                                        actions, source_event_id, created_at, finished_at, mutation_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                                        actions, source_event_id, created_at, finished_at, mutation_id, definition_revision)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
              ON CONFLICT DO NOTHING",
         )
         .bind(run.id)
@@ -392,6 +413,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .bind(run.created_at)
         .bind(run.finished_at)
         .bind(mutation_id)
+        .bind(revision)
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;

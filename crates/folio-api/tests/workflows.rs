@@ -1001,3 +1001,39 @@ async fn web_editor_configures_typed_ingestion_outcome_filters() {
     );
     assert_eq!(stored["actions"].as_array().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn web_editor_configures_exact_custom_metadata_conditions() {
+    let app = test_app().await;
+    let field = Uuid::new_v4();
+    let form = format!(
+        "name=Exact+amount&trigger=document.metadata.changed&enabled=on&event_actor=&metadata_field_id={field}&metadata_kind=decimal&metadata_state=set&metadata_after_enabled=on&metadata_after=9007199254740993.0100&webhook_url=https%3A%2F%2Fexample.com%2Fhook"
+    );
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/workflows")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let id = response.headers()["location"]
+        .to_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        stored["conditions"]["event"]["metadata"],
+        json!({
+            "field_id": field, "kind": "decimal", "state": "set",
+            "after": {"kind": "decimal", "value": "9007199254740993.01"},
+        })
+    );
+}

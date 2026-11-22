@@ -10204,6 +10204,14 @@
         },
         "additionalProperties": false
       },
+      "MetadataChangeState": {
+        "type": "string",
+        "enum": [
+          "set",
+          "replaced",
+          "cleared"
+        ]
+      },
       "MetadataField": {
         "type": "object",
         "required": [
@@ -12133,6 +12141,45 @@
           }
         }
       },
+      "WebhookMetadata": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "subject_id",
+          "data"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "data": {},
+          "document_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "subject_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "WebhookMethod": {
         "type": "string",
         "description": "HTTP method used for webhook delivery",
@@ -12177,6 +12224,16 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/WebhookIngest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookMetadata"
               },
               {
                 "type": "null"
@@ -12488,7 +12545,8 @@
           "date",
           "timestamp",
           "identifier",
-          "identifier_set"
+          "identifier_set",
+          "metadata_value"
         ]
       },
       "WorkflowConditions": {
@@ -12528,14 +12586,7 @@
             "description": "The document has this document type"
           },
           "event": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/WorkflowEventConditions"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/WorkflowEventConditions"
           },
           "filename_glob": {
             "type": [
@@ -12593,6 +12644,9 @@
                 "type": "null"
               }
             ]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WorkflowMetadataConditions"
           },
           "subject_id": {
             "type": [
@@ -12700,6 +12754,31 @@
           }
         }
       },
+      "WorkflowMetadataConditions": {
+        "type": "object",
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/MetadataValue"
+          },
+          "before": {
+            "$ref": "#/components/schemas/MetadataValue"
+          },
+          "field_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MetadataKind"
+          },
+          "state": {
+            "$ref": "#/components/schemas/MetadataChangeState"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowRun": {
         "type": "object",
         "description": "One execution of a workflow for one event",
@@ -12805,6 +12884,15 @@
           "document_comment.created",
           "document_comment.updated",
           "document_comment.deleted",
+          "metadata_field.created",
+          "metadata_field.updated",
+          "metadata_field.deleted",
+          "metadata_field.restored",
+          "metadata_option.created",
+          "metadata_option.updated",
+          "metadata_option.deleted",
+          "metadata_option.restored",
+          "document.metadata.changed",
           "document.deleted",
           "ingest.received",
           "ingest.imported",

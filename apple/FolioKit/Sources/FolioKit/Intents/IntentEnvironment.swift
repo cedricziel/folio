@@ -7,11 +7,19 @@ import os
 public enum IntentEnvironment {
     public typealias ServiceFactory = @Sendable () throws -> (any FolioService)?
 
-    private static let factory = OSAllocatedUnfairLock<ServiceFactory>(initialState: signedInService)
+    private typealias CatalogFactory = @Sendable () throws -> DocumentCatalog?
 
-    /// Swaps the server connection, for tests.
+    private static let factory = OSAllocatedUnfairLock<CatalogFactory>(initialState: {
+        try signedInService().map { DocumentCatalog(service: $0) }
+    })
+
+    /// Swaps the server connection using the production upload progress store.
     public static func use(_ make: @escaping ServiceFactory) {
-        factory.withLock { $0 = make }
+        factory.withLock { $0 = { try make().map { DocumentCatalog(service: $0) } } }
+    }
+
+    static func use(catalog: DocumentCatalog?) {
+        factory.withLock { $0 = { catalog } }
     }
 
     private static let spotlightIndex = OSAllocatedUnfairLock<SpotlightIndex>(initialState: .shared)
@@ -61,8 +69,8 @@ public enum IntentEnvironment {
     }
 
     public static func catalog() throws -> DocumentCatalog {
-        guard let service = try factory.withLock({ $0 })() else { throw ShortcutError.notSignedIn }
-        return DocumentCatalog(service: service)
+        guard let catalog = try factory.withLock({ $0 })() else { throw ShortcutError.notSignedIn }
+        return catalog
     }
 
     /// Runs `work` and rewrites whatever it throws, except cancellation, into a message the person can read. Telemetry is sent before

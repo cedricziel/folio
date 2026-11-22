@@ -10,7 +10,7 @@ use folio_core::models::{
 };
 use folio_core::ports::MetadataValueRepository;
 use folio_core::{Error, Result};
-use sqlx::{SqliteConnection, SqlitePool};
+use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 use tokio::sync::Notify;
 
 use crate::database::metadata_value::{canonical_key, change, parse_kind, Columns};
@@ -470,6 +470,31 @@ pub(crate) async fn prepare_move(
     Ok(())
 }
 
+pub(super) fn push_exact_value(qb: &mut QueryBuilder<Sqlite>, value: &MetadataValue) -> Result<()> {
+    let columns = Columns::from_value(Some(value))?;
+    qb.push(" AND mv.kind = ")
+        .push_bind(value.kind().as_str())
+        .push(" AND mv.canonical_key = ")
+        .push_bind(canonical_key(value)?);
+    qb.push(" AND mv.text_value COLLATE BINARY IS ")
+        .push_bind(columns.text);
+    qb.push(" AND mv.boolean_value IS ")
+        .push_bind(columns.boolean);
+    qb.push(" AND mv.integer_value IS ")
+        .push_bind(columns.integer);
+    qb.push(" AND mv.decimal_value COLLATE BINARY IS ")
+        .push_bind(columns.decimal);
+    qb.push(" AND mv.date_value COLLATE BINARY IS ")
+        .push_bind(columns.date);
+    qb.push(" AND mv.currency COLLATE BINARY IS ")
+        .push_bind(columns.currency);
+    qb.push(" AND mv.option_id IS ")
+        .push_bind(columns.option.map(|id| id.to_string()));
+    qb.push(" AND mv.target_document_id IS ")
+        .push_bind(columns.target.map(|id| id.to_string()));
+    Ok(())
+}
+
 #[async_trait]
 impl MetadataValueRepository for SqliteMetadataValueRepository {
     async fn search_exact(
@@ -489,42 +514,27 @@ impl MetadataValueRepository for SqliteMetadataValueRepository {
         .map_err(db_error)?
         .ok_or_else(|| not_found("Metadata field", query.filter.field_id))?;
         let value = query.canonical_value(vault, parse_kind(&kind)?)?;
-        let key = canonical_key(&value)?;
-        let columns = Columns::from_value(Some(&value))?;
-        let after = query.cursor.as_ref().map(|cursor| cursor.after.to_string());
-        let rows: Vec<(String, String)> = sqlx::query_as(
+        let mut qb = QueryBuilder::<Sqlite>::new(
             "SELECT doc.id, doc.title FROM metadata_values mv
              JOIN documents doc ON doc.vault_id = mv.vault_id AND doc.id = mv.document_id
-             WHERE mv.vault_id = ?1 AND mv.field_id = ?2 AND mv.canonical_key = ?3
-               AND mv.deleted_at IS NULL AND doc.deleted_at IS NULL
-               AND doc.purge_requested_at IS NULL AND doc.upload_pending = 0
-               AND (?4 IS NULL OR mv.document_id > ?4)
-               AND mv.text_value COLLATE BINARY IS ?5
-               AND mv.boolean_value IS ?6
-               AND mv.integer_value IS ?7
-               AND mv.decimal_value COLLATE BINARY IS ?8
-               AND mv.date_value COLLATE BINARY IS ?9
-               AND mv.currency COLLATE BINARY IS ?10
-               AND mv.option_id IS ?11
-               AND mv.target_document_id IS ?12
-             ORDER BY mv.document_id LIMIT ?13",
-        )
-        .bind(vault.to_string())
-        .bind(query.filter.field_id.to_string())
-        .bind(key)
-        .bind(after)
-        .bind(columns.text)
-        .bind(columns.boolean)
-        .bind(columns.integer)
-        .bind(columns.decimal)
-        .bind(columns.date)
-        .bind(columns.currency)
-        .bind(columns.option.map(|id| id.to_string()))
-        .bind(columns.target.map(|id| id.to_string()))
-        .bind(i64::from(query.limit) + 1)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(db_error)?;
+             WHERE mv.deleted_at IS NULL AND doc.deleted_at IS NULL
+               AND doc.purge_requested_at IS NULL AND doc.upload_pending = 0 AND mv.vault_id = ",
+        );
+        qb.push_bind(vault.to_string())
+            .push(" AND mv.field_id = ")
+            .push_bind(query.filter.field_id.to_string());
+        if let Some(cursor) = &query.cursor {
+            qb.push(" AND mv.document_id > ")
+                .push_bind(cursor.after.to_string());
+        }
+        push_exact_value(&mut qb, &value)?;
+        qb.push(" ORDER BY mv.document_id LIMIT ")
+            .push_bind(i64::from(query.limit) + 1);
+        let rows: Vec<(String, String)> = qb
+            .build_query_as()
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(db_error)?;
         tx.commit().await.map_err(db_error)?;
         let documents = rows
             .into_iter()

@@ -10,8 +10,8 @@ use super::IngestWorkflowAccess;
 use crate::error::{Error, Result};
 use crate::events::{DocumentEvent, EventOrigin, EventSnapshot, OutboxEvent};
 use crate::models::{
-    WebhookDocument, WebhookEntry, WebhookIngest, WebhookPayload, WorkflowRun, WorkflowTarget,
-    WorkflowTrigger, WorkflowTriggerRegistry,
+    WebhookDocument, WebhookEntry, WebhookIngest, WebhookMetadata, WebhookPayload, WorkflowRun,
+    WorkflowTarget, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 use crate::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, FileMetadata,
@@ -185,7 +185,7 @@ impl WorkflowEngine {
                 continue;
             }
             let run = WorkflowRun::new(vault, workflow.id, trigger, None, body.clone())
-                .with_actions(workflow.actions.clone())
+                .with_definition(&workflow)
                 .with_source_event(outbox_id);
             match self.workflows.create_run(&run).await {
                 Ok(true) => runs.push(run),
@@ -211,7 +211,7 @@ impl WorkflowEngine {
                 .expect("legacy trigger has a projection");
             let ctx = self.load_context(outbox_event, event).await?;
             (
-                event.document_id(),
+                Some(event.document_id()),
                 ctx.vault_id,
                 Some(ctx),
                 outbox_event.created_at,
@@ -222,7 +222,17 @@ impl WorkflowEngine {
                     return Ok(Vec::new());
                 };
                 (
-                    document_id,
+                    Some(document_id),
+                    envelope.vault_id(),
+                    None,
+                    envelope.occurred_at(),
+                )
+            } else if trigger.is_custom_metadata() {
+                if !Self::valid_metadata_subject(trigger, envelope) {
+                    return Ok(Vec::new());
+                }
+                (
+                    envelope.document_id(),
                     envelope.vault_id(),
                     None,
                     envelope.occurred_at(),
@@ -236,7 +246,7 @@ impl WorkflowEngine {
             ) {
                 let ctx = Self::metadata_context(envelope)?;
                 (
-                    ctx.document_id,
+                    Some(ctx.document_id),
                     ctx.vault_id,
                     Some(ctx),
                     envelope.occurred_at(),
@@ -254,14 +264,17 @@ impl WorkflowEngine {
         {
             return Ok(Vec::new());
         }
-        if trigger.target() == WorkflowTarget::Document
-            && self.documents.locate(document_id).await? != Some(vault)
-        {
-            debug!(
-                "Event {} document {document_id} is no longer active in its originating vault; skipping",
-                outbox_event.id
-            );
-            return Ok(Vec::new());
+        if trigger.target() == WorkflowTarget::Document {
+            let Some(id) = document_id else {
+                return Ok(Vec::new());
+            };
+            if self.documents.locate(id).await? != Some(vault) {
+                debug!(
+                    "Event {} document {id} is no longer active in its originating vault; skipping",
+                    outbox_event.id
+                );
+                return Ok(Vec::new());
+            }
         }
         let candidates = self.workflows.list_enabled(vault, trigger).await?;
         let mut payload_json: Option<String> = None;
@@ -276,7 +289,12 @@ impl WorkflowEngine {
                     .as_ref()
                     .is_some_and(|ctx| workflow.conditions.matches_snapshot(ctx)),
             };
-            if !matches {
+            if !matches
+                || !workflow
+                    .actions
+                    .iter()
+                    .all(|action| trigger.target().accepts(action))
+            {
                 continue;
             }
             let outcome = async {
@@ -287,6 +305,25 @@ impl WorkflowEngine {
                         let body = if let Some(ctx) = &snapshot {
                             self.build_payload(trigger, ctx, occurred_at, envelope)
                                 .await?
+                        } else if trigger.is_custom_metadata() {
+                            let source =
+                                envelope.expect("metadata occurrence has a domain envelope");
+                            let payload = WebhookPayload::for_metadata(
+                                trigger,
+                                occurred_at,
+                                WebhookMetadata {
+                                    vault_id: vault,
+                                    subject_id: source.subject().id,
+                                    document_id,
+                                    actor_id: source.actor_id().cloned(),
+                                    causation_id: source.causation_id(),
+                                    data: source.data().clone(),
+                                },
+                                Some(source.into()),
+                            );
+                            serde_json::to_string(&payload).map_err(|e| {
+                                Error::Repository(format!("Failed to encode payload: {e}"))
+                            })?
                         } else {
                             let payload = envelope
                                 .and_then(|source| Self::entry_payload(trigger, source))
@@ -301,21 +338,19 @@ impl WorkflowEngine {
                         body
                     }
                 };
-                let run = WorkflowRun::new(
-                    workflow.vault_id,
-                    workflow.id,
-                    trigger,
-                    Some(document_id),
-                    body,
-                )
-                .with_actions(workflow.actions.clone())
-                .with_source_event(outbox_event.id);
+                let run =
+                    WorkflowRun::new(workflow.vault_id, workflow.id, trigger, document_id, body)
+                        .with_definition(&workflow)
+                        .with_source_event(outbox_event.id);
                 Ok::<_, Error>(self.workflows.create_run(&run).await?.then_some(run))
             }
             .await;
             match outcome {
                 Ok(Some(run)) => runs.push(run),
-                Ok(None) => debug!("Workflow {} already ran for {document_id}", workflow.id),
+                Ok(None) => debug!(
+                    "Workflow {} did not queue a run for event {}",
+                    workflow.id, outbox_event.id
+                ),
                 Err(e) => {
                     error!(
                         "Workflow {} failed on {}: {e}",
@@ -329,6 +364,26 @@ impl WorkflowEngine {
         match first_error {
             Some(e) => Err(e),
             None => Ok(runs),
+        }
+    }
+
+    fn valid_metadata_subject(trigger: WorkflowTrigger, event: &DomainEventEnvelope) -> bool {
+        let subject = event.subject();
+        let expected_type = trigger.as_str().split('.').next();
+        if Some(subject.subject_type.as_str()) != expected_type {
+            return false;
+        }
+        let id_matches = |key: &str| {
+            event.data()[key]
+                .as_str()
+                .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                == Some(subject.id)
+        };
+        match subject.subject_type.as_str() {
+            "document" => event.document_id() == Some(subject.id),
+            "metadata_field" => event.document_id().is_none() && id_matches("field_id"),
+            "metadata_option" => event.document_id().is_none() && id_matches("option_id"),
+            _ => false,
         }
     }
 

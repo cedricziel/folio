@@ -1,5 +1,6 @@
 use chrono::Utc;
 use folio_core::models::{CreateDocument, VaultId};
+use folio_core::ports::ProcessingQueue;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
 use uuid::Uuid;
@@ -365,6 +366,104 @@ async fn moved_document_retains_original_audience(db: &Database) {
     );
     assert_eq!(f.rows(&format!("vault_id = '{}'", f.vault)).await, 3);
     assert_eq!(count(db, "SELECT COUNT(*) FROM jobs".into()).await, 1);
+}
+
+async fn moving_keeps_completed_preview_and_releases_interrupted_ocr(db: &Database) {
+    use folio_core::models::ProcessingStatus;
+    use folio_core::ports::ThumbnailLocation;
+    use folio_core::processing_events::ProcessingEventStage;
+
+    let f = Fixture::new(db).await;
+    let repositories = db.repositories().await;
+    let destination = repositories
+        .vaults
+        .create("New owner", None)
+        .await
+        .unwrap()
+        .id;
+    let docs = repositories.documents;
+    docs.set_file_path(f.vault, f.document, "original")
+        .await
+        .unwrap();
+    let (parent, scope) = f.claim_root().await;
+    let preview = f
+        .queue
+        .start_derived(&parent, ProcessingEventStage::Thumbnail)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(f.queue.complete_thumbnail(&preview, Some(7)).await.unwrap());
+    let child = f.ocr(scope).await.unwrap();
+    let job = f.queue.dequeue().await.unwrap().unwrap();
+    assert_eq!(job.id, child);
+    let fence = f.queue.start_ocr(&job).await.unwrap().unwrap();
+
+    let moved = docs
+        .move_to(f.document, f.vault, destination, None)
+        .await
+        .unwrap();
+    assert_eq!(moved.ocr_status, ProcessingStatus::Pending);
+    assert_eq!(moved.page_count, Some(7));
+    assert_eq!(
+        docs.thumbnail_location(f.vault, f.document).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        docs.thumbnail_location(destination, f.document)
+            .await
+            .unwrap(),
+        Some(ThumbnailLocation::Committed(preview.result_prefix()))
+    );
+    assert!(!f
+        .queue
+        .complete_ocr(&fence, "Obsolete output", true)
+        .await
+        .unwrap());
+    assert_eq!(
+        f.queue.context(child).await.unwrap().unwrap().vault_id,
+        Some(f.vault)
+    );
+    assert_eq!(
+        f.rows(&format!(
+            "vault_id = '{destination}' AND is_current = FALSE"
+        ))
+        .await,
+        2
+    );
+}
+
+async fn moving_a_pending_preview_queues_the_new_vault(db: &Database) {
+    let f = Fixture::new(db).await;
+    let repositories = db.repositories().await;
+    repositories
+        .documents
+        .set_file_path(f.vault, f.document, "original")
+        .await
+        .unwrap();
+    let old = f
+        .queue
+        .enqueue(JobType::GenerateThumbnail {
+            document_id: f.document,
+        })
+        .await
+        .unwrap();
+    let destination = repositories
+        .vaults
+        .create("Preview owner", None)
+        .await
+        .unwrap()
+        .id;
+
+    repositories
+        .documents
+        .move_to(f.document, f.vault, destination, None)
+        .await
+        .unwrap();
+    assert_eq!(f.rows(&format!("vault_id = '{destination}' AND stage = 'thumbnail' AND is_current AND job_id <> '{old}'")).await, 1);
+    assert_eq!(
+        f.queue.context(old).await.unwrap().unwrap().vault_id,
+        Some(f.vault)
+    );
 }
 
 async fn unrelated_processing_roots_do_not_inherit_group(db: &Database) {
@@ -805,6 +904,15 @@ async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
         f.queue.enqueue(JobType::process_document(f.document)).await,
         Err(folio_core::Error::Conflict(_))
     ));
+    assert!(matches!(
+        f.queue.enqueue_current_processing(f.vault, f.document, false).await,
+        Err(folio_core::Error::Conflict(message)) if message == "File revision processing is not yet enabled"
+    ));
+    assert!(matches!(
+        f.queue.enqueue_processing(f.vault, f.document).await,
+        Err(folio_core::Error::Conflict(message)) if message == "Upload revision is no longer current"
+    ));
+
     let current = JobType::ProcessDocumentRevision {
         document_id: f.document,
         revision_id: revision,
@@ -854,6 +962,43 @@ async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
         3
     );
     assert_eq!(f.rows("TRUE").await, 3);
+    execute(db, format!(
+        "UPDATE documents SET content = 'indexable text', ocr_status = 'done', embed_status = 'done' WHERE id = '{}'",
+        f.document
+    )).await;
+    f.queue.reembed_documents().await.unwrap();
+    assert_eq!(
+        count(
+            db,
+            format!(
+                "SELECT COUNT(*) FROM documents WHERE id = '{}' AND embed_status = 'done'",
+                f.document
+            )
+        )
+        .await,
+        1
+    );
+    assert_eq!(f.rows("TRUE").await, 3);
+
+    execute(
+        db,
+        format!(
+            "UPDATE documents SET file_path = 'original' WHERE id = '{}'",
+            f.document
+        ),
+    )
+    .await;
+    let documents = db.repositories().await.documents;
+    documents.delete(f.vault, f.document).await.unwrap();
+    assert!(matches!(
+        documents.restore(f.vault, f.document).await,
+        Err(folio_core::Error::Conflict(message)) if message == "File revision processing is not yet enabled"
+    ));
+    assert!(documents
+        .find_trashed_by_id(f.vault, f.document)
+        .await
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]
@@ -887,8 +1032,103 @@ async fn child_scope_cannot_drop_or_substitute_a_parent_revision() {
     .await;
 }
 
+#[test]
+fn requested_processing_binds_the_current_revision_when_available() {
+    use super::{bind_requested_processing, DocumentScope, ProcessingRequest};
+
+    let vault = VaultId::new();
+    let document = Uuid::new_v4();
+    let revision = Uuid::new_v4();
+    let first = DocumentScope {
+        vault_id: vault.to_string(),
+        unavailable: false,
+        revision_id: Some(revision.to_string()),
+        legacy_current: true,
+    };
+    let current = ProcessingRequest::Current { force: true };
+    assert!(matches!(
+        bind_requested_processing(Some(&first), vault, document, current, false).unwrap(),
+        JobType::ProcessDocument { document_id, force: true } if document_id == document
+    ));
+    assert!(matches!(
+        bind_requested_processing(Some(&first), vault, document, current, true).unwrap(),
+        JobType::ProcessDocumentRevision { document_id, revision_id, force: true }
+            if document_id == document && revision_id == revision
+    ));
+
+    let newer = DocumentScope {
+        legacy_current: false,
+        ..first
+    };
+    assert!(matches!(
+        bind_requested_processing(Some(&newer), vault, document, current, false).unwrap(),
+        JobType::ProcessDocumentRevision { document_id, revision_id, force: true }
+            if document_id == document && revision_id == revision
+    ));
+    assert!(matches!(
+        bind_requested_processing(Some(&newer), VaultId::new(), document, current, true),
+        Err(folio_core::Error::NotFound { .. })
+    ));
+}
+
+async fn repair_enqueues_only_for_live_idle_pending_work(db: &Database) {
+    use folio_core::models::ProcessingStage;
+
+    let f = Fixture::new(db).await;
+    let docs = db.repositories().await.documents;
+    let repair = || {
+        f.queue
+            .repair_current_processing(f.vault, f.document, ProcessingStage::Ocr)
+    };
+    assert!(!repair().await.unwrap());
+    docs.set_file_path(f.vault, f.document, "original")
+        .await
+        .unwrap();
+    assert!(repair().await.unwrap());
+    assert!(!repair().await.unwrap());
+    assert_eq!(f.rows("is_current").await, 3);
+
+    execute(db, format!("UPDATE jobs SET status = 'completed'; UPDATE documents SET ocr_status = 'done' WHERE id = '{}';", f.document)).await;
+    assert!(!repair().await.unwrap());
+    assert_eq!(f.rows("is_current").await, 3);
+}
+
+#[test]
+fn upload_processing_keeps_the_first_revision_across_dispatch_modes() {
+    use super::{bind_requested_processing, DocumentScope, ProcessingRequest};
+
+    let vault = VaultId::new();
+    let document = Uuid::new_v4();
+    let first = DocumentScope {
+        vault_id: vault.to_string(),
+        unavailable: false,
+        revision_id: Some(document.to_string()),
+        legacy_current: true,
+    };
+    let request = ProcessingRequest::InitialUpload;
+    assert!(matches!(
+        bind_requested_processing(Some(&first), vault, document, request, false).unwrap(),
+        JobType::ProcessDocument { document_id, force: false } if document_id == document
+    ));
+    assert!(matches!(
+        bind_requested_processing(Some(&first), vault, document, request, true).unwrap(),
+        JobType::ProcessDocumentRevision { document_id, revision_id, force: false }
+            if document_id == document && revision_id == document
+    ));
+    let replacement = DocumentScope {
+        revision_id: Some(Uuid::new_v4().to_string()),
+        legacy_current: false,
+        ..first
+    };
+    assert!(matches!(
+        bind_requested_processing(Some(&replacement), vault, document, request, true),
+        Err(folio_core::Error::Conflict(_))
+    ));
+}
+
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
+    repair_enqueues_only_for_live_idle_pending_work(db).await;
     revision_jobs_cannot_enqueue_or_prepare_until_fenced(db).await;
     revision_enqueue_plan_seeds_only_the_current_revision(db).await;
     partial_supersession_keeps_the_current_parent_stage_live(db).await;
@@ -905,6 +1145,8 @@ async fn contract(db: &Database) {
     completed_parent_cannot_schedule_children(db).await;
     superseded_parent_cannot_displace_new_work(db).await;
     moved_document_retains_original_audience(db).await;
+    moving_keeps_completed_preview_and_releases_interrupted_ocr(db).await;
+    moving_a_pending_preview_queues_the_new_vault(db).await;
     unrelated_processing_roots_do_not_inherit_group(db).await;
     root_enqueue_rolls_back_job_and_supersession(db).await;
     child_enqueue_rolls_back_assignment_with_job(db).await;

@@ -12,7 +12,10 @@ use crate::queue::{Job, JobType};
 /// Group, origin vault, correlation, and creation time of a claimed job.
 type ClaimRow = (Option<String>, Option<String>, Option<String>, String);
 
-async fn document(conn: &mut PgConnection, id: Uuid) -> Result<Option<DocumentScope>> {
+pub(in crate::queue) async fn document(
+    conn: &mut PgConnection,
+    id: Uuid,
+) -> Result<Option<DocumentScope>> {
     sqlx::query_as(
         "SELECT d.vault_id::text AS vault_id, (d.deleted_at IS NOT NULL OR d.purge_requested_at IS NOT NULL
              OR NOT EXISTS (SELECT 1 FROM vaults v WHERE v.id = d.vault_id AND v.deleted_at IS NULL)) AS unavailable,

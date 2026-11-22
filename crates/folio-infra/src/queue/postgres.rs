@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
+use super::processing_scope::ProcessingRequest;
+
 use super::{
     damaged_row_message, payload_problem, FailOutcome, Job, JobClass, JobStatus, JobType,
     DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS, MAX_UNREADABLE_PER_DEQUEUE,
@@ -68,6 +70,62 @@ pub(crate) async fn insert_job(
 
     debug!("Enqueued job {} of type {}", id, type_name);
     Ok(id)
+}
+
+async fn requested_processing_job(
+    conn: &mut PgConnection,
+    vault: folio_core::models::VaultId,
+    document_id: Uuid,
+    request: ProcessingRequest,
+) -> Result<JobType> {
+    let document = super::processing_scope::postgres::document(conn, document_id).await?;
+    super::processing_scope::bind_requested_processing(
+        document.as_ref(),
+        vault,
+        document_id,
+        request,
+        super::REVISION_DISPATCH_ENABLED,
+    )
+}
+
+pub(crate) async fn insert_current_processing(
+    conn: &mut PgConnection,
+    vault: folio_core::models::VaultId,
+    document_id: Uuid,
+    force: bool,
+    trace: Option<&super::JobTraceContext>,
+) -> Result<Uuid> {
+    let job = requested_processing_job(
+        conn,
+        vault,
+        document_id,
+        ProcessingRequest::Current { force },
+    )
+    .await?;
+    insert_job(conn, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, trace).await
+}
+
+pub(crate) async fn insert_current_thumbnail(
+    conn: &mut PgConnection,
+    vault: folio_core::models::VaultId,
+    document_id: Uuid,
+    trace: Option<&super::JobTraceContext>,
+) -> Result<Uuid> {
+    let current = requested_processing_job(
+        conn,
+        vault,
+        document_id,
+        ProcessingRequest::Current { force: false },
+    )
+    .await?;
+    let job = match current.revision_id() {
+        Some(revision_id) => JobType::GenerateRevisionThumbnail {
+            document_id,
+            revision_id,
+        },
+        None => JobType::GenerateThumbnail { document_id },
+    };
+    insert_job(conn, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, trace).await
 }
 
 #[derive(Clone)]
@@ -159,6 +217,99 @@ impl PostgresJobQueue {
             .await
     }
 
+    pub(super) async fn repair_current_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        stage: folio_core::models::ProcessingStage,
+    ) -> Result<bool> {
+        use folio_core::models::ProcessingStage;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(repo_err("Failed to repair pending processing"))?;
+        let document = super::processing_scope::postgres::document(&mut tx, document_id).await?;
+        let request = match super::processing_scope::bind_requested_processing(
+            document.as_ref(),
+            vault,
+            document_id,
+            ProcessingRequest::Current { force: false },
+            super::REVISION_DISPATCH_ENABLED,
+        ) {
+            Ok(job) => job,
+            Err(Error::NotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let ready: bool = sqlx::query_scalar(
+            "SELECT (CASE WHEN $2 THEN d.ocr_status = 'pending' AND d.file_path IS NOT NULL
+                      ELSE d.embed_status = 'pending' AND d.content IS NOT NULL AND d.content <> ''
+                           AND d.ocr_status NOT IN ('pending', 'running')
+                     END)
+                AND NOT EXISTS (
+                    SELECT 1 FROM jobs j
+                    WHERE j.status IN ('pending', 'processing')
+                      AND j.payload->'data'->>'document_id' = d.id::text
+                      AND (j.origin_vault_id IS NULL OR j.origin_vault_id = d.vault_id)
+                )
+             FROM documents d WHERE d.id = $1",
+        )
+        .bind(document_id)
+        .bind(stage == ProcessingStage::Ocr)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(repo_err("Failed to repair pending processing"))?;
+        if !ready {
+            return Ok(false);
+        }
+
+        let job = match stage {
+            ProcessingStage::Ocr => request,
+            ProcessingStage::Embed => {
+                JobType::embedding_for_revision(document_id, request.revision_id())
+            }
+        };
+        insert_job(
+            &mut tx,
+            job,
+            Utc::now(),
+            DEFAULT_MAX_ATTEMPTS,
+            super::JobTraceContext::current().as_ref(),
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(repo_err("Failed to repair pending processing"))?;
+        Ok(true)
+    }
+
+    pub(super) async fn enqueue_requested_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        request: ProcessingRequest,
+        trace: Option<super::JobTraceContext>,
+    ) -> Result<Uuid> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(repo_err("Failed to schedule current processing"))?;
+        let job = requested_processing_job(&mut tx, vault, document_id, request).await?;
+        let id = insert_job(
+            &mut tx,
+            job,
+            Utc::now(),
+            DEFAULT_MAX_ATTEMPTS,
+            trace.as_ref(),
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(repo_err("Failed to schedule current processing"))?;
+        Ok(id)
+    }
+
     #[instrument(skip(self, trace))]
     pub async fn enqueue_with_max_attempts(
         &self,
@@ -184,6 +335,75 @@ impl PostgresJobQueue {
             .await
             .map_err(repo_err("Failed to commit enqueue"))?;
         Ok(id)
+    }
+
+    pub(super) async fn reembed_documents(&self) -> Result<usize> {
+        let candidates: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT d.id, d.vault_id FROM documents d
+             JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
+             WHERE d.deleted_at IS NULL AND d.purge_requested_at IS NULL
+               AND d.ocr_status NOT IN ('pending', 'running')
+               AND d.content IS NOT NULL AND d.content <> ''",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err("Failed to enqueue re-embedding"))?;
+        let mut queued = 0;
+        for (document_id, vault) in candidates {
+            let vault = folio_core::models::VaultId(vault);
+            match self.reembed_current_document(vault, document_id).await {
+                Ok(true) => queued += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::error!(%document_id, %error, "Failed to enqueue re-embedding")
+                }
+            }
+        }
+        Ok(queued)
+    }
+
+    async fn reembed_current_document(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+    ) -> Result<bool> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(repo_err("Failed to enqueue re-embedding"))?;
+        let scope = super::processing_scope::postgres::document(&mut tx, document_id).await?;
+        let current = match super::processing_scope::bind_requested_processing(
+            scope.as_ref(),
+            vault,
+            document_id,
+            ProcessingRequest::Current { force: false },
+            super::REVISION_DISPATCH_ENABLED,
+        ) {
+            Ok(job) => job,
+            Err(Error::NotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let updated = sqlx::query(
+            "UPDATE documents SET embed_status = 'pending'
+             WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL
+               AND purge_requested_at IS NULL AND ocr_status NOT IN ('pending', 'running')
+               AND content IS NOT NULL AND content <> ''
+               AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL)",
+        )
+        .bind(document_id).bind(vault.0)
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err("Failed to enqueue re-embedding"))?;
+        if updated.rows_affected() != 1 {
+            return Ok(false);
+        }
+        let job = JobType::embedding_for_revision(document_id, current.revision_id());
+        insert_job(&mut tx, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, None).await?;
+        tx.commit()
+            .await
+            .map_err(repo_err("Failed to enqueue re-embedding"))?;
+        Ok(true)
     }
 
     /// Claim the next job; a row that cannot be read is marked failed and skipped

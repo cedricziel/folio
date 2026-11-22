@@ -166,7 +166,7 @@ impl SearchService for SqliteSearchService {
         query.push(LIVE_CHUNK_DOCUMENT).push(" AND d.vault_id = ");
         query.push_bind(vault.to_string());
         if let Some(filter) = filter {
-            push_filter(&mut query, filter)?;
+            push_filter(&mut query, vault, filter)?;
         }
         query
             .push(") d ON d.id = c.document_id WHERE c.model = ")

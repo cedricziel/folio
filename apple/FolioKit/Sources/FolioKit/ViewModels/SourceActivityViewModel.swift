@@ -7,6 +7,7 @@ public final class SourceActivityViewModel {
     public private(set) var isLoading = false
     public private(set) var hasLoaded = false
     public private(set) var error: String?
+    public private(set) var showingTrash = false
     private let vaultID: UUID
     private let service: any SourceActivityService
     private var requestID = UUID()
@@ -14,6 +15,14 @@ public final class SourceActivityViewModel {
     public init(vaultID: UUID, service: any SourceActivityService) {
         self.vaultID = vaultID
         self.service = service
+    }
+
+    public func showTrash(_ deleted: Bool) async {
+        guard deleted != showingTrash else { return }
+        showingTrash = deleted
+        sources = []
+        hasLoaded = false
+        await load()
     }
 
     public func load() async {
@@ -27,7 +36,15 @@ public final class SourceActivityViewModel {
             }
         }
         do {
-            let sources = try await service.sourceActivity(vaultID: vaultID)
+            let sources: [SourceActivity]
+            if showingTrash {
+                guard let lifecycle = service as? any SourceLifecycleService else {
+                    throw FolioError.unreadableResponse
+                }
+                sources = try await lifecycle.sourceActivity(vaultID: vaultID, deleted: true)
+            } else {
+                sources = try await service.sourceActivity(vaultID: vaultID)
+            }
             guard requestID == request, !Task.isCancelled else { return }
             guard sources.allSatisfy({ $0.vaultID == vaultID }) else { throw FolioError.unreadableResponse }
             self.sources = sources

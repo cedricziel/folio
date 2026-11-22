@@ -16,6 +16,20 @@ fn rejects_unknown_filters_instead_of_broadening_results() {
 }
 
 #[test]
+fn older_saved_queries_reject_typed_metadata_they_cannot_restore() {
+    assert!(serde_json::from_value::<SavedViewQuery>(json!({
+        "version": 1,
+        "filters": {
+            "metadata_exact": {
+                "field_id": "74485eef-3736-4d2c-81ea-4a410901241e",
+                "value": {"kind": "boolean", "value": false}
+            }
+        }
+    }))
+    .is_err());
+}
+
+#[test]
 fn rejects_invalid_date_range() {
     let query: SavedViewQuery = serde_json::from_value(json!({
         "version": 1,

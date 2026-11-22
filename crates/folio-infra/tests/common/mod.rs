@@ -179,6 +179,7 @@ pub fn imported_document(
         file_path: format!("documents/{external_id}/original"),
         content_sha256: "ab".repeat(32),
         file_size: 42,
+        archive: None,
         document_date: Some("2019-03-04".parse().unwrap()),
         created_at: added,
         updated_at: added + chrono::Duration::days(2),

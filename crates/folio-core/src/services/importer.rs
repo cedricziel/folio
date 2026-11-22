@@ -69,7 +69,7 @@ impl Importer {
             self.documents
                 .finalize_verified_upload(vault, document.id, &identity)
                 .await?;
-            if let Err(e) = self.queue.enqueue_processing(document.id).await {
+            if let Err(e) = self.queue.enqueue_processing(vault, document.id).await {
                 tracing::error!("Failed to queue processing of {}: {e}", document.id);
             }
             self.documents
@@ -201,7 +201,7 @@ impl DocumentImporter for Importer {
         }
         // The file is stored, so a failed enqueue leaves a usable document
         // that can be reprocessed.
-        if let Err(e) = self.queue.enqueue_processing(document.id).await {
+        if let Err(e) = self.queue.enqueue_processing(vault, document.id).await {
             tracing::error!("Failed to queue processing of {}: {e}", document.id);
         }
 

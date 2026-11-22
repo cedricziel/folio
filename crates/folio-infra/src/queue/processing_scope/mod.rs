@@ -70,7 +70,7 @@ fn stages(job: &JobType) -> &'static [&'static str] {
 }
 
 #[derive(sqlx::FromRow)]
-struct DocumentScope {
+pub(super) struct DocumentScope {
     vault_id: String,
     unavailable: bool,
     revision_id: Option<String>,
@@ -83,6 +83,54 @@ impl DocumentScope {
             Some(id) => self.revision_id.as_deref() == Some(id.to_string().as_str()),
             None => self.legacy_current,
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ProcessingRequest {
+    Current { force: bool },
+    InitialUpload,
+}
+
+pub(super) fn bind_requested_processing(
+    document: Option<&DocumentScope>,
+    vault: VaultId,
+    document_id: Uuid,
+    request: ProcessingRequest,
+    revision_dispatch: bool,
+) -> Result<JobType> {
+    let document = document
+        .filter(|document| !document.unavailable && vault.to_string() == document.vault_id)
+        .ok_or_else(|| Error::NotFound {
+            entity_type: "Document",
+            id: document_id.to_string(),
+        })?;
+    let force = match request {
+        ProcessingRequest::Current { force } => force,
+        ProcessingRequest::InitialUpload if document.legacy_current => false,
+        ProcessingRequest::InitialUpload => {
+            return Err(Error::Conflict(
+                "Upload revision is no longer current".into(),
+            ));
+        }
+    };
+    let revision = document
+        .revision_id
+        .as_deref()
+        .filter(|_| revision_dispatch || !document.legacy_current)
+        .map(str::parse)
+        .transpose()
+        .map_err(repo_err)?;
+    match revision {
+        Some(revision_id) => Ok(JobType::ProcessDocumentRevision {
+            document_id,
+            revision_id,
+            force,
+        }),
+        None if document.legacy_current => Ok(JobType::ProcessDocument { document_id, force }),
+        None => Err(Error::Conflict(
+            "Processing revision is no longer current".into(),
+        )),
     }
 }
 
