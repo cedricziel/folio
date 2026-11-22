@@ -1,6 +1,6 @@
 use folio_core::models::{
     FolderAfterImport, FolderConfig, IngestClaim, IngestItemKey, IngestResult,
-    IngestionSourceInput, SourceConfig, SourceKind, SourceOrigin,
+    IngestionSourceInput, SourceConfig, SourceKind, SourceOrigin, SourceStatus,
 };
 use folio_infra::Database;
 
@@ -61,7 +61,7 @@ async fn scope_contract(database: Database) {
             source.id,
             IngestionSourceInput {
                 enabled: false,
-                ..input
+                ..input.clone()
             },
         )
         .await
@@ -79,6 +79,23 @@ async fn scope_contract(database: Database) {
         .unwrap()
         .outcomes
         .is_empty());
+    repos.sources.update(vault, source.id, input).await.unwrap();
+    let pending_key = IngestItemKey::folder(b"pending.pdf", b"stage", b"trash during poll");
+    let IngestClaim::Claimed(pending) = repos
+        .ingest_outcomes
+        .claim(
+            vault,
+            source.id,
+            SourceKind::Folder,
+            SourceOrigin::Managed,
+            &pending_key,
+            &fingerprint,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("enabled source must claim before trash")
+    };
     repos.sources.delete(vault, source.id).await.unwrap();
     assert!(matches!(
         repos
@@ -88,13 +105,38 @@ async fn scope_contract(database: Database) {
                 source.id,
                 SourceKind::Folder,
                 SourceOrigin::Managed,
-                &key,
+                &IngestItemKey::folder(b"new.pdf", b"stage", b"observed after trash"),
                 &fingerprint
             )
             .await
             .unwrap(),
         IngestClaim::Busy
     ));
+    assert!(
+        repos
+            .ingest_outcomes
+            .complete(&pending, IngestResult::Skipped, None, None)
+            .await
+            .unwrap()
+            .is_none(),
+        "a poll already in progress must not publish after trash"
+    );
+    let failure = SourceStatus {
+        last_error: Some("test failure".into()),
+        ..Default::default()
+    };
+    assert!(repos
+        .ingest_outcomes
+        .record_source_status(
+            vault,
+            source.id,
+            SourceOrigin::Managed,
+            SourceKind::Folder,
+            &failure
+        )
+        .await
+        .is_err());
+    assert!(repos.sources.status(source.id).await.unwrap().is_none());
     let configured = uuid::Uuid::new_v4();
     assert!(matches!(
         repos
