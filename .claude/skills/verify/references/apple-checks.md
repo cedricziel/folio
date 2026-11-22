@@ -57,6 +57,8 @@ refreshes. `OAuthRecoveryTests` checks concurrent sessions, failed token persist
 stale writes after sign-out or another sign-in, offline retry, and lost responses.
 `OAuthRefreshLockTests` uses temporary files to verify exclusion, cancellation,
 and lock release after failure.
+`OAuthTransientRefreshTests` checks credential recovery after transient token
+errors, definitive refusals, and multiple callers sharing a stalled refresh.
 
 On an isolated macOS test account, check startup with unavailable credentials,
 retry after access recovers, and reauthentication after expiry. Confirm that

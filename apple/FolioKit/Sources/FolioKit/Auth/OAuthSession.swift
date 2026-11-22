@@ -151,7 +151,8 @@ public actor OAuthSession: BearerTokenProvider {
             switch try persist(pendingSave, replacing: pendingBaseline) {
             case .saved:
                 changed()
-                return pendingSave.isSignedIn ? pendingSave.tokens.accessToken : nil
+                guard pendingSave.isSignedIn else { return nil }
+                if let token = usableToken(pendingSave) { return token }
             case let .superseded(current):
                 if let token = usableToken(current) { return token }
             }
@@ -175,21 +176,24 @@ public actor OAuthSession: BearerTokenProvider {
         let request = OAuthRequests.refresh(
             endpoint: credentials.tokenEndpoint, clientID: credentials.clientID, refreshToken: refreshToken)
         var updated = credentials
-        // A lost response or failed save must never let another process replay a consumed token.
+        // Keep the marker across process exits while a rotation is unconfirmed.
         updated.refreshPending = true
         try store.save(updated)
         let baseline = updated
         do {
             updated.tokens = try await client.tokens(for: request, keeping: refreshToken)
-        } catch OAuthFailure.unreachable {
-            try persist(credentials, replacing: baseline)
-            throw FolioError.unreachable
-        } catch OAuthFailure.invalidGrant {
+        } catch OAuthFailure.invalidGrant, OAuthFailure.refused {
             updated.tokens = .signedOut
             updated.refreshPending = nil
             try persist(updated, replacing: baseline)
             changed()
             return nil
+        } catch {
+            // Nothing said the token is dead (this includes cancellation), so keep the credentials and let the
+            // next call refresh again.
+            try persist(credentials, replacing: baseline)
+            if case let OAuthFailure.transient(failure) = error { throw failure }
+            throw error
         }
         updated.refreshPending = nil
         if case let .superseded(current) = try persist(updated, replacing: baseline) { return usableToken(current) }
