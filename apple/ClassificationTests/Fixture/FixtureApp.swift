@@ -6,6 +6,8 @@ import SwiftUI
         WindowGroup {
             if ProcessInfo.processInfo.arguments.contains("--source-lifecycle") {
                 SourceLifecycleFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--workflow-lifecycle") {
+                WorkflowLifecycleFixture()
             } else {
                 ClassificationFixture()
             }
