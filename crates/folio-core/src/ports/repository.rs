@@ -2,14 +2,14 @@
 
 use async_trait::async_trait;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::models::AuditEvent;
 use crate::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentRevision, DocumentType, ExternalRef, FileIdentity, GroupId, Id,
-    ImportedDocument, NewAuditEvent, Principal, ProcessingStage, ProcessingStatus, Setting, Tag,
-    UnverifiedOriginal, UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, UserId,
-    Vault, VaultId, VaultMember, VaultRole,
+    DocumentFilter, DocumentRevision, DocumentRevisionPage, DocumentType, ExternalRef,
+    FileIdentity, GroupId, Id, ImportedDocument, NewAuditEvent, Principal, ProcessingStage,
+    ProcessingStatus, Setting, Tag, UnverifiedOriginal, UpdateCorrespondent, UpdateDocument,
+    UpdateDocumentType, UpdateTag, UserId, Vault, VaultId, VaultMember, VaultRole,
 };
 
 /// Storage source for a thumbnail served for the document's current original.
@@ -62,6 +62,33 @@ pub trait DocumentRepository: Send + Sync {
         before: Option<i64>,
         limit: u32,
     ) -> Result<Vec<DocumentRevision>>;
+
+    async fn revision_page(
+        &self,
+        vault: VaultId,
+        id: Id,
+        before: Option<i64>,
+        limit: Option<u32>,
+    ) -> Result<Option<DocumentRevisionPage>> {
+        let limit = limit.unwrap_or(25);
+        if !(1..=100).contains(&limit) || before.is_some_and(|before| before <= 0) {
+            return Err(Error::Validation("Invalid revision page".into()));
+        }
+        if self.locate(id).await? != Some(vault) {
+            return Ok(None);
+        }
+        let mut revisions = self.list_revisions(vault, id, before, limit + 1).await?;
+        let has_more = revisions.len() > limit as usize;
+        revisions.truncate(limit as usize);
+        let next_before = revisions
+            .last()
+            .filter(|_| has_more)
+            .map(|revision| revision.number);
+        Ok(Some(DocumentRevisionPage {
+            revisions,
+            next_before,
+        }))
+    }
 
     /// Read one specific revision of a live document in this vault.
     async fn find_revision(
