@@ -47,6 +47,8 @@ pub use sqlite::{
     SqliteVaultRepository, SqliteWorkflowRepository,
 };
 
+pub(crate) const OUTBOX_REPLAY_MAX_PAYLOAD_BYTES: i64 = 8 * 1_048_576;
+
 /// The error for an import whose insert hit a unique index: `Conflict` when
 /// the document already exists, otherwise the database error
 async fn import_collision(

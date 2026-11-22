@@ -438,6 +438,12 @@ Inspect its image diffs and update affected baselines before merging.
 
 ## Verify typed metadata fields and options
 
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test outbox_replay`
+with isolated build storage. The shared SQLite/PostgreSQL regression checks the
+8 MiB replay boundary using multibyte UTF-8, complete envelopes, equal-time ID
+ordering, and count limits. It must pass on both backends before exposing large
+metadata transitions through the API.
+
 Run `cargo test -p folio-core --lib --features openapi` for complete long-text event
 snapshots, exact serialized-byte limits, and audience/target validation on decode.
 
