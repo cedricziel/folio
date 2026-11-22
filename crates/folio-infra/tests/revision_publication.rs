@@ -104,8 +104,9 @@ async fn publication_contract(db: Database) {
         store
             .list(&keys::document_prefix(document.id))
             .await
-            .unwrap(),
-        [original.storage_key.clone()]
+            .unwrap()
+            .as_slice(),
+        std::slice::from_ref(&original.storage_key)
     );
     assert_eq!(persistence_counts(&db).await, before);
 
@@ -143,8 +144,9 @@ async fn publication_contract(db: Database) {
         store
             .list(&keys::document_prefix(document.id))
             .await
-            .unwrap(),
-        [original.storage_key.clone()]
+            .unwrap()
+            .as_slice(),
+        std::slice::from_ref(&original.storage_key)
     );
     assert!(matches!(
         documents
