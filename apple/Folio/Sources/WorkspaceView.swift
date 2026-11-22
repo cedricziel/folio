@@ -15,6 +15,7 @@ struct WorkspaceView: View {
     @State private var pendingViewDelete: SavedView?
     @State private var workspace: WorkspaceViewModel
     @State private var activityVault: Vault?
+    @State private var workflowVault: Vault?
 
     init(
         serverURL: URL, service: any FolioService, onSignOut: @escaping () -> Void,
@@ -138,6 +139,12 @@ struct WorkspaceView: View {
         .onChange(of: workspace.selectedVaultID) {
             showTaxonomy = false
             activityVault = nil
+            workflowVault = nil
+        }
+        .sheet(item: $workflowVault) { vault in
+            if let workflowService = service as? any WorkflowLifecycleService {
+                WorkflowLifecycleView(vaultID: vault.id, service: workflowService, canManage: vault.role == .owner)
+            }
         }
         .sheet(item: $activityVault) { vault in
             if let activityService = service as? any SourceActivityService {
@@ -219,6 +226,13 @@ struct WorkspaceView: View {
                     activityVault = workspace.selectedVault
                 } label: {
                     Label("Ingestion activity", systemImage: "tray.and.arrow.down")
+                }
+            }
+            if workspace.selectedVault?.role == .owner, service is any WorkflowLifecycleService {
+                Button {
+                    workflowVault = workspace.selectedVault
+                } label: {
+                    Label("Workflows", systemImage: "arrow.triangle.branch")
                 }
             }
         }

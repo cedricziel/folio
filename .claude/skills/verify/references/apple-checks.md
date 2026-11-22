@@ -180,3 +180,12 @@ trash and restore conflicts, retained outcomes, and failed requests.
 Run `SourceLifecycleUITests` in the ClassificationTests fixture with temporary
 simulator state. Its `--source-lifecycle` launch mode uses in-memory services
 and exercises owner controls, read-only access, retry, and conflicts.
+
+## Apple workflow lifecycle
+
+Run the isolated package suite with `--filter 'WorkflowLifecycleTests|WorkflowLifecycleServiceTests'`.
+These cases cover explicit vault scope, lifecycle metadata, retained runs,
+owner controls, conflicts, retry, and stale asynchronous results.
+Run `WorkflowLifecycleUITests` in ClassificationTests. The `--workflow-lifecycle`
+fixture uses in-memory services and records screenshots for trash, retained
+history, restored workflows, conflict recovery, read-only controls, and retry.
