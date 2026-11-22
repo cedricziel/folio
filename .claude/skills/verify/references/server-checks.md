@@ -225,6 +225,11 @@ PostgreSQL containers; it covers bounded pagination, stable ordering, cursor
 binding, and batched tags with duplicate IDs and vault isolation. Containers are
 removed after the tests. Do not point these tests at an existing archive.
 
+The semantic search contract uses fixed embeddings and each backend's real search
+store. It checks filtered recall beyond the global candidate cutoff, inclusive
+creation start and exclusive end, deterministic score ties, trash exclusion, and
+vault isolation. Run the SQLite and both PostgreSQL configurations.
+
 For paged HTTP browsing, run `cargo test -p folio-api --test vaults browse`.
 The route tests cover bounded continuations, filter/tag enrichment, malformed
 queries, legacy list compatibility, invisible vaults, and membership revocation

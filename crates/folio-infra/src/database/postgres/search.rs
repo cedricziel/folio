@@ -9,14 +9,15 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
-use folio_core::models::{Id, VaultId};
+use folio_core::models::{DocumentFilter, Id, VaultId};
 use folio_core::ports::{EmbeddedChunk, SearchResult, SearchService};
 
+use super::document_repo::push_filter;
 use crate::ai::cosine_similarity;
 
 pub struct PostgresSearchService {
@@ -96,28 +97,32 @@ impl PostgresSearchService {
         model: &str,
         query_embedding: &[f32],
         limit: usize,
+        filter: Option<DocumentFilter>,
     ) -> Result<Vec<SearchResult>> {
         // Best chunk per document; rows of another dimension cannot be compared.
-        let rows: Vec<(Uuid, String, f64)> = sqlx::query_as(
-            "SELECT document_id, text, score FROM (
+        let mut query = QueryBuilder::<Postgres>::new(
+            "SELECT document_id, text, 1 - distance AS score FROM (
                  SELECT DISTINCT ON (c.document_id) c.document_id, c.text,
-                        1 - (c.embedding_vec <=> $1::vector) AS score
-                 FROM document_chunks c JOIN documents d ON d.id = c.document_id
-                 WHERE d.deleted_at IS NULL AND d.vault_id = $5 AND c.model = $2 AND NOT c.stale
-                   AND c.embedding_vec IS NOT NULL AND vector_dims(c.embedding_vec) = $3
-                 ORDER BY c.document_id, c.embedding_vec <=> $1::vector
-             ) best
-             ORDER BY score DESC
-             LIMIT $4",
-        )
-        .bind(vector_literal(query_embedding))
-        .bind(model)
-        .bind(query_embedding.len() as i32)
-        .bind(limit as i64)
-        .bind(vault.0)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(repo_err)?;
+                        c.embedding_vec <=> ",
+        );
+        query.push_bind(vector_literal(query_embedding)).push(
+            "::vector AS distance
+             FROM document_chunks c JOIN (
+                 SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = ",
+        );
+        push_vault_filter(&mut query, vault, filter)?;
+        query
+            .push(") d ON d.id = c.document_id WHERE c.model = ")
+            .push_bind(model)
+            .push(" AND NOT c.stale AND c.embedding_vec IS NOT NULL AND vector_dims(c.embedding_vec) = ")
+            .push_bind(query_embedding.len() as i32)
+            .push(" ORDER BY c.document_id, distance, c.chunk_index) best ORDER BY distance, document_id LIMIT ")
+            .push_bind(i64::try_from(limit).unwrap_or(i64::MAX));
+        let rows: Vec<(Uuid, String, f64)> = query
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repo_err)?;
 
         Ok(rows
             .into_iter()
@@ -135,17 +140,23 @@ impl PostgresSearchService {
         model: &str,
         query_embedding: &[f32],
         limit: usize,
+        filter: Option<DocumentFilter>,
     ) -> Result<Vec<SearchResult>> {
-        let rows: Vec<(Uuid, String, Vec<f32>)> = sqlx::query_as(
+        let mut query = QueryBuilder::<Postgres>::new(
             "SELECT c.document_id, c.text, c.embedding
-             FROM document_chunks c JOIN documents d ON d.id = c.document_id
-             WHERE d.deleted_at IS NULL AND d.vault_id = $2 AND c.model = $1 AND NOT c.stale",
-        )
-        .bind(model)
-        .bind(vault.0)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(repo_err)?;
+             FROM document_chunks c JOIN (
+                 SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = ",
+        );
+        push_vault_filter(&mut query, vault, filter)?;
+        query
+            .push(") d ON d.id = c.document_id WHERE c.model = ")
+            .push_bind(model)
+            .push(" AND NOT c.stale");
+        let rows: Vec<(Uuid, String, Vec<f32>)> = query
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repo_err)?;
 
         let mut best: HashMap<Id, SearchResult> = HashMap::new();
         for (document_id, text, embedding) in rows {
@@ -166,10 +177,23 @@ impl PostgresSearchService {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.document_id.cmp(&b.document_id))
         });
         results.truncate(limit);
         Ok(results)
     }
+}
+
+fn push_vault_filter(
+    query: &mut QueryBuilder<Postgres>,
+    vault: VaultId,
+    filter: Option<DocumentFilter>,
+) -> Result<()> {
+    query.push_bind(vault.0);
+    if let Some(filter) = filter {
+        push_filter(query, filter)?;
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -272,19 +296,20 @@ impl SearchService for PostgresSearchService {
         Ok(count as u64)
     }
 
-    #[instrument(skip(self, query_embedding, limit), fields(limit = limit as i64))]
-    async fn search(
+    #[instrument(skip(self, query_embedding, limit, filter), fields(limit = limit as i64))]
+    async fn search_filtered(
         &self,
         vault: VaultId,
         model: &str,
         query_embedding: &[f32],
         limit: usize,
+        filter: Option<DocumentFilter>,
     ) -> Result<Vec<SearchResult>> {
         if self.use_pgvector {
-            self.search_pgvector(vault, model, query_embedding, limit)
+            self.search_pgvector(vault, model, query_embedding, limit, filter)
                 .await
         } else {
-            self.search_in_rust(vault, model, query_embedding, limit)
+            self.search_in_rust(vault, model, query_embedding, limit, filter)
                 .await
         }
     }
