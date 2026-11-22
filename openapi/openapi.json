@@ -3317,6 +3317,204 @@
         ]
       }
     },
+    "/api/documents/{id}/revisions": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "listDocumentRevisions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Exclusive upper bound on revision number.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size from 1 to 100. Defaults to 25.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revision history, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionPageView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/documents/{id}/revisions/{revision_id}/download": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "downloadDocumentRevision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Original bytes of this revision",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileContent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/documents/{id}/thumbnail": {
       "get": {
         "tags": [
@@ -5115,6 +5313,204 @@
           },
           "401": {
             "description": "Sign-in required"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/documents/{id}/revisions": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "listVaultDocumentRevisions",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Exclusive upper bound on revision number.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size from 1 to 100. Defaults to 25.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revision history in the requested vault",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionPageView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/documents/{id}/revisions/{revision_id}/download": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "downloadVaultDocumentRevision",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Original bytes of this revision in the requested vault",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileContent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
           },
           "403": {
             "description": "The credential lacks the required scope or the request is not permitted"
@@ -8310,6 +8706,113 @@
           "sandbox",
           "production"
         ]
+      },
+      "RevisionOriginalView": {
+        "type": "object",
+        "required": [
+          "mime_type",
+          "verification"
+        ],
+        "properties": {
+          "byte_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verification": {
+            "$ref": "#/components/schemas/RevisionVerification"
+          }
+        }
+      },
+      "RevisionPageView": {
+        "type": "object",
+        "required": [
+          "revisions"
+        ],
+        "properties": {
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "revisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevisionView"
+            }
+          }
+        }
+      },
+      "RevisionVerification": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "verified",
+          "unavailable"
+        ]
+      },
+      "RevisionView": {
+        "type": "object",
+        "required": [
+          "id",
+          "number",
+          "is_current",
+          "created_at",
+          "original"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_current": {
+            "type": "boolean"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "original": {
+            "$ref": "#/components/schemas/RevisionOriginalView"
+          },
+          "restored_from_revision_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
       },
       "RunStatus": {
         "type": "string",
