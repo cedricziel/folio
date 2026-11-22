@@ -75,9 +75,22 @@ struct DocumentFileHistoryView: View {
                 if revision.isCurrent { Text("Current").foregroundStyle(Color.inkMuted) }
             }
             if let filename = revision.filename { Text(filename) }
-            HStack {
-                Text(revision.createdAt, format: .dateTime.year().month().day().hour().minute())
-                if let size = revision.byteSize { Text(size, format: .byteCount(style: .file)) }
+            VStack(alignment: .leading) {
+                HStack {
+                    Text(revision.mimeType)
+                    if let size = revision.byteSize { Text(size, format: .byteCount(style: .file)) }
+                }
+                HStack {
+                    Text(revision.createdAt, format: .dateTime.year().month().day().hour().minute())
+                    if let actor = revision.createdBy { Text(actor) }
+                }
+                if let source = revision.restoredFromRevisionID {
+                    if let prior = revisions.first(where: { $0.id == source }) {
+                        Text("Restored from revision \(prior.number)")
+                    } else {
+                        Text("Restored from an earlier revision")
+                    }
+                }
             }
             .font(FolioTheme.Typography.meta)
             .foregroundStyle(Color.inkMuted)
@@ -86,6 +99,8 @@ struct DocumentFileHistoryView: View {
             } else {
                 if revision.verification == .pending {
                     Text("Verification pending").foregroundStyle(Color.inkMuted)
+                } else {
+                    Text("Verified original").foregroundStyle(Color.inkMuted)
                 }
                 if requestedRevision?.id == revision.id {
                     ProgressView("Fetching original…")

@@ -9,6 +9,8 @@ public struct DocumentFileRevision: Identifiable, Equatable, Sendable {
     public let number: Int64
     public let isCurrent: Bool
     public let createdAt: Date
+    public let createdBy: String?
+    public let restoredFromRevisionID: UUID?
     public let filename: String?
     public let mimeType: String
     public let verification: Verification

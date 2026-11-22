@@ -1064,6 +1064,7 @@ private let documentJSON = """
         #expect(revision.number == 2)
         #expect(!revision.isCurrent)
         #expect(revision.verification == .verified)
+        #expect(revision.createdBy == "editor")
         #expect(revision.byteSize == 17)
 
         StubURLProtocol.handler = { request, _ in

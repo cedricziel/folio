@@ -599,7 +599,9 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
                     }
                     return try DocumentFileRevision(
                         id: Self.uuid(revision.id), number: revision.number, isCurrent: revision.isCurrent,
-                        createdAt: revision.createdAt, filename: revision.original.filename,
+                        createdAt: revision.createdAt, createdBy: revision.createdBy,
+                        restoredFromRevisionID: revision.restoredFromRevisionId.map(Self.uuid),
+                        filename: revision.original.filename,
                         mimeType: revision.original.mimeType, verification: verification,
                         byteSize: revision.original.byteSize
                     )
