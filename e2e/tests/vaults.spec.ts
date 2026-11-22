@@ -513,5 +513,8 @@ test("save the current Inbox and reopen it on a phone", async ({ page }, testInf
   await expect(page.getByRole("heading", { name, level: 1 })).toBeVisible();
   await page.getByText("Edit saved view", { exact: true }).click();
   await expect(page.getByText("Inbox documents only", { exact: true })).toBeVisible();
+  const documentTitle = page.getByRole("heading", { name: personalDocument.title, exact: true });
+  await expect(documentTitle).toBeVisible();
+  expect(await documentTitle.evaluate((title) => title.scrollWidth <= title.clientWidth)).toBe(true);
   await capture(page, testInfo, "reopened-inbox-view.png");
 });
