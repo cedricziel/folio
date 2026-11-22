@@ -1050,6 +1050,39 @@ impl DocumentRepository for PostgresDocumentRepository {
             actor.as_ref(),
         )
         .await?;
+        if let Some(archive) = &document.archive {
+            let identity = &archive.identity;
+            let byte_size = i64::try_from(identity.byte_size).map_err(|_| {
+                Error::Validation("Archive byte size exceeds database range".into())
+            })?;
+            sqlx::query(
+                "INSERT INTO document_files (
+                    id, document_id, vault_id, role, storage_key, original_filename, mime_type,
+                    verification_state, sha256, byte_size)
+                 VALUES ($1, $2, $3, 'archival', $4, $5, $6, 'verified', $7, $8)",
+            )
+            .bind(archive.id)
+            .bind(id)
+            .bind(vault.0)
+            .bind(&identity.storage_key)
+            .bind(&archive.filename)
+            .bind(&identity.mime_type)
+            .bind(&identity.sha256)
+            .bind(byte_size)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+            sqlx::query(
+                "INSERT INTO document_revision_artifacts (file_id, document_id, vault_id, revision_id)
+                 VALUES ($1, $2, $3, $2)",
+            )
+            .bind(archive.id)
+            .bind(id)
+            .bind(vault.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        }
         sqlx::query(
             "UPDATE documents SET current_revision_id = $1, file_size = $3
              WHERE id = $1 AND vault_id = $2",
