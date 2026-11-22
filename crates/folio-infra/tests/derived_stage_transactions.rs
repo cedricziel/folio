@@ -405,10 +405,10 @@ async fn contract(db: &Database) {
     assert_eq!(
         repos
             .documents
-            .thumbnail_result_prefix(vault, doc)
+            .thumbnail_location(vault, doc)
             .await
             .unwrap(),
-        None
+        Some(folio_core::ports::ThumbnailLocation::Legacy)
     );
     assert_eq!(
         repos
@@ -469,10 +469,10 @@ async fn contract(db: &Database) {
     assert_eq!(
         repos
             .documents
-            .thumbnail_result_prefix(vault, doc)
+            .thumbnail_location(vault, doc)
             .await
             .unwrap(),
-        None
+        Some(folio_core::ports::ThumbnailLocation::Legacy)
     );
     assert_eq!(
         repos
@@ -502,10 +502,12 @@ async fn contract(db: &Database) {
     assert_eq!(
         repos
             .documents
-            .thumbnail_result_prefix(vault, doc)
+            .thumbnail_location(vault, doc)
             .await
             .unwrap(),
-        Some(preview.result_prefix())
+        Some(folio_core::ports::ThumbnailLocation::Committed(
+            preview.result_prefix()
+        ))
     );
     assert_eq!(
         repos
@@ -544,10 +546,12 @@ async fn contract(db: &Database) {
     assert_eq!(
         repos
             .documents
-            .thumbnail_result_prefix(vault, doc)
+            .thumbnail_location(vault, doc)
             .await
             .unwrap(),
-        Some(preview.result_prefix())
+        Some(folio_core::ports::ThumbnailLocation::Committed(
+            preview.result_prefix()
+        ))
     );
 
     legacy_claim_is_fenced_by_replacement(db).await;
@@ -629,7 +633,7 @@ async fn legacy_claim_is_fenced_by_replacement(db: &Database) {
     assert_eq!(
         repos
             .documents
-            .thumbnail_result_prefix(vault, doc)
+            .thumbnail_location(vault, doc)
             .await
             .unwrap(),
         None

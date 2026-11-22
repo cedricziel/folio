@@ -179,6 +179,8 @@ Use the workspace suite when several crates change.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test thumbnails` with isolated build
 storage. The real-router tests cover generated JPEG bytes, unavailable thumbnails,
 store failures, bearer authentication, read scope, and vault/account isolation.
+The replacement regression checks that the API returns 404 and the web preview
+shows its placeholder until the current revision commits a preview.
 The server smoke test in `.claude/skills/verify/scripts/smoke.sh` also retrieves
 the processed fixture's thumbnail and checks its JPEG bytes and private no-store
 headers. Use that skill's disposable instance wrapper, never a user archive.

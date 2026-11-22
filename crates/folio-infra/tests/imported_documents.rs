@@ -3,8 +3,9 @@ mod common;
 use chrono::{Duration, SubsecRound, Utc};
 use folio_core::models::{
     CreateCorrespondent, CreateDocumentType, CreateTag, DocumentStatus, EntryBody, EntryKind,
-    EntryPageQuery, Id, ImportedDocument, ImportedNote, MetadataFieldInput, MetadataKind,
-    MetadataValue, ProcessingStage, ProcessingStatus, ReviewOrigin, SourceKind, UserId,
+    EntryPageQuery, FileIdentity, Id, ImportedDocument, ImportedNote, MetadataFieldInput,
+    MetadataKind, MetadataValue, ProcessingStage, ProcessingStatus, ReviewOrigin, SourceKind,
+    UserId,
 };
 use folio_core::mutation::with_actor;
 use folio_core::ports::{MetadataFieldRepository, MetadataValueRepository};
@@ -31,6 +32,61 @@ async fn note_external_id(db: &Database, id: Id) -> Option<String> {
             .fetch_one(pool)
             .await
             .unwrap(),
+    }
+}
+
+async fn original_revision_identity(db: &Database, id: Id) -> (String, String, i64, String, i64) {
+    let sql = "SELECT f.storage_key, f.sha256, f.byte_size, f.verification_state, r.number
+               FROM documents d
+               JOIN document_revisions r ON r.id = d.current_revision_id
+               JOIN document_files f ON f.id = r.original_file_id
+               WHERE d.id = $1";
+    match db {
+        Database::Sqlite(pool) => sqlx::query_as(sql)
+            .bind(id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        Database::Postgres(pool) => sqlx::query_as(sql).bind(id).fetch_one(pool).await.unwrap(),
+    }
+}
+
+async fn execute_failure_trigger(db: &Database) {
+    let (sqlite, postgres) = (
+        "CREATE TRIGGER refuse_import_embedding BEFORE INSERT ON jobs
+         WHEN NEW.job_type = 'generate_embedding' BEGIN SELECT RAISE(ABORT, 'refused'); END",
+        "CREATE FUNCTION refuse_import_embedding() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN IF NEW.job_type = 'generate_embedding' THEN RAISE EXCEPTION 'refused'; END IF;
+         RETURN NEW; END $$;
+         CREATE TRIGGER refuse_import_embedding BEFORE INSERT ON jobs
+         FOR EACH ROW EXECUTE FUNCTION refuse_import_embedding()",
+    );
+    match db {
+        Database::Sqlite(pool) => sqlx::raw_sql(sqlite)
+            .execute(pool)
+            .await
+            .map(|_| ())
+            .unwrap(),
+        Database::Postgres(pool) => sqlx::raw_sql(postgres)
+            .execute(pool)
+            .await
+            .map(|_| ())
+            .unwrap(),
+    };
+}
+
+async fn imported_storage_counts(db: &Database, id: Id) -> (i64, i64, i64) {
+    let sql = "SELECT
+                 (SELECT COUNT(*) FROM documents WHERE id = $1),
+                 (SELECT COUNT(*) FROM document_files WHERE document_id = $1),
+                 (SELECT COUNT(*) FROM document_revisions WHERE document_id = $1)";
+    match db {
+        Database::Sqlite(pool) => sqlx::query_as(sql)
+            .bind(id.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        Database::Postgres(pool) => sqlx::query_as(sql).bind(id).fetch_one(pool).await.unwrap(),
     }
 }
 
@@ -97,6 +153,11 @@ async fn contract(db: Database) {
     let added = (Utc::now() - Duration::days(2000)).trunc_subsecs(6);
     let noted = added + Duration::hours(5);
     let mut document = common::imported_document(vault, "7", added);
+    let original = b"verified Paperless original";
+    let identity =
+        FileIdentity::from_bytes(document.file_path.clone(), "application/pdf", original);
+    document.file_size = identity.byte_size;
+    document.content_sha256 = identity.sha256.clone();
     document.correspondent_id = Some(correspondent.id);
     document.document_type_id = Some(kind.id);
     document.tag_ids = vec![tag.id];
@@ -134,6 +195,17 @@ async fn contract(db: Database) {
     assert_eq!(read.mime_type.as_deref(), Some("application/pdf"));
     assert_eq!(read.original_filename.as_deref(), Some("bill.pdf"));
     assert_eq!(read.source.kind, SourceKind::Import);
+    assert_eq!(read.file_size, Some(identity.byte_size));
+    assert_eq!(
+        original_revision_identity(&db, document.id).await,
+        (
+            identity.storage_key.clone(),
+            identity.sha256.clone(),
+            identity.byte_size as i64,
+            "verified".into(),
+            1,
+        )
+    );
     assert_eq!(read.created_by, Some(admin.clone()));
     assert_eq!(read.ocr_status, ProcessingStatus::Done);
     assert_eq!(read.embed_status, ProcessingStatus::Pending);
@@ -210,6 +282,17 @@ async fn contract(db: Database) {
         .replay(0, Utc::now() - Duration::minutes(5), 100)
         .await
         .unwrap();
+    let revision_events = events
+        .iter()
+        .filter(|event| {
+            event
+                .envelope
+                .as_ref()
+                .is_some_and(|envelope| envelope.event_type() == "document.revision_created")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(revision_events.len(), 1);
+    assert_eq!(revision_events[0].origin, EventOrigin::Import);
     let created_events = events
         .iter()
         .filter(|e| {
@@ -310,6 +393,42 @@ async fn contract(db: Database) {
             });
         assert!(!announced, "{case}");
     }
+    assert!(r.jobs.dequeue().await.unwrap().is_none());
+
+    execute_failure_trigger(&db).await;
+    let failed = common::imported_document(vault, "transaction-failure", added);
+    let failed_id = failed.id;
+    assert!(r
+        .documents
+        .create_imported(vault, failed.clone())
+        .await
+        .is_err());
+    assert_eq!(imported_storage_counts(&db, failed_id).await, (0, 0, 0));
+    assert_eq!(
+        r.documents
+            .find_by_external_ref(vault, &failed.external_ref)
+            .await
+            .unwrap(),
+        None
+    );
+    let failed_events = r
+        .outbox
+        .replay(0, Utc::now() - Duration::minutes(5), 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            event
+                .event
+                .as_ref()
+                .is_some_and(|event| event.document_id() == failed_id)
+                || event
+                    .envelope
+                    .as_ref()
+                    .and_then(|envelope| envelope.document_id())
+                    == Some(failed_id)
+        });
+    assert_eq!(failed_events.count(), 0);
     assert!(r.jobs.dequeue().await.unwrap().is_none());
 }
 

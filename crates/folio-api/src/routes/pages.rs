@@ -17,7 +17,9 @@ use folio_core::models::{
     UpdateDocument, UserId, VaultId,
 };
 use folio_core::mutation::{current_actor, current_lineage, with_actor, with_lineage};
-use folio_core::ports::{keys, StoredObject, UploadReceiptKey, PREVIEW_PAGE_LIMIT};
+use folio_core::ports::{
+    keys, StoredObject, ThumbnailLocation, UploadReceiptKey, PREVIEW_PAGE_LIMIT,
+};
 use folio_core::services::NewUpload;
 use folio_core::services::UploadOutcome;
 use folio_infra::JobType;
@@ -555,12 +557,11 @@ async fn document_thumbnail(
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
-    let key = state
-        .document_repo
-        .thumbnail_result_prefix(vault, id)
-        .await?
-        .map(|prefix| format!("{prefix}/thumbnail.jpg"))
-        .unwrap_or_else(|| keys::thumbnail(id));
+    let (key, can_read_original) = match state.document_repo.thumbnail_location(vault, id).await? {
+        Some(ThumbnailLocation::Committed(prefix)) => (format!("{prefix}/thumbnail.jpg"), false),
+        Some(ThumbnailLocation::Legacy) => (keys::thumbnail(id), true),
+        None => return Ok(placeholder_svg(placeholder_sheet(100, 100))),
+    };
     match state.store.get(&key).await {
         Ok(object) => return Ok(stream_object(object, "image/jpeg")),
         Err(folio_core::Error::NotFound { .. }) => {}
@@ -574,7 +575,7 @@ async fn document_thumbnail(
         .map(|m| m.starts_with("image/"))
         .unwrap_or(false);
 
-    if is_image {
+    if can_read_original && is_image {
         if let Some(ref file_path) = document.file_path {
             if let Ok(object) = state.store.get(file_path).await {
                 let mime = document
@@ -635,18 +636,16 @@ async fn document_page_thumbnail(
         return Err(ApiError::not_found("Page not found"));
     }
 
-    let key = state
-        .document_repo
-        .thumbnail_result_prefix(vault, id)
-        .await?
-        .map(|prefix| {
-            if page == 1 && document.mime_type.as_deref() != Some("application/pdf") {
-                format!("{prefix}/thumbnail.jpg")
-            } else {
-                format!("{prefix}/pages/{page}.jpg")
-            }
-        })
-        .unwrap_or_else(|| keys::page(id, page));
+    let key = match state.document_repo.thumbnail_location(vault, id).await? {
+        Some(ThumbnailLocation::Committed(prefix))
+            if page == 1 && document.mime_type.as_deref() != Some("application/pdf") =>
+        {
+            format!("{prefix}/thumbnail.jpg")
+        }
+        Some(ThumbnailLocation::Committed(prefix)) => format!("{prefix}/pages/{page}.jpg"),
+        Some(ThumbnailLocation::Legacy) => keys::page(id, page),
+        None => return Ok(placeholder_svg(placeholder_sheet(100, 140))),
+    };
     match state.store.get(&key).await {
         Ok(object) => return Ok(stream_object(object, "image/jpeg")),
         Err(folio_core::Error::NotFound { .. }) => {}

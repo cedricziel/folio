@@ -12,6 +12,13 @@ use crate::models::{
     VaultMember, VaultRole,
 };
 
+/// Storage source for a thumbnail served for the document's current original.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ThumbnailLocation {
+    Legacy,
+    Committed(String),
+}
+
 /// Repository for document operations
 ///
 /// Every method that addresses a document or vocabulary entry takes the vault
@@ -54,9 +61,10 @@ pub trait DocumentRepository: Send + Sync {
         id: Id,
     ) -> Result<Vec<crate::models::ProcessingStageSummary>>;
 
-    /// Latest committed thumbnail prefix in this live document's active vault, including prior runs.
-    /// Returns `None` when only legacy thumbnail storage exists or the document is unavailable.
-    async fn thumbnail_result_prefix(&self, vault: VaultId, id: Id) -> Result<Option<String>>;
+    /// Latest committed thumbnail for the current original. Legacy keys apply only to the first version.
+    /// Returns `None` for an unavailable document or a replacement without a committed preview.
+    async fn thumbnail_location(&self, vault: VaultId, id: Id)
+        -> Result<Option<ThumbnailLocation>>;
 
     /// List all documents with optional filtering
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>>;

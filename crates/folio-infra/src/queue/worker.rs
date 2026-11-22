@@ -2020,12 +2020,11 @@ mod tests {
 
             let stored = f.repo.find_by_id(vault, doc.id).await.unwrap().unwrap();
             assert_eq!(stored.page_count, Some(pages));
-            let prefix = f
-                .repo
-                .thumbnail_result_prefix(vault, doc.id)
-                .await
-                .unwrap()
-                .unwrap();
+            let Some(folio_core::ports::ThumbnailLocation::Committed(prefix)) =
+                f.repo.thumbnail_location(vault, doc.id).await.unwrap()
+            else {
+                panic!("processed PDF has no committed thumbnail");
+            };
             assert!(f
                 .storage
                 .exists(&format!("{prefix}/pages/{PREVIEW_PAGE_LIMIT}.jpg"))
@@ -2887,10 +2886,9 @@ mod tests {
             }
         };
         let path = folio_core::ports::keys::original(id);
-        f.storage
-            .put(&path, b"not a real png".as_slice().into())
-            .await
-            .unwrap();
+        let bytes = b"not a real png";
+        let identity = folio_core::models::FileIdentity::from_bytes(&path, "image/png", bytes);
+        f.storage.put(&path, bytes.as_slice().into()).await.unwrap();
         let now = chrono::Utc::now();
         f.repo
             .create_imported(
@@ -2906,7 +2904,8 @@ mod tests {
                     original_filename: Some("scan.png".into()),
                     mime_type: Some("image/png".into()),
                     file_path: path,
-                    content_sha256: "ab".repeat(32),
+                    content_sha256: identity.sha256,
+                    file_size: identity.byte_size,
                     document_date: None,
                     created_at: now,
                     updated_at: now,

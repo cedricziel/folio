@@ -10,6 +10,7 @@ use crate::error::{Error, Result};
 use crate::events::{DocumentEvent, EventOrigin, EventSnapshot, OutboxEvent};
 use crate::models::{
     WebhookDocument, WebhookEntry, WebhookPayload, WorkflowRun, WorkflowTarget, WorkflowTrigger,
+    WorkflowTriggerRegistry,
 };
 use crate::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, FileMetadata,
@@ -84,21 +85,60 @@ impl WorkflowEngine {
         {
             return Ok(Vec::new());
         }
-        let (trigger, document_id, vault, snapshot) = if let Some(event) = &outbox_event.event {
-            let Some(trigger) = Self::trigger_for(event) else {
-                return Ok(Vec::new());
-            };
+        let legacy = outbox_event.event.as_ref().and_then(Self::trigger_for);
+        let envelope_type = outbox_event
+            .envelope
+            .as_ref()
+            .map(DomainEventEnvelope::event_type);
+        let candidates = WorkflowTriggerRegistry::built_in()
+            .resolve_candidates(envelope_type, legacy.as_ref().map(WorkflowTrigger::as_str));
+        let mut runs = Vec::new();
+        let mut first_error = None;
+        for definition in candidates {
+            let trigger = WorkflowTrigger::parse(&definition.event_type)
+                .expect("built-in trigger has a wire name");
+            match self
+                .handle_candidate(outbox_event, trigger, legacy == Some(trigger))
+                .await
+            {
+                Ok(candidate_runs) => runs.extend(candidate_runs),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(runs), Err)
+    }
+
+    async fn handle_candidate(
+        &self,
+        outbox_event: &OutboxEvent,
+        trigger: WorkflowTrigger,
+        use_projection: bool,
+    ) -> Result<Vec<WorkflowRun>> {
+        let (document_id, vault, snapshot, occurred_at) = if use_projection {
+            let event = outbox_event
+                .event
+                .as_ref()
+                .expect("legacy trigger has a projection");
             let ctx = self.load_context(outbox_event, event).await?;
-            (trigger, event.document_id(), ctx.vault_id, Some(ctx))
+            (
+                event.document_id(),
+                ctx.vault_id,
+                Some(ctx),
+                outbox_event.created_at,
+            )
         } else if let Some(envelope) = &outbox_event.envelope {
-            let Some(trigger) = WorkflowTrigger::parse(envelope.event_type()) else {
-                return Ok(Vec::new());
-            };
             if trigger.entry_transition().is_some() {
                 let Some(document_id) = envelope.document_id() else {
                     return Ok(Vec::new());
                 };
-                (trigger, document_id, envelope.vault_id(), None)
+                (
+                    document_id,
+                    envelope.vault_id(),
+                    None,
+                    envelope.occurred_at(),
+                )
             } else if matches!(
                 trigger,
                 WorkflowTrigger::DocumentTitleChanged
@@ -107,7 +147,12 @@ impl WorkflowEngine {
                     | WorkflowTrigger::DocumentTypeChanged
             ) {
                 let ctx = Self::metadata_context(envelope)?;
-                (trigger, ctx.document_id, ctx.vault_id, Some(ctx))
+                (
+                    ctx.document_id,
+                    ctx.vault_id,
+                    Some(ctx),
+                    envelope.occurred_at(),
+                )
             } else {
                 return Ok(Vec::new());
             }
@@ -152,14 +197,6 @@ impl WorkflowEngine {
                     None => {
                         let envelope = outbox_event.envelope.as_ref();
                         let body = if let Some(ctx) = &snapshot {
-                            let occurred_at = if outbox_event.event.is_some() {
-                                outbox_event.created_at
-                            } else {
-                                envelope.map_or(
-                                    outbox_event.created_at,
-                                    DomainEventEnvelope::occurred_at,
-                                )
-                            };
                             self.build_payload(trigger, ctx, occurred_at, envelope)
                                 .await?
                         } else {
