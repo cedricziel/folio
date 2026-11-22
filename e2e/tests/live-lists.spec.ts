@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import type { APIRequestContext, Page } from "@playwright/test";
-import { expect, test, uniqueTitle, samplePdf } from "./fixtures";
+import { expect, test, uniqueTitle } from "./fixtures";
 
 type Document = {
   id: string;
@@ -177,7 +178,7 @@ test("Inbox receives uploads, updates processing, and reconciles review transiti
       file: {
         name: "live-list.pdf",
         mimeType: "application/pdf",
-        buffer: readFileSync(samplePdf),
+        buffer: readFileSync(path.join(__dirname, "../fixtures/live-list-review.pdf")),
       },
     },
   });
@@ -193,14 +194,11 @@ test("Inbox receives uploads, updates processing, and reconciles review transiti
           const current = await (
             await request.get(`/api/documents/${document.id}`)
           ).json();
-          return (
-            current.ocr_status === "done" &&
-            ["done", "skipped"].includes(current.embed_status)
-          );
+          return [current.ocr_status, current.embed_status];
         },
         { timeout: 30_000 },
       )
-      .toBe(true);
+      .toEqual(["done", expect.stringMatching(/^(done|skipped)$/)]);
     await expect(row).toContainText("Needs a look");
 
     const reviewed = await request.put(`/api/documents/${document.id}/review`, {
