@@ -20,6 +20,7 @@ mod metadata_field;
 mod metadata_value;
 mod processing_attempt;
 mod push;
+mod revision_publication;
 mod saved_view;
 mod settings;
 mod source;
@@ -79,6 +80,7 @@ pub use push::{
     NotificationPreferences, NotificationScope, PendingNotification, PushDevice, PushDeviceState,
     PushEnvironment, PushToken, PushTokenKind, VaultSelection,
 };
+pub use revision_publication::{RevisionPublication, RevisionPublicationSource};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
     AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,
