@@ -6,17 +6,35 @@ public struct SourceActivityView: View {
     private let vaultID: UUID
     private let service: any SourceActivityService
     private let openDocument: (UUID) -> Void
+    private let canManage: Bool
 
-    public init(vaultID: UUID, service: any SourceActivityService, openDocument: @escaping (UUID) -> Void) {
+    public init(
+        vaultID: UUID, service: any SourceActivityService, canManage: Bool = false,
+        openDocument: @escaping (UUID) -> Void
+    ) {
         self.vaultID = vaultID
         self.service = service
         self.openDocument = openDocument
+        self.canManage = canManage
         _model = State(initialValue: SourceActivityViewModel(vaultID: vaultID, service: service))
     }
 
     public var body: some View {
         NavigationStack {
             List {
+                if service is any SourceLifecycleService {
+                    Picker(
+                        "Sources",
+                        selection: Binding(
+                            get: { model.showingTrash },
+                            set: { deleted in Task { await model.showTrash(deleted) } }
+                        )
+                    ) {
+                        Text("Active").tag(false)
+                        Text("Trash").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                }
                 if let error = model.error {
                     Section {
                         Text(error).foregroundStyle(Color.danger)
@@ -28,16 +46,25 @@ public struct SourceActivityView: View {
                 }
                 if model.hasLoaded && model.sources.isEmpty {
                     ContentUnavailableView(
-                        "No ingestion sources", systemImage: "tray",
-                        description: Text("Add a folder or mailbox in the web settings to see its activity here."))
+                        model.showingTrash ? "No sources in Trash" : "No ingestion sources", systemImage: "tray",
+                        description: Text(
+                            model.showingTrash
+                                ? "Sources you move to Trash appear here with their import history."
+                                : "Add a folder or mailbox in the web settings to see its activity here."))
                 }
                 ForEach(model.sources) { source in
                     NavigationLink {
-                        SourceActivityDetail(source: source, service: service, openDocument: openDocument)
+                        if let lifecycle = service as? any SourceLifecycleService {
+                            SourceLifecycleDetailView(
+                                source: source, service: lifecycle, canManage: canManage,
+                                onChanged: { Task { await model.load() } }, openDocument: openDocument)
+                        } else {
+                            SourceActivityDetail(source: source, service: service, openDocument: openDocument)
+                        }
                     } label: {
                         VStack(alignment: .leading, spacing: FolioTheme.Spacing.space1) {
                             Text(source.name).foregroundStyle(Color.ink)
-                            Text(source.health.title)
+                            Text(source.deletedAt != nil ? "In Trash" : source.health.title)
                                 .font(FolioTheme.Typography.bodySm)
                                 .foregroundStyle(source.health == .unavailable ? Color.danger : Color.inkMuted)
                         }

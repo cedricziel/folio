@@ -144,10 +144,14 @@ struct WorkspaceView: View {
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showTaxonomy = false } } }
             }
         }
-        .onChange(of: workspace.selectedVaultID) { showTaxonomy = false }
+        .onChange(of: workspace.selectedVaultID) {
+            showTaxonomy = false
+            activityVault = nil
+        }
         .sheet(item: $activityVault) { vault in
             if let activityService = service as? any SourceActivityService {
-                SourceActivityView(vaultID: vault.id, service: activityService) { documentID in
+                SourceActivityView(vaultID: vault.id, service: activityService, canManage: vault.role == .owner) {
+                    documentID in
                     activityVault = nil
                     workspace.open(documentID, vaultID: vault.id)
                 }
