@@ -270,6 +270,8 @@ impl VaultRepository for PostgresVaultRepository {
         .execute(&mut *tx)
         .await
         .map_err(db)?;
+        sqlx::query("UPDATE archival_attempts SET state = 'skipped', reason = 'Vault deleted' WHERE state = 'queued' AND document_id IN (SELECT id FROM documents WHERE vault_id = $1)")
+            .bind(id.0).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("UPDATE workflow_runs SET status = 'failed', finished_at = $2, last_error = 'Vault deleted before workflow execution completed' WHERE status = 'pending' AND workflow_id IN (SELECT id FROM workflows WHERE vault_id = $1)")
             .bind(id.0).bind(now).execute(&mut *tx).await.map_err(db)?;
         emit_vault(&mut tx, &changed, "deleted", Uuid::new_v4()).await?;

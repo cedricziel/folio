@@ -30,10 +30,12 @@ pub trait ArchivalRepository: Send + Sync {
     /// Verify the original bytes against `source.original` before conversion.
     /// For Ready, validate the exact output bytes and store them create-only at
     /// `keys::revision_artifact(document, revision, attempt)` before calling.
-    /// Only the worker owning the staged write may clean it up after a rejected
-    /// publication. After an ambiguous result it must resolve the commit before
-    /// deleting any bytes. Workers must fence off any other publisher using that
-    /// attempt ID before cleaning up. Committed objects are retained for
+    /// Only the worker owning the staged write may consider cleanup. After ANY
+    /// rejected or ambiguous publication, call `retains_archive` before deleting:
+    /// a rejected replay can follow a successful commit now hidden by a retry or
+    /// lifecycle change. Retain the bytes if that check succeeds or fails to resolve.
+    /// Workers must also fence off any other publisher using that attempt ID
+    /// before checking retention and cleaning up. Committed objects are retained for
     /// document-prefix purge, including if a newer attempt replaces them.
     async fn complete_archive(
         &self,
@@ -42,7 +44,7 @@ pub trait ArchivalRepository: Send + Sync {
         completion: &ArchiveCompletion,
     ) -> Result<bool>;
 
-    /// Check for a committed object after an ambiguous publication, even if a retry,
+    /// Check for a committed object after any rejected or ambiguous publication, even if a retry,
     /// replacement, move or trash operation has since hidden the result.
     async fn retains_archive(&self, document: Id, revision: Id, attempt: Id) -> Result<bool>;
 }

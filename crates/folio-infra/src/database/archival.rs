@@ -194,6 +194,15 @@ macro_rules! write_archive {
             {
                 return Ok(false);
             }
+            // Serialize admission/publication with vault delete and restore too.
+            // Read the source again after the lock to observe their committed state.
+            if !sqlite {
+                sqlx::query("SELECT id FROM vaults WHERE id = $1 FOR SHARE")
+                    .bind($id(vault.0))
+                    .execute(&mut *$tx)
+                    .await
+                    .map_err(repo_error)?;
+            }
             let current = sqlx::query_as::<_, SourceRow>(SOURCE)
                 .bind($id(document))
                 .bind($id(vault.0))

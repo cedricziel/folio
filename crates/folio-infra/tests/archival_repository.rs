@@ -262,6 +262,17 @@ async fn archival_contract(db: Database) {
         .retains_archive(id, source.revision_id, third)
         .await
         .unwrap());
+    // A rejected replay does not authorize removing the previously committed bytes.
+    assert_eq!(
+        store
+            .get(&output.file.storage_key)
+            .await
+            .unwrap()
+            .into_bytes()
+            .await
+            .unwrap(),
+        Bytes::from_static(b"validated archive fixture")
+    );
     let new_source = archives.current_source(vault, id).await.unwrap().unwrap();
     assert_eq!(new_source.revision_id, replacement);
     assert_eq!(new_source.original, source.original);
@@ -289,9 +300,36 @@ async fn archival_contract(db: Database) {
         moved.state,
         ArchiveState::Completed(ArchiveCompletion::Skipped("Document moved".into()))
     );
+    // Restoring a vault must not resurrect work admitted before its deletion.
+    let vault_pending = Id::new_v4();
+    assert!(archives
+        .enqueue_archive(&moved.source, vault_pending, Some(moved.id))
+        .await
+        .unwrap());
+    repos.vaults.delete(other_vault).await.unwrap();
+    assert!(archives
+        .current_attempt(other_vault, id)
+        .await
+        .unwrap()
+        .is_none());
+    repos.vaults.restore(other_vault).await.unwrap();
+    assert!(!archives
+        .complete_archive(&moved.source, vault_pending, &skipped)
+        .await
+        .unwrap());
+    assert_eq!(
+        archives
+            .current_attempt(other_vault, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        ArchiveState::Completed(ArchiveCompletion::Skipped("Vault deleted".into()))
+    );
+
     let final_attempt = Id::new_v4();
     assert!(archives
-        .enqueue_archive(&moved.source, final_attempt, Some(moved.id))
+        .enqueue_archive(&moved.source, final_attempt, Some(vault_pending))
         .await
         .unwrap());
     assert!(archives
