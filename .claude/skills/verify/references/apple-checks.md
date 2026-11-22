@@ -189,3 +189,39 @@ owner controls, conflicts, retry, and stale asynchronous results.
 Run `WorkflowLifecycleUITests` in ClassificationTests. The `--workflow-lifecycle`
 fixture uses in-memory services and records screenshots for trash, retained
 history, restored workflows, conflict recovery, read-only controls, and retry.
+
+## Verify Apple vault management
+
+Use the isolated package procedure above for `ManagementRequestTests`,
+`VaultManagementTests`, and `WorkspaceTests`. The adapter tests cover query strings,
+server base paths, explicit vault scope, missing-scope guidance, and empty grant
+responses. The model tests cover retained recovery metadata, rejected revocations,
+member-role reloads, and library state after access or account-default changes.
+
+`VaultLifecycleUITests` in `apple/ClassificationTests` launches the production vault
+management view with an in-memory service through `--vault-lifecycle`. It checks
+owner metadata, member controls, history, viewer restrictions, and recovery from
+an empty catalog. Inspect its retained screenshots after running the isolated UI
+fixture. The fixture does not access a server, app credentials, or the Keychain.
+
+Before merging native changes, run the package tests and unsigned macOS and iOS
+Simulator builds. Static parsing and formatting do not verify Swift types or UI
+behavior. Use a fresh simulator or isolated test account with a disposable server
+for the following checks:
+
+- As an owner, create and rename a vault, choose an account default, grant user and
+  group access, change a role, and revoke a grant. Check the retained history.
+- Confirm that a rejected last-owner change keeps the current grant visible and
+  shows the server error. Choose another default before deleting a vault.
+- As a viewer, inspect lifecycle metadata and confirm that owner controls and
+  owner history are absent.
+- Delete and restore a vault. Check that creation attribution and history remain.
+  With no active vault, open management, restore a retained vault, and return to
+  its library. Confirm that no unscoped document or saved-view request occurs.
+- Refresh after the selected vault is revoked or its role changes. Check that
+  stale results and selection clear. A changed default must preserve an accessible
+  selected vault and its query.
+
+Inspect the affected screens in light and dark appearances and at large Dynamic
+Type sizes. Confirm that owner actions, recovery controls, and server errors remain
+reachable. Never use the signed-in app profile or the user's Keychain.

@@ -8,6 +8,8 @@ import SwiftUI
                 SourceLifecycleFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--workflow-lifecycle") {
                 WorkflowLifecycleFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--vault-lifecycle") {
+                VaultLifecycleFixture()
             } else {
                 ClassificationFixture()
             }
