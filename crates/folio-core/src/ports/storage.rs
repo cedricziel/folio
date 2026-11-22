@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
-use crate::models::{FileIdentity, Id};
+use crate::models::{FileIdentity, Id, VaultId};
 
 /// Key layout for everything Folio stores for a document.
 pub mod keys {
@@ -228,7 +228,7 @@ pub enum ProcessingStatus {
 #[async_trait]
 pub trait ProcessingQueue: Send + Sync {
     /// Schedule full processing for a newly stored document
-    async fn enqueue_processing(&self, document_id: Id) -> Result<()>;
+    async fn enqueue_processing(&self, vault: VaultId, document_id: Id) -> Result<()>;
 
     /// Current processing status of a document
     async fn processing_status(&self, document_id: Id) -> Result<ProcessingStatus>;

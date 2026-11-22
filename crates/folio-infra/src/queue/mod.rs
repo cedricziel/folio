@@ -14,6 +14,7 @@ pub(crate) use postgres::{
     insert_current_thumbnail as insert_current_thumbnail_postgres,
     insert_job as insert_job_postgres,
 };
+use processing_scope::ProcessingRequest;
 use sqlite::SqliteJobQueue;
 pub(crate) use sqlite::{
     insert_current_processing as insert_current_processing_sqlite,
@@ -363,10 +364,20 @@ impl JobQueue {
         document_id: Uuid,
         force: bool,
     ) -> Result<Uuid> {
+        self.enqueue_requested_processing(vault, document_id, ProcessingRequest::Current { force })
+            .await
+    }
+
+    async fn enqueue_requested_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        request: ProcessingRequest,
+    ) -> Result<Uuid> {
         let trace = JobTraceContext::current();
         dispatch!(
             self,
-            enqueue_current_processing(vault, document_id, force, trace)
+            enqueue_requested_processing(vault, document_id, request, trace)
         )
     }
 
@@ -563,8 +574,12 @@ impl JobQueue {
 
 #[async_trait]
 impl ProcessingQueue for JobQueue {
-    async fn enqueue_processing(&self, document_id: Uuid) -> Result<()> {
-        self.enqueue(JobType::process_document(document_id))
+    async fn enqueue_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+    ) -> Result<()> {
+        self.enqueue_requested_processing(vault, document_id, ProcessingRequest::InitialUpload)
             .await
             .map(|_| ())
     }
