@@ -2020,12 +2020,11 @@ mod tests {
 
             let stored = f.repo.find_by_id(vault, doc.id).await.unwrap().unwrap();
             assert_eq!(stored.page_count, Some(pages));
-            let prefix = f
-                .repo
-                .thumbnail_result_prefix(vault, doc.id)
-                .await
-                .unwrap()
-                .unwrap();
+            let Some(folio_core::ports::ThumbnailLocation::Committed(prefix)) =
+                f.repo.thumbnail_location(vault, doc.id).await.unwrap()
+            else {
+                panic!("processed PDF has no committed thumbnail");
+            };
             assert!(f
                 .storage
                 .exists(&format!("{prefix}/pages/{PREVIEW_PAGE_LIMIT}.jpg"))

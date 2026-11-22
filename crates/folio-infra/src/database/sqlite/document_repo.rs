@@ -662,21 +662,38 @@ impl DocumentRepository for SqliteDocumentRepository {
         row.map(TryInto::try_into).transpose()
     }
 
-    async fn thumbnail_result_prefix(&self, vault: VaultId, id: Id) -> Result<Option<String>> {
-        sqlx::query_scalar(
-            "SELECT r.result_prefix FROM processing_stage_runs r
-             JOIN documents d ON d.id = r.document_id AND d.vault_id = r.vault_id
+    async fn thumbnail_location(
+        &self,
+        vault: VaultId,
+        id: Id,
+    ) -> Result<Option<folio_core::ports::ThumbnailLocation>> {
+        use folio_core::ports::ThumbnailLocation;
+        let row: Option<(Option<String>, bool)> = sqlx::query_as(
+            "SELECT (
+                 SELECT r.result_prefix FROM processing_stage_runs r
+                 WHERE r.document_id = d.id AND r.vault_id = d.vault_id
+                   AND r.stage = 'thumbnail' AND r.state = 'completed' AND r.result_prefix IS NOT NULL
+                   AND (r.revision_id = d.current_revision_id OR (r.revision_id IS NULL AND (
+                       d.current_revision_id IS NULL OR current_revision.number = 1
+                   )))
+                 ORDER BY r.created_at DESC, r.updated_at DESC, r.id DESC LIMIT 1
+             ), (d.current_revision_id IS NULL OR COALESCE(current_revision.number = 1, FALSE))
+             FROM documents d
              JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
-             WHERE d.id = ? AND d.vault_id = ? AND d.deleted_at IS NULL
-               AND d.purge_requested_at IS NULL
-               AND r.stage = 'thumbnail' AND r.state = 'completed' AND r.result_prefix IS NOT NULL
-             ORDER BY r.created_at DESC, r.updated_at DESC, r.id DESC LIMIT 1",
+             LEFT JOIN document_revisions current_revision ON current_revision.id = d.current_revision_id
+               AND current_revision.document_id = d.id AND current_revision.vault_id = d.vault_id
+             WHERE d.id = ? AND d.vault_id = ? AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
         .fetch_optional(&self.pool)
         .await
-        .map_err(map_sqlx_error)
+        .map_err(map_sqlx_error)?;
+        Ok(match row {
+            Some((Some(prefix), _)) => Some(ThumbnailLocation::Committed(prefix)),
+            Some((None, true)) => Some(ThumbnailLocation::Legacy),
+            _ => None,
+        })
     }
 
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
