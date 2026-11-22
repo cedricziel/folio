@@ -41,7 +41,7 @@ import XCTest
         let restore = app.buttons["Restore vault"].firstMatch
         XCTAssertTrue(restore.waitForExistence(timeout: 5), app.debugDescription)
         restore.tap()
-        let confirmation = app.buttons["vault-restore-confirmation"]
+        let confirmation = app.buttons["vault-restore-confirmation"].firstMatch
         guard confirmation.waitForExistence(timeout: 5) else {
             XCTFail("The restore confirmation action is missing.\n\(app.debugDescription)")
             return
