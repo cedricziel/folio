@@ -83,6 +83,7 @@ public final class WorkspaceViewModel {
     public private(set) var isLoadingSavedViews = false
     public private(set) var hasMoreSavedViews = false
     public private(set) var isSavingView = false
+    private var vaultGeneration = 0
     private var viewGeneration = 0
     private var viewsAfter: UUID?
     private let rootService: any FolioService
@@ -113,16 +114,33 @@ public final class WorkspaceViewModel {
 
     public func loadVaults() async {
         guard !isReady else { return }
+        await refreshVaults()
+    }
+
+    public func refreshVaults() async {
+        vaultGeneration += 1
+        let generation = vaultGeneration
         discoveryError = nil
         do {
             let catalog = try await rootService.vaults()
-            guard !Task.isCancelled, !isReady else { return }
+            guard !Task.isCancelled, generation == vaultGeneration else { return }
+            let previousRole = selectedVault?.role
+            let previousID = selectedVaultID
             self.catalog = catalog
-            selectedVaultID = catalog.defaultVaultID
-            resetBrowsers()
+            if !catalog.vaults.contains(where: { $0.id == selectedVaultID }) {
+                selectedVaultID = catalog.defaultVaultID
+            }
+            if !isReady || previousID != selectedVaultID || previousRole != selectedVault?.role {
+                destination = .inbox
+                resetBrowsers()
+            }
             isReady = true
         } catch {
-            guard !Task.isCancelled, !isReady else { return }
+            guard !Task.isCancelled, generation == vaultGeneration else { return }
+            catalog = .empty
+            selectedVaultID = nil
+            isReady = false
+            resetBrowsers()
             discoveryError = error.localizedDescription
         }
     }
@@ -207,7 +225,7 @@ public final class WorkspaceViewModel {
     }
 
     public func loadSavedViews(more: Bool = false) async {
-        guard isReady, !isLoadingSavedViews, !more || hasMoreSavedViews else { return }
+        guard isReady, selectedVaultID != nil, !isLoadingSavedViews, !more || hasMoreSavedViews else { return }
         let generation = viewGeneration
         let source = service
         isLoadingSavedViews = true

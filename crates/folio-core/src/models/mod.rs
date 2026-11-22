@@ -19,7 +19,9 @@ mod metadata;
 mod metadata_field;
 mod metadata_value;
 mod processing_attempt;
+mod processing_summary;
 mod push;
+mod revision_publication;
 mod saved_view;
 mod settings;
 mod source;
@@ -51,7 +53,9 @@ pub use import_run::{
     LibrarySample, NewImportItem, NewImportRun, PaperlessLedgerEntry, PaperlessSyncState,
     RunTransition, TaxonomyKind, TaxonomyMapping, IMPORT_CLAIM_TIMEOUT,
 };
-pub use imported_document::{ExternalRef, ImportSource, ImportedDocument, ImportedNote};
+pub use imported_document::{
+    ExternalRef, ImportSource, ImportedArchive, ImportedDocument, ImportedNote,
+};
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
     IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PaperlessConfig,
@@ -68,12 +72,20 @@ pub use metadata_field::{
     name_key as metadata_name_key, MetadataField, MetadataFieldInput, MetadataOption,
     MetadataOptionInput,
 };
-pub use metadata_value::{DocumentMetadata, DocumentMetadataValue, MetadataChange};
+pub use metadata_value::{
+    DocumentMetadata, DocumentMetadataValue, MetadataChange, MetadataExactFilter,
+    MetadataLinkTarget, MetadataSearchCursor, MetadataSearchHit, MetadataSearchPage,
+    MetadataSearchQuery,
+};
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
+pub use processing_summary::ProcessingStageSummary;
 pub use push::{
     valid_push_token, DevicePlatform, DeviceRegistration, DocumentOutcome, NotificationKind,
     NotificationPreferences, NotificationScope, PendingNotification, PushDevice, PushDeviceState,
     PushEnvironment, PushToken, PushTokenKind, VaultSelection,
+};
+pub use revision_publication::{
+    RevisionPublication, RevisionPublicationResult, RevisionPublicationSource,
 };
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
@@ -89,15 +101,18 @@ pub use vault::{
     VaultMember, VaultRole,
 };
 pub use webhook::{
-    NamedRef, WebhookDocument, WebhookEntry, WebhookPayload, WebhookUrls, WorkflowEventIdentity,
-    PAYLOAD_VERSION,
+    NamedRef, WebhookDocument, WebhookEntry, WebhookIngest, WebhookMetadata, WebhookPayload,
+    WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
 };
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 
-pub use workflow_event_conditions::{WorkflowActorCondition, WorkflowEventConditions};
+pub use workflow_event_conditions::{
+    MetadataChangeState, WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
+    WorkflowMetadataConditions,
+};
 pub use workflow_trigger::{
     WorkflowConditionField, WorkflowConditionType, WorkflowTarget, WorkflowTriggerDefinition,
     WorkflowTriggerRegistry,

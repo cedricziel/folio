@@ -67,6 +67,9 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         Vec::new(),
     );
     let state = AppState::new(
+        repos.metadata_fields,
+        repos.metadata_options,
+        repos.metadata_values,
         repos.saved_views,
         repos.documents,
         repos.entries,
@@ -933,6 +936,104 @@ async fn web_editor_creates_an_entry_workflow_with_occurrence_filters() {
         stored["conditions"]["event"],
         json!({
             "subject_id": subject, "actor": {"type": "user", "user_id": "editor"}
+        })
+    );
+}
+
+#[tokio::test]
+async fn trigger_catalog_matches_workflow_choices_and_describes_entry_filters() {
+    let app = test_app().await;
+    let (status, json) = json_request(&app, "GET", "/api/workflows/triggers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let catalog = json.as_array().unwrap();
+    let (status, html) = send(&app, "GET", "/workflows/new", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(catalog.len(), WorkflowTrigger::ALL.len());
+    for choice in catalog {
+        let event_type = choice["event_type"].as_str().unwrap();
+        assert!(html.contains(&format!(r#"value="{event_type}""#)));
+        assert!(WorkflowTrigger::parse(event_type).is_some());
+        if event_type.starts_with("document_note.") || event_type.starts_with("document_comment.") {
+            assert_eq!(choice["target"], "document");
+            assert!(choice["condition_fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field["key"] == "event.subject_id"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn web_editor_configures_typed_ingestion_outcome_filters() {
+    let app = test_app().await;
+    let source = Uuid::new_v4();
+    let form = format!(
+        "name=Failed+poll&trigger=ingest.failed&enabled=on&event_actor=&ingest_source_id={source}&ingest_source_kind=folder&ingest_retryable=true&webhook_url=https%3A%2F%2Fexample.com%2Fhook"
+    );
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/workflows")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let id = response.headers()["location"]
+        .to_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        stored["conditions"]["event"]["ingest"],
+        json!({
+            "source_id": source,
+            "source_kind": "folder",
+            "retryable": true,
+        })
+    );
+    assert_eq!(stored["actions"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn web_editor_configures_exact_custom_metadata_conditions() {
+    let app = test_app().await;
+    let field = Uuid::new_v4();
+    let form = format!(
+        "name=Exact+amount&trigger=document.metadata.changed&enabled=on&event_actor=&metadata_field_id={field}&metadata_kind=decimal&metadata_state=set&metadata_after_enabled=on&metadata_after=9007199254740993.0100&webhook_url=https%3A%2F%2Fexample.com%2Fhook"
+    );
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/workflows")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let id = response.headers()["location"]
+        .to_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        stored["conditions"]["event"]["metadata"],
+        json!({
+            "field_id": field, "kind": "decimal", "state": "set",
+            "after": {"kind": "decimal", "value": "9007199254740993.01"},
         })
     );
 }

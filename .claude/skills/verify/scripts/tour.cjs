@@ -92,10 +92,10 @@ async function idBy(request, url, key, name) {
 }
 
 // Registers a public client (DCR) and returns an authorize URL that shows consent.
-async function consentPath(request) {
+async function consentPath(request, scope) {
   const reg = await request.post("/oauth/register", {
     data: {
-      client_name: "Claude Desktop",
+      client_name: "Folio verification",
       redirect_uris: ["http://127.0.0.1:33418/callback"],
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],
@@ -118,6 +118,12 @@ async function consentPath(request) {
     code_challenge_method: "S256",
     state: "verify",
   });
+  if (scope) {
+    const metadata = await request.get("/.well-known/oauth-protected-resource/api");
+    if (!metadata.ok()) throw new Error(`tour: resource metadata failed ${metadata.status()}`);
+    q.set("resource", (await metadata.json()).resource);
+    q.set("scope", scope);
+  }
   return `/oauth/authorize?${q}`;
 }
 
@@ -126,7 +132,7 @@ async function resolvePath(request, p) {
   if (!m) return p;
   const [token, kind, name] = m;
   if (kind === "setup") return setupPath();
-  if (kind === "consent") return consentPath(request);
+  if (kind === "consent") return consentPath(request, name);
   if (kind === "doc")
     return `/documents/${await idBy(request, "/api/documents", "documents", name)}`;
   if (kind === "workflow")

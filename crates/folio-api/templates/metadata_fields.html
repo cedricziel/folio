@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block screen %}taxonomy{% endblock %}
+{% block title %}Fields - Folio{% endblock %}
+{% block content %}
+<section class="page">
+  <header class="page-head">
+    <nav class="f-crumbs" aria-label="Breadcrumb">
+      <ol><li><a href="{{ "/manage"|vault_url }}">Manage</a></li><li aria-current="page">Fields</li></ol>
+    </nav>
+    <h1 class="title">Fields</h1>
+  </header>
+  {% if true|can_manage %}
+  <section class="panel" aria-labelledby="add-field">
+    <h2 id="add-field" class="heading">Add a field</h2>
+    {% if let Some(message) = error %}<p class="f-notice f-notice-danger" role="alert">{{ message }}</p>{% endif %}
+    <form action="{{ "/manage/fields"|vault_url }}" method="post" class="metadata-form" data-turbo="false">
+      {% include "partials/metadata_csrf.html" %}
+      <label class="f-field" for="field-name">
+        <span class="f-field-label">Name</span>
+        <input class="f-input" id="field-name" name="name" value="{{ draft.name }}" required maxlength="128">
+      </label>
+      <label class="f-field" for="field-kind">
+        <span class="f-field-label">Type</span>
+        <select class="f-input" id="field-kind" name="kind">
+          {% for (kind, label) in kinds %}
+          <option value="{{ kind.as_str() }}"{% if draft.kind.as_str() == kind.as_str() %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="f-field"><span><input type="checkbox" name="required" value="true"{% if draft.required %} checked{% endif %}> Required</span></label>
+      <label class="f-field"><span><input type="checkbox" name="unique" value="true"{% if draft.unique %} checked{% endif %}> Unique in this vault</span></label>
+      <button class="f-btn f-btn-primary" type="submit">Add field</button>
+    </form>
+  </section>
+  {% endif %}
+  {% if rows.is_empty() %}
+  <p class="lede">This vault has no custom fields.</p>
+  {% else %}
+  <div class="f-list">
+    {% for row in rows %}
+    <a class="f-row f-row-plain" href="{{ "/manage/fields"|vault_url }}/{{ row.field.id }}">
+      <div class="row-main">
+        <h2 class="f-row-title">{{ row.field.name }}</h2>
+        <p class="f-row-sub">{{ row.kind_label }}{% if row.field.required %} · Required{% endif %}{% if row.field.unique %} · Unique{% endif %}{% if row.field.deleted_at.is_some() %} · Retired{% endif %}</p>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if let Some(after) = next %}
+  <p><a class="f-btn" href="{{ "/manage/fields"|vault_url }}?after={{ after }}">More fields</a></p>
+  {% endif %}
+</section>
+{% endblock %}

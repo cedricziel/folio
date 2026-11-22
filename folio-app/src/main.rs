@@ -18,8 +18,8 @@ use folio_core::ports::{HealthCheck, RepositoryDocuments, SettingsRepository};
 use folio_core::services::notifications::{NotificationPlanner, NotificationSender, SenderConfig};
 use folio_core::services::{
     backfill_file_sizes, backfill_original_identities, BroadcastConsumer, DispatcherConfig,
-    Importer, IngestPipeline, IngestScheduler, LibraryService, OutboxDispatcher, VaultService,
-    WorkflowEngine,
+    Importer, IngestPipeline, IngestScheduler, IngestWorkflowAccess, LibraryService,
+    OutboxDispatcher, VaultService, WorkflowEngine,
 };
 use folio_core::EventBroadcaster;
 use folio_infra::push::ConfiguredPush;
@@ -130,8 +130,9 @@ async fn main() -> Result<()> {
     let push_grants = repos.grants.clone();
     let push_access = repos.access.clone();
     let push_wake = Arc::new(tokio::sync::Notify::new());
-    let vault_service =
-        Arc::new(VaultService::new(repos.vaults.clone(), repos.members).with_audit(repos.audit));
+    let vault_service = Arc::new(
+        VaultService::new(repos.vaults.clone(), repos.members.clone()).with_audit(repos.audit),
+    );
 
     let stored_documents = document_repo.list_all().await.map(|d| d.len()).unwrap_or(0);
     telemetry::metrics().documents_changed(stored_documents as i64);
@@ -149,25 +150,38 @@ async fn main() -> Result<()> {
     // bridges slow connections, which replay what they missed from the outbox.
     let event_broadcaster = EventBroadcaster::new(100);
 
+    let configured_sources = config.ingest.definitions();
+    let ingest_workflow_access = Arc::new(IngestWorkflowAccess::new(
+        source_repo.clone(),
+        repos.vaults.clone(),
+        repos.members.clone(),
+        &configured_sources,
+        config.auth.required,
+    ));
     let webhook_client = WebhookClient::new();
     let public_url = config.server.base_url();
     // Workflow edits are announced to live clients but never re-trigger workflows.
-    let workflow_runner = Arc::new(WorkflowRunner::new(
-        workflow_repo.clone(),
-        workflow_document_repo,
-        webhook_client.clone(),
-    ));
-    let workflow_engine = Arc::new(WorkflowEngine::new(
-        workflow_repo.clone(),
-        document_repo.clone(),
-        correspondent_repo.clone(),
-        document_type_repo.clone(),
-        Arc::new(StorageFileMetadata::new(store.clone())),
-        public_url.clone(),
-    ));
+    let workflow_runner = Arc::new(
+        WorkflowRunner::new(
+            workflow_repo.clone(),
+            workflow_document_repo,
+            webhook_client.clone(),
+        )
+        .with_ingest_access(ingest_workflow_access.clone()),
+    );
+    let workflow_engine = Arc::new(
+        WorkflowEngine::new(
+            workflow_repo.clone(),
+            document_repo.clone(),
+            correspondent_repo.clone(),
+            document_type_repo.clone(),
+            Arc::new(StorageFileMetadata::new(store.clone())),
+            public_url.clone(),
+        )
+        .with_ingest_access(ingest_workflow_access),
+    );
 
     let source_factory = Arc::new(SourceFactory::new(ledger.clone()));
-    let configured_sources = config.ingest.definitions();
     let ingest_pipeline = Arc::new(
         IngestPipeline::new(
             document_repo.clone(),
@@ -341,6 +355,9 @@ async fn main() -> Result<()> {
         vec![Arc::new(DatabaseHealthCheck::new(database.clone()))];
 
     let mut state = AppState::new(
+        repos.metadata_fields,
+        repos.metadata_options,
+        repos.metadata_values,
         repos.saved_views,
         document_repo.clone(),
         entry_repo,

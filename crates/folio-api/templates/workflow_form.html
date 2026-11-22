@@ -122,6 +122,61 @@
             </div>
         </fieldset>
 
+        <fieldset class="field" data-workflow-form-target="ingestFilter" hidden disabled>
+            <legend class="legend">Only if the source matches</legend>
+            <label for="ingest_source_id">Source ID</label>
+            <input class="input" type="text" id="ingest_source_id" name="ingest_source_id" value="{{ values.ingest_source_id }}">
+            <label for="ingest_source_kind">Source kind</label>
+            <select class="select" id="ingest_source_kind" name="ingest_source_kind">
+                <option value="">Any</option>
+                <option value="folder"{% if values.ingest_kind_is("folder") %} selected{% endif %}>Watched folder</option>
+                <option value="email"{% if values.ingest_kind_is("email") %} selected{% endif %}>Mail account</option>
+            </select>
+            <label for="ingest_reason" data-workflow-form-target="ingestReasonLabel">Reason</label>
+            <input class="input" type="text" id="ingest_reason" name="ingest_reason" value="{{ values.ingest_reason }}" data-workflow-form-target="ingestReason">
+            <label for="ingest_retryable" data-workflow-form-target="ingestRetryLabel">Retry available</label>
+            <select class="select" id="ingest_retryable" name="ingest_retryable" data-workflow-form-target="ingestRetry">
+                <option value="">Any</option>
+                <option value="true"{% if values.ingest_retryable == "true" %} selected{% endif %}>Yes</option>
+                <option value="false"{% if values.ingest_retryable == "false" %} selected{% endif %}>No</option>
+            </select>
+        </fieldset>
+
+        <fieldset class="field" data-workflow-form-target="metadataFilter" hidden disabled>
+            <legend class="legend">Custom field conditions</legend>
+            <label for="metadata-field">Custom field</label>
+            <select class="select" id="metadata-field" name="metadata_field_id">
+                <option value="">Any custom field</option>
+                {% for field in metadata_fields %}<option value="{{ field.value }}"{% if field.selected %} selected{% endif %}>{{ field.label }}</option>{% endfor %}
+            </select>
+            <label for="metadata-kind">Field type</label>
+            <select class="select" id="metadata-kind" name="metadata_kind" data-workflow-form-target="metadataKind" data-action="change->workflow-form#sync">
+                <option value="">Any type</option>
+                {% for kind in metadata_kinds %}<option value="{{ kind.value }}"{% if kind.selected %} selected{% endif %}>{{ kind.label }}</option>{% endfor %}
+            </select>
+            <fieldset data-workflow-form-target="metadataValues" hidden disabled>
+                <legend>Value transition</legend>
+                <label for="metadata-state">Change</label>
+                <select class="select" id="metadata-state" name="metadata_state">
+                    <option value="">Any change</option>
+                    {% for state in metadata_states %}<option value="{{ state.value }}"{% if state.selected %} selected{% endif %}>{{ state.label }}</option>{% endfor %}
+                </select>
+                <p class="hint" data-workflow-form-target="metadataHint"></p>
+                <label class="check"><input type="checkbox" name="metadata_before_enabled" value="on"{% if values.metadata_before_enabled.is_some() %} checked{% endif %}> Match the previous value</label>
+                <label for="metadata-before">Previous value</label>
+                <textarea class="input" id="metadata-before" name="metadata_before" rows="2">{{ values.metadata_before }}</textarea>
+                <label data-workflow-form-target="metadataCurrency" hidden>Previous currency
+                    <input class="input" name="metadata_before_currency" maxlength="3" value="{{ values.metadata_before_currency }}">
+                </label>
+                <label class="check"><input type="checkbox" name="metadata_after_enabled" value="on"{% if values.metadata_after_enabled.is_some() %} checked{% endif %}> Match the new value</label>
+                <label for="metadata-after">New value</label>
+                <textarea class="input" id="metadata-after" name="metadata_after" rows="2">{{ values.metadata_after }}</textarea>
+                <label data-workflow-form-target="metadataCurrency" hidden>New currency
+                    <input class="input" name="metadata_after_currency" maxlength="3" value="{{ values.metadata_after_currency }}">
+                </label>
+            </fieldset>
+        </fieldset>
+
         <p class="f-notice" data-workflow-form-target="discard" hidden>
             Files that match are discarded instead of imported. Nothing else to set up.
         </p>
@@ -131,7 +186,7 @@
                 <legend class="legend">Then Folio does</legend>
                 <p class="hint">Every step runs, in this order. Leave a step empty to skip it.</p>
 
-                <div class="action-card">
+                <div class="action-card" data-workflow-form-target="documentAction">
                     <p class="heading">Add tags</p>
                     {% if action_tags.is_empty() %}
                     <p class="hint">No tags yet. <a href="{{ "/manage"|vault_url }}">Create one</a>.</p>
@@ -142,7 +197,7 @@
                     {% endif %}
                 </div>
 
-                <div class="action-card">
+                <div class="action-card" data-workflow-form-target="documentAction">
                     <label class="heading" for="action_correspondent_id">Set who it is from</label>
                     <select class="select" id="action_correspondent_id" name="action_correspondent_id">
                         <option value="">Leave as is</option>
@@ -150,7 +205,7 @@
                     </select>
                 </div>
 
-                <div class="action-card">
+                <div class="action-card" data-workflow-form-target="documentAction">
                     <label class="heading" for="action_document_type_id">Set the type</label>
                     <select class="select" id="action_document_type_id" name="action_document_type_id">
                         <option value="">Leave as is</option>

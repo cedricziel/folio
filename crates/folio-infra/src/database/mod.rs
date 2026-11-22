@@ -13,6 +13,7 @@ mod health;
 mod ingest_outcomes;
 mod metadata_value;
 pub mod postgres;
+mod processing_summary;
 mod saved_view;
 mod source_lifecycle;
 pub mod sqlite;
@@ -121,8 +122,24 @@ impl From<PgPool> for Database {
     }
 }
 
+const LEGACY_CHUNK_REVISION: &str = "(
+    (d.current_revision_id IS NULL AND NOT EXISTS (
+        SELECT 1 FROM document_revisions history WHERE history.document_id = d.id
+    )) OR EXISTS (
+        SELECT 1 FROM document_revisions r
+        WHERE r.id = d.current_revision_id
+          AND r.document_id = d.id AND r.vault_id = d.vault_id AND r.number = 1
+    )
+)";
+
+const LIVE_CHUNK_DOCUMENT: &str = "d.deleted_at IS NULL AND d.purge_requested_at IS NULL
+    AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = d.vault_id AND v.deleted_at IS NULL)";
+
 /// The ports Folio needs, implemented for one backend
 pub struct Repositories {
+    pub metadata_fields: Arc<dyn folio_core::ports::MetadataFieldRepository>,
+    pub metadata_options: Arc<dyn folio_core::ports::MetadataOptionRepository>,
+    pub metadata_values: Arc<dyn folio_core::ports::MetadataValueRepository>,
     pub entries: Arc<dyn folio_core::ports::DocumentEntryRepository>,
     pub upload_receipts: Arc<dyn folio_core::ports::UploadReceiptRepository>,
     pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
@@ -196,6 +213,18 @@ impl Database {
                     )
                 };
                 Repositories {
+                    metadata_fields: Arc::new(
+                        sqlite::SqliteMetadataFieldRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_options: Arc::new(
+                        sqlite::SqliteMetadataOptionRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_values: Arc::new(
+                        sqlite::SqliteMetadataValueRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     entries: Arc::new(
                         sqlite::SqliteDocumentEntryRepository::new(pool.clone())
                             .with_wake(wake.clone()),
@@ -247,6 +276,18 @@ impl Database {
                     )
                 };
                 Repositories {
+                    metadata_fields: Arc::new(
+                        postgres::PostgresMetadataFieldRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_options: Arc::new(
+                        postgres::PostgresMetadataOptionRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_values: Arc::new(
+                        postgres::PostgresMetadataValueRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     entries: Arc::new(
                         postgres::PostgresDocumentEntryRepository::new(pool.clone())
                             .with_wake(wake.clone()),

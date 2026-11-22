@@ -334,6 +334,16 @@ async fn action(state: &AppState, request: &mut Request, vault: VaultId) -> ApiR
     {
         return Ok(VaultAction::ManageWorkflows);
     }
+    if mutation
+        && path
+            .strip_prefix("/vaults/")
+            .and_then(|tail| tail.split_once('/'))
+            .is_some_and(|(_, tail)| {
+                tail == "metadata-fields" || tail.starts_with("metadata-fields/")
+            })
+    {
+        return Ok(VaultAction::ManageVocabulary);
+    }
     if !mutation || path == "/documents/search" {
         return Ok(VaultAction::Read);
     }
@@ -343,7 +353,15 @@ async fn action(state: &AppState, request: &mut Request, vault: VaultId) -> ApiR
     ) {
         return Ok(VaultAction::CreateDocument);
     }
-    if let Some(tail) = path.strip_prefix("/documents/") {
+    let scoped_metadata = path
+        .strip_prefix("/vaults/")
+        .and_then(|tail| tail.split_once('/'))
+        .and_then(|(_, tail)| tail.strip_prefix("documents/"))
+        .filter(|tail| {
+            tail.split_once('/')
+                .is_some_and(|(_, operation)| operation == "metadata")
+        });
+    if let Some(tail) = scoped_metadata.or_else(|| path.strip_prefix("/documents/")) {
         let (id, operation) = tail.split_once('/').unwrap_or((tail, ""));
         let id = id
             .parse()
@@ -354,7 +372,9 @@ async fn action(state: &AppState, request: &mut Request, vault: VaultId) -> ApiR
         let document = state.document_repo.find_by_id(vault, id).await?;
         let document = match document {
             Some(document) => Some(document),
-            None if lifecycle => state.document_repo.find_trashed_by_id(vault, id).await?,
+            None if lifecycle || scoped_metadata.is_some() => {
+                state.document_repo.find_trashed_by_id(vault, id).await?
+            }
             None => None,
         }
         .ok_or_else(|| ApiError::not_found("Document not found"))?;

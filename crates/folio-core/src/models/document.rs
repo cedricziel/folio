@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{DocumentDate, DocumentSource, Id, ReviewOrigin, UserId, VaultId};
+use super::{DocumentDate, DocumentSource, Id, MetadataExactFilter, ReviewOrigin, UserId, VaultId};
 
 /// A stage of the document processing pipeline that is tracked per document
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,6 +319,10 @@ pub struct DocumentFilter {
     pub created_after: Option<DateTime<Utc>>,
     /// Only documents created strictly before this instant
     pub created_before: Option<DateTime<Utc>>,
+    /// Internal until saved-query clients negotiate support for typed metadata.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub metadata_exact: Option<MetadataExactFilter>,
 }
 
 impl DocumentFilter {

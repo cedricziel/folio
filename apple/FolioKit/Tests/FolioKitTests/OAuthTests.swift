@@ -48,12 +48,14 @@ struct OAuthRequestTests {
         authorizationEndpoint: URL(string: "https://folio.example.com/oauth/authorize")!,
         tokenEndpoint: URL(string: "https://folio.example.com/oauth/token")!,
         registrationEndpoint: URL(string: "https://folio.example.com/oauth/register")!,
-        revocationEndpoint: URL(string: "https://folio.example.com/oauth/revoke")
+        revocationEndpoint: URL(string: "https://folio.example.com/oauth/revoke"),
+        scopesSupported: ["documents:read", "documents:write", "vaults:manage"]
     )
 
     @Test func registrationRequestIsAPublicClientWithACustomSchemeRedirect() throws {
         let request = try OAuthRequests.registration(
-            endpoint: metadata.registrationEndpoint, redirectURI: OAuthConfiguration.redirectURI, clientName: "Folio"
+            endpoint: metadata.registrationEndpoint, redirectURI: OAuthConfiguration.redirectURI, clientName: "Folio",
+            scopes: OAuthConfiguration.scopes(for: metadata)
         )
         #expect(request.httpMethod == "POST")
         #expect(request.url == metadata.registrationEndpoint)
@@ -61,6 +63,7 @@ struct OAuthRequestTests {
         let data = try #require(request.httpBody)
         let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(body["client_name"] as? String == "Folio")
+        #expect(body["scope"] as? String == "documents:read documents:write vaults:manage")
         #expect(body["redirect_uris"] as? [String] == ["com.cedricziel.folio:/oauth/callback"])
         #expect(body["token_endpoint_auth_method"] as? String == "none")
         #expect(body["grant_types"] as? [String] == ["authorization_code", "refresh_token"])
@@ -80,9 +83,31 @@ struct OAuthRequestTests {
         #expect(items["redirect_uri"] == "com.cedricziel.folio:/oauth/callback")
         #expect(items["code_challenge"] == "chal")
         #expect(items["code_challenge_method"] == "S256")
-        #expect(items["scope"] == "documents:read documents:write")
+        #expect(items["scope"] == "documents:read documents:write vaults:manage")
         #expect(items["resource"] == "https://folio.example.com/api")
         #expect(items["state"] == "st")
+    }
+
+    @Test func olderMetadataKeepsSignInWithinDocumentScopes() throws {
+        let old = OAuthMetadata(
+            issuer: metadata.issuer, authorizationEndpoint: metadata.authorizationEndpoint,
+            tokenEndpoint: metadata.tokenEndpoint, registrationEndpoint: metadata.registrationEndpoint,
+            revocationEndpoint: metadata.revocationEndpoint
+        )
+        let request = try OAuthRequests.registration(
+            endpoint: old.registrationEndpoint, redirectURI: OAuthConfiguration.redirectURI,
+            clientName: "Folio", scopes: OAuthConfiguration.scopes(for: old)
+        )
+        let data = try #require(request.httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["scope"] as? String == "documents:read documents:write")
+        let url = OAuthRequests.authorizationURL(
+            metadata: old, clientID: "cached-client", redirectURI: OAuthConfiguration.redirectURI,
+            resource: "https://folio.example.com/api", challenge: "chal", state: "st"
+        )
+        let scope = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "scope" }?
+            .value
+        #expect(scope == "documents:read documents:write")
     }
 
     @Test func tokenRequestsAreFormEncoded() throws {
@@ -108,6 +133,7 @@ final class RouterURLProtocol: URLProtocol, @unchecked Sendable {
     struct Reply {
         var status = 200
         var body = Data()
+        var failure: URLError.Code?
     }
 
     nonisolated(unsafe) static var handler: ((URLRequest, Data) -> Reply)?
@@ -135,6 +161,10 @@ final class RouterURLProtocol: URLProtocol, @unchecked Sendable {
             stream.close()
         }
         let reply = Self.handler?(request, body) ?? Reply(status: 500)
+        if let failure = reply.failure {
+            client?.urlProtocol(self, didFailWithError: URLError(failure))
+            return
+        }
         let response = HTTPURLResponse(
             url: request.url!, statusCode: reply.status, httpVersion: nil,
             headerFields: ["Content-Type": "application/json"]
@@ -321,7 +351,10 @@ final class RouterURLProtocol: URLProtocol, @unchecked Sendable {
             return URLSession(configuration: configuration)
         }
 
-        private func installServer(registrations: Counter, exchanged: @escaping (String) -> Void = { _ in }) {
+        private func installServer(
+            registrations: Counter, tokenReply: RouterURLProtocol.Reply? = nil,
+            exchanged: @escaping (String) -> Void = { _ in }
+        ) {
             RouterURLProtocol.handler = { request, body in
                 switch request.url?.path {
                 case "/.well-known/oauth-authorization-server":
@@ -345,6 +378,7 @@ final class RouterURLProtocol: URLProtocol, @unchecked Sendable {
                     return .init(status: 201, body: Data("{\"client_id\":\"client-9\"}".utf8))
                 case "/oauth/token":
                     exchanged(String(decoding: body, as: UTF8.self))
+                    if let tokenReply { return tokenReply }
                     return .init(
                         body: Data(
                             "{\"access_token\":\"acc\",\"refresh_token\":\"ref\",\"token_type\":\"Bearer\",\"expires_in\":3600}"
@@ -407,6 +441,34 @@ final class RouterURLProtocol: URLProtocol, @unchecked Sendable {
                 try await signIn.signIn(to: server)
             }
             #expect(store.load() == nil)
+        }
+
+        private func signInFailure(_ reply: RouterURLProtocol.Reply) async -> Error? {
+            installServer(registrations: Counter(), tokenReply: reply)
+            let store = InMemoryCredentialStore()
+            let signIn = OAuthSignIn(
+                store: store, clients: InMemoryClientRegistry(), authenticator: FakeAuthenticator(), session: session()
+            )
+            do { try await signIn.signIn(to: server) } catch { return error }
+            return nil
+        }
+
+        @Test func aTimedOutCodeExchangeReadsAsUnreachable() async {
+            let error = await signInFailure(.init(failure: .timedOut))
+            #expect(error as? FolioError == .unreachable)
+        }
+
+        @Test func aServerErrorDuringCodeExchangeReadsAsAServerError() async {
+            let error = await signInFailure(.init(status: 503))
+            #expect(error as? FolioError == .server(status: 503, message: nil))
+        }
+
+        @Test func aRefusedCodeExchangeNamesTheCause() async {
+            let body = Data(#"{"error":"invalid_client","error_description":"Unknown client."}"#.utf8)
+            let error = await signInFailure(.init(status: 401, body: body))
+            #expect(error as? FolioError == .signInFailed("The server refused the sign-in: Unknown client."))
+            let bare = await signInFailure(.init(status: 400, body: Data(#"{"error":"unsupported_grant_type"}"#.utf8)))
+            #expect(bare as? FolioError == .signInFailed("The server refused the sign-in (unsupported_grant_type)."))
         }
 
         @Test func aDeniedAuthorizationIsReported() async {

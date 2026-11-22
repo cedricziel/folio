@@ -54,37 +54,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     }
 
     public func sourceActivity(vaultID: UUID) async throws -> [SourceActivity] {
-        let scoped = LiveFolioService(
-            baseURL: baseURL, tokenProvider: tokenProvider, session: session, telemetry: telemetry,
-            downloadDirectory: downloadDirectory, vaultID: vaultID
-        )
-        return try await scoped.call("sources.activity") {
-            let request = URLRequest(url: scoped.endpoint("api/sources"))
-            let (data, response) = try await scoped.authorizedTransfer(request) { try await session.data(for: $0) }
-            try scoped.check(response, body: data)
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            decoder.dateDecodingStrategy = .custom { decoder in
-                try LenientDateTranscoder().decode(decoder.singleValueContainer().decode(String.self))
-            }
-            let rows = try decoder.decode([SourceActivityWire].self, from: data)
-            return try rows.map { row in
-                guard row.vaultId == vaultID else { throw FolioError.unreadableResponse }
-                let health: SourceActivity.Health
-                if !row.enabled {
-                    health = .off
-                } else if row.status?.lastError != nil {
-                    health = .unavailable
-                } else if row.status?.lastRunAt != nil {
-                    health = .available
-                } else {
-                    health = .notChecked
-                }
-                return SourceActivity(
-                    id: row.id, vaultID: vaultID, name: row.name, health: health, lastCheckedAt: row.status?.lastRunAt
-                )
-            }
-        }
+        try await sourceActivity(vaultID: vaultID, deleted: false)
     }
 
     public func sourceOutcomes(vaultID: UUID, sourceID: UUID, before: Int64?) async throws -> SourceOutcomePage {
@@ -127,8 +97,8 @@ public struct LiveFolioService: FolioService, SourceActivityService {
                 try LenientDateTranscoder().decode(decoder.singleValueContainer().decode(String.self))
             }
             guard let catalog = try? decoder.decode(VaultCatalog.self, from: data),
-                let defaultID = catalog.defaultVaultID,
-                catalog.vaults.contains(where: { $0.id == defaultID })
+                catalog.defaultVaultID.map({ id in catalog.vaults.contains(where: { $0.id == id }) })
+                    ?? catalog.vaults.isEmpty
             else { throw FolioError.unreadableResponse }
             return catalog
         }
@@ -764,13 +734,13 @@ public struct LiveFolioService: FolioService, SourceActivityService {
             return try await work()
         } catch let error as FolioError {
             throw error
-        } catch is URLError {
-            throw FolioError.unreachable
+        } catch let error as URLError {
+            throw FolioError(transport: error)
         } catch let error as ClientError {
             switch error.underlyingError {
             case let folio as FolioError: throw folio
             case let credentials as CredentialStoreError: throw credentials
-            case is URLError: throw FolioError.unreachable
+            case let url as URLError: throw FolioError(transport: url)
             default: throw FolioError.unreadableResponse
             }
         }
@@ -814,23 +784,22 @@ extension Document {
         canEditDocumentDate = raw.value2.canEditDocumentDate ?? false
         canReviewDocument = raw.value2.canReviewDocument ?? false
         reviewed = raw.value2.reviewed
+        processingStages = try (raw.value2.processingStages ?? []).map { stage in
+            guard let kind = ProcessingStageSummary.Stage(rawValue: stage.stage.rawValue),
+                let state = ProcessingStageSummary.State(rawValue: stage.state.rawValue)
+            else { throw FolioError.unreadableResponse }
+            return try ProcessingStageSummary(
+                runID: LiveFolioService.uuid(stage.runId),
+                revisionID: stage.revisionId.map(LiveFolioService.uuid),
+                stage: kind, attempt: Int(stage.attempt), state: state,
+                reason: stage.reasonCode.flatMap { ProcessingStageSummary.Reason(rawValue: $0) },
+                retryAt: stage.retryAt, hasText: stage.hasText
+            )
+        }
         tags = try raw.value2.tags.map {
             try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color, deletedAt: $0.deletedAt)
         }
     }
-}
-
-private struct SourceActivityWire: Decodable {
-    struct Status: Decodable {
-        let lastError: String?
-        let lastRunAt: Date?
-    }
-
-    let id: UUID
-    let vaultId: UUID
-    let name: String
-    let enabled: Bool
-    let status: Status?
 }
 
 private extension DocumentEntryKind {

@@ -17,11 +17,18 @@ CLANG_MODULE_CACHE_PATH="$verify_dir/clang" xcrun swift test \
   --security-path "$verify_dir/security" --disable-keychain --disable-netrc
 ```
 
+Intent fixtures must inject a complete catalog with an in-memory upload progress
+store and an explicit test scope through `IntentEnvironment.use(catalog:)`.
+Injecting only a mock service rebuilds a catalog with shared progress storage and
+server preferences. Keep replacements inside the serialized `IntentTests` suite;
+never inspect or clear App Group upload locks to make a fixture pass.
+
 The API adapter tests use an ephemeral URLSession with a local protocol stub.
-`ProcessingSummaryTests` checks distinct text-extraction and search-indexing states,
-empty OCR completion, skipped work, and last-attempt failure labels. The API
-`routes` suite checks the corresponding rendered detail, and the document lifecycle
-E2E test checks both stage labels in the Processing section.
+`ProcessingSummaryTests` checks stage labels, empty OCR completion, skipped work,
+and the distinction between a scheduled retry and terminal failure.
+`LiveFolioServiceTests` checks the generated API mapping, and
+`DocumentDetailViewModelTests` checks that list updates and metadata saves retain
+the stage summaries already shown on the detail screen.
 `DocumentImportTests` covers mixed PDF and image imports, unsupported files, directories, missing files, and remote URL rejection using temporary files. File-type resolution requires access to macOS type services. For a manual drop check, use an isolated account or simulator and a throwaway server, then drop multiple PDFs and images into the document list, including when it is empty. Check the hover indicator, upload progress, and refreshed list.
 `e2e/tests/documents.spec.ts` covers dropping two files onto the web page, the hover indicator, and completion of both uploads. Run it only against the disposable instance started by the E2E setup.
 `WorkspaceTests` covers first-run Inbox selection, independent destination queries and navigation paths, and external document links opening the unfiltered library. It uses a mock service and does not read account configuration.
@@ -48,6 +55,14 @@ The tests exercise authentication completion from a background queue without
 launching the app, opening a browser, or accessing credentials.
 Do not launch the app against existing App Group or keychain state.
 
+## Apple OAuth scope negotiation
+
+Run the package suite with `--filter OAuthRequestTests` using the isolated
+package settings above. The requests include `vaults:manage` only when discovery
+advertises it. Metadata without that scope keeps registration and authorization
+within document scopes, including authorization with an existing client ID.
+These tests use constructed requests and do not open a browser or access Keychain.
+
 ## Apple session recovery
 
 The package suite covers Keychain read, write, and delete failures through injected
@@ -57,6 +72,8 @@ refreshes. `OAuthRecoveryTests` checks concurrent sessions, failed token persist
 stale writes after sign-out or another sign-in, offline retry, and lost responses.
 `OAuthRefreshLockTests` uses temporary files to verify exclusion, cancellation,
 and lock release after failure.
+`OAuthTransientRefreshTests` checks credential recovery after transient token
+errors, definitive refusals, and multiple callers sharing a stalled refresh.
 
 On an isolated macOS test account, check startup with unavailable credentials,
 retry after access recovers, and reauthentication after expiry. Confirm that
@@ -147,7 +164,7 @@ Lint changed Swift files with `xcrun swift-format lint --strict`. A package test
 
 `EnumerationTests` checks folder deletions, working-set aliases after restart, classification changes, taxonomy renames, unchanged snapshots, expired anchors, and a consistent initial snapshot. It stores fingerprints under a fresh temporary directory and removes it after each test. Production retains at most 32 snapshots per domain/container cache directory.
 
-`DownloadTests` passes the fixture PDF through `fetchContents`, opens it with PDFKit, reopens it, and verifies that missing server contents produce `noSuchItem`. It also cancels a stalled transfer through the returned `Progress`, checks that the request stops and Files receives `NSUserCancelledError`, then opens a fresh copy. `ProviderErrorTests` covers supported error domains. For device-only failures, filter Console for subsystem `com.cedricziel.folio.fileprovider` and category `transfer`; reproduce one open and inspect the phase, HTTP status, and mapped error code. These diagnostics exclude filenames, credentials, and response bodies. Callback tests do not establish that a reported device failure is fixed.
+`DownloadTests` passes the fixture PDF through `fetchContents`, opens it with PDFKit, reopens it, and verifies that missing server contents produce `noSuchItem`. It also cancels a stalled transfer through the returned `Progress`, checks that the request stops and Files receives `NSUserCancelledError`, then opens a fresh copy. `ProviderErrorTests` covers supported error domains. It checks that certificate failures use the File Provider connection code and preserve the cause. For device-only failures, filter Console for subsystem `com.cedricziel.folio.fileprovider` and category `transfer`; reproduce one open and inspect the phase, HTTP status, and mapped error code. These diagnostics exclude filenames, credentials, and response bodies. Callback tests do not establish that a reported device failure is fixed.
 
 ## Verify Apple saved views
 
@@ -160,3 +177,57 @@ current view, reopens its editor, persists a rename, and deletes it. It retains 
 saved-view screenshot for inspection. Use a fresh simulator and the bounded
 procedure above; compilation or an accessibility timeout before the first tap
 does not verify the controls.
+
+## Apple source lifecycle
+
+Run the isolated package suite with `--filter 'SourceLifecycleTests|SourceLifecycleServiceTests|SourceActivityTests'`.
+It covers explicit vault scoping, configured-source restrictions, masked settings,
+trash and restore conflicts, retained outcomes, and failed requests.
+Run `SourceLifecycleUITests` in the ClassificationTests fixture with temporary
+simulator state. Its `--source-lifecycle` launch mode uses in-memory services
+and exercises owner controls, read-only access, retry, and conflicts.
+
+## Apple workflow lifecycle
+
+Run the isolated package suite with `--filter 'WorkflowLifecycleTests|WorkflowLifecycleServiceTests'`.
+These cases cover explicit vault scope, lifecycle metadata, retained runs,
+owner controls, conflicts, retry, and stale asynchronous results.
+Run `WorkflowLifecycleUITests` in ClassificationTests. The `--workflow-lifecycle`
+fixture uses in-memory services and records screenshots for trash, retained
+history, restored workflows, conflict recovery, read-only controls, and retry.
+
+## Verify Apple vault management
+
+Use the isolated package procedure above for `ManagementRequestTests`,
+`VaultManagementTests`, and `WorkspaceTests`. The adapter tests cover query strings,
+server base paths, explicit vault scope, missing-scope guidance, and empty grant
+responses. The model tests cover retained recovery metadata, rejected revocations,
+member-role reloads, and library state after access or account-default changes.
+
+`VaultLifecycleUITests` in `apple/ClassificationTests` launches the production vault
+management view with an in-memory service through `--vault-lifecycle`. It checks
+owner metadata, member controls, history, viewer restrictions, and recovery from
+an empty catalog. Inspect its retained screenshots after running the isolated UI
+fixture. The fixture does not access a server, app credentials, or the Keychain.
+
+Before merging native changes, run the package tests and unsigned macOS and iOS
+Simulator builds. Static parsing and formatting do not verify Swift types or UI
+behavior. Use a fresh simulator or isolated test account with a disposable server
+for the following checks:
+
+- As an owner, create and rename a vault, choose an account default, grant user and
+  group access, change a role, and revoke a grant. Check the retained history.
+- Confirm that a rejected last-owner change keeps the current grant visible and
+  shows the server error. Choose another default before deleting a vault.
+- As a viewer, inspect lifecycle metadata and confirm that owner controls and
+  owner history are absent.
+- Delete and restore a vault. Check that creation attribution and history remain.
+  With no active vault, open management, restore a retained vault, and return to
+  its library. Confirm that no unscoped document or saved-view request occurs.
+- Refresh after the selected vault is revoked or its role changes. Check that
+  stale results and selection clear. A changed default must preserve an accessible
+  selected vault and its query.
+
+Inspect the affected screens in light and dark appearances and at large Dynamic
+Type sizes. Confirm that owner actions, recovery controls, and server errors remain
+reachable. Never use the signed-in app profile or the user's Keychain.

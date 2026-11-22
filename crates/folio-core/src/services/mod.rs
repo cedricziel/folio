@@ -8,11 +8,14 @@ mod file_sizes;
 mod idempotent_uploads;
 pub mod import;
 mod importer;
+mod ingest_workflow_access;
+pub use ingest_workflow_access::IngestWorkflowAccess;
 mod ingest;
 mod library;
 pub mod notifications;
 mod outbox_dispatcher;
 mod paperless_sources;
+mod revision_originals;
 mod vaults;
 mod workflow_engine;
 
@@ -31,6 +34,7 @@ pub use outbox_dispatcher::{
 pub use paperless_sources::{
     authorize_paperless, ensure_paperless_slot, split_shadowed_paperless, PAPERLESS_SLOT_TAKEN,
 };
+pub use revision_originals::{replace_document_original, NewRevisionOriginal};
 pub use vaults::{VaultService, PERSONAL_NAME};
 pub use workflow_engine::WorkflowEngine;
 

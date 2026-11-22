@@ -367,6 +367,104 @@ async fn moved_document_retains_original_audience(db: &Database) {
     assert_eq!(count(db, "SELECT COUNT(*) FROM jobs".into()).await, 1);
 }
 
+async fn moving_keeps_completed_preview_and_releases_interrupted_ocr(db: &Database) {
+    use folio_core::models::ProcessingStatus;
+    use folio_core::ports::ThumbnailLocation;
+    use folio_core::processing_events::ProcessingEventStage;
+
+    let f = Fixture::new(db).await;
+    let repositories = db.repositories().await;
+    let destination = repositories
+        .vaults
+        .create("New owner", None)
+        .await
+        .unwrap()
+        .id;
+    let docs = repositories.documents;
+    docs.set_file_path(f.vault, f.document, "original")
+        .await
+        .unwrap();
+    let (parent, scope) = f.claim_root().await;
+    let preview = f
+        .queue
+        .start_derived(&parent, ProcessingEventStage::Thumbnail)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(f.queue.complete_thumbnail(&preview, Some(7)).await.unwrap());
+    let child = f.ocr(scope).await.unwrap();
+    let job = f.queue.dequeue().await.unwrap().unwrap();
+    assert_eq!(job.id, child);
+    let fence = f.queue.start_ocr(&job).await.unwrap().unwrap();
+
+    let moved = docs
+        .move_to(f.document, f.vault, destination, None)
+        .await
+        .unwrap();
+    assert_eq!(moved.ocr_status, ProcessingStatus::Pending);
+    assert_eq!(moved.page_count, Some(7));
+    assert_eq!(
+        docs.thumbnail_location(f.vault, f.document).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        docs.thumbnail_location(destination, f.document)
+            .await
+            .unwrap(),
+        Some(ThumbnailLocation::Committed(preview.result_prefix()))
+    );
+    assert!(!f
+        .queue
+        .complete_ocr(&fence, "Obsolete output", true)
+        .await
+        .unwrap());
+    assert_eq!(
+        f.queue.context(child).await.unwrap().unwrap().vault_id,
+        Some(f.vault)
+    );
+    assert_eq!(
+        f.rows(&format!(
+            "vault_id = '{destination}' AND is_current = FALSE"
+        ))
+        .await,
+        2
+    );
+}
+
+async fn moving_a_pending_preview_queues_the_new_vault(db: &Database) {
+    let f = Fixture::new(db).await;
+    let repositories = db.repositories().await;
+    repositories
+        .documents
+        .set_file_path(f.vault, f.document, "original")
+        .await
+        .unwrap();
+    let old = f
+        .queue
+        .enqueue(JobType::GenerateThumbnail {
+            document_id: f.document,
+        })
+        .await
+        .unwrap();
+    let destination = repositories
+        .vaults
+        .create("Preview owner", None)
+        .await
+        .unwrap()
+        .id;
+
+    repositories
+        .documents
+        .move_to(f.document, f.vault, destination, None)
+        .await
+        .unwrap();
+    assert_eq!(f.rows(&format!("vault_id = '{destination}' AND stage = 'thumbnail' AND is_current AND job_id <> '{old}'")).await, 1);
+    assert_eq!(
+        f.queue.context(old).await.unwrap().unwrap().vault_id,
+        Some(f.vault)
+    );
+}
+
 async fn unrelated_processing_roots_do_not_inherit_group(db: &Database) {
     let f = Fixture::new(db).await;
     let (job, scope) = f.claim_root().await;
@@ -678,8 +776,299 @@ async fn legacy_purge_requested_claim_cannot_adopt_a_group(db: &Database) {
     assert!(f.queue.context(job.id).await.unwrap().is_none());
 }
 
+fn revision_jobs(
+    document_id: Uuid,
+    revision_id: Uuid,
+) -> [(JobType, &'static str, serde_json::Value); 4] {
+    use folio_core::events::EventOrigin;
+    use serde_json::json;
+
+    [
+        (
+            JobType::ProcessDocumentRevision {
+                document_id,
+                revision_id,
+                force: true,
+            },
+            "process_document_revision",
+            json!({"type": "ProcessDocumentRevision", "data": {
+                "document_id": document_id, "revision_id": revision_id, "force": true
+            }}),
+        ),
+        (
+            JobType::GenerateRevisionThumbnail {
+                document_id,
+                revision_id,
+            },
+            "generate_revision_thumbnail",
+            json!({"type": "GenerateRevisionThumbnail", "data": {
+                "document_id": document_id, "revision_id": revision_id
+            }}),
+        ),
+        (
+            JobType::ExtractRevisionText {
+                document_id,
+                revision_id,
+                force: false,
+            },
+            "extract_revision_text",
+            json!({"type": "ExtractRevisionText", "data": {
+                "document_id": document_id, "revision_id": revision_id
+            }}),
+        ),
+        (
+            JobType::GenerateRevisionEmbedding {
+                document_id,
+                revision_id,
+                origin: EventOrigin::Import,
+            },
+            "generate_revision_embedding",
+            json!({"type": "GenerateRevisionEmbedding", "data": {
+                "document_id": document_id, "revision_id": revision_id, "origin": "import"
+            }}),
+        ),
+    ]
+}
+
+#[test]
+fn revision_job_payloads_are_distinct_from_legacy_jobs() {
+    use serde_json::json;
+
+    let document = Uuid::new_v4();
+    let revision = Uuid::new_v4();
+    for (job, type_name, payload) in revision_jobs(document, revision) {
+        assert_eq!(job.type_name(), type_name);
+        assert_eq!(serde_json::to_value(job).unwrap(), payload);
+        let decoded: JobType = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(decoded.document_id(), Some(document));
+        assert_eq!(decoded.revision_id(), Some(revision));
+        assert_eq!(serde_json::to_value(decoded).unwrap(), payload);
+    }
+    let payload = json!({"type": "ProcessDocument", "data": {"document_id": document}});
+    let legacy: JobType = serde_json::from_value(payload.clone()).unwrap();
+    assert_eq!(legacy.document_id(), Some(document));
+    assert_eq!(legacy.revision_id(), None);
+    assert_eq!(serde_json::to_value(legacy).unwrap(), payload);
+
+    let missing_revision =
+        json!({"type": "ProcessDocumentRevision", "data": {"document_id": document}});
+    assert!(serde_json::from_value::<JobType>(missing_revision).is_err());
+}
+
+async fn revision_jobs_cannot_enqueue_or_prepare_until_fenced(db: &Database) {
+    let f = Fixture::new(db).await;
+    let revision = Uuid::new_v4();
+    let (job, _) = f.claim_root().await;
+
+    for (job_type, _, _) in revision_jobs(f.document, revision) {
+        assert!(matches!(
+            f.queue.enqueue(job_type.clone()).await,
+            Err(folio_core::Error::Conflict(_))
+        ));
+        let unsupported = Job {
+            job_type,
+            ..job.clone()
+        };
+        assert!(matches!(
+            prepare_claim(&f.queue, &unsupported).await,
+            Err(folio_core::Error::Conflict(_))
+        ));
+    }
+
+    assert_eq!(count(db, "SELECT COUNT(*) FROM jobs".into()).await, 1);
+    assert_eq!(
+        f.rows(&format!(
+            "group_id = '{}' AND is_current AND revision_id IS NULL",
+            job.id
+        ))
+        .await,
+        3
+    );
+}
+
+async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
+    let f = Fixture::new(db).await;
+    let revision = Uuid::new_v4();
+    execute(db, format!(
+        "INSERT INTO document_files (id, document_id, vault_id, role, storage_key, mime_type, verification_state)
+         VALUES ('{doc}', '{doc}', '{vault}', 'original', 'original', 'application/pdf', 'pending');
+         INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at)
+         VALUES ('{doc}', '{doc}', '{vault}', 1, '{doc}', '2026-11-22T00:00:00Z'),
+                ('{revision}', '{doc}', '{vault}', 2, '{doc}', '2026-11-22T01:00:00Z');
+         UPDATE documents SET current_revision_id = '{revision}' WHERE id = '{doc}';",
+        doc = f.document, vault = f.vault.0,
+    )).await;
+
+    assert!(matches!(
+        f.queue.enqueue(JobType::process_document(f.document)).await,
+        Err(folio_core::Error::Conflict(_))
+    ));
+    assert!(matches!(
+        f.queue.enqueue_current_processing(f.vault, f.document, false).await,
+        Err(folio_core::Error::Conflict(message)) if message == "File revision processing is not yet enabled"
+    ));
+
+    let current = JobType::ProcessDocumentRevision {
+        document_id: f.document,
+        revision_id: revision,
+        force: false,
+    };
+    let obsolete = JobType::ProcessDocumentRevision {
+        document_id: f.document,
+        revision_id: f.document,
+        force: false,
+    };
+    let id = Uuid::new_v4();
+    match db {
+        Database::Sqlite(pool) => {
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+            assert!(matches!(
+                super::sqlite::prepare_enqueue(&mut tx, &obsolete, id).await,
+                Err(folio_core::Error::Conflict(_))
+            ));
+            let plan = super::sqlite::prepare_enqueue(&mut tx, &current, id)
+                .await
+                .unwrap();
+            super::sqlite::finish_enqueue(&mut tx, &current, &plan)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        Database::Postgres(pool) => {
+            let mut tx = pool.begin().await.unwrap();
+            assert!(matches!(
+                super::postgres::prepare_enqueue(&mut tx, &obsolete, id).await,
+                Err(folio_core::Error::Conflict(_))
+            ));
+            let plan = super::postgres::prepare_enqueue(&mut tx, &current, id)
+                .await
+                .unwrap();
+            super::postgres::finish_enqueue(&mut tx, &current, &plan)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+    }
+    assert_eq!(
+        f.rows(&format!(
+            "group_id = '{id}' AND is_current AND revision_id = '{revision}'"
+        ))
+        .await,
+        3
+    );
+    assert_eq!(f.rows("TRUE").await, 3);
+    execute(db, format!(
+        "UPDATE documents SET content = 'indexable text', ocr_status = 'done', embed_status = 'done' WHERE id = '{}'",
+        f.document
+    )).await;
+    f.queue.reembed_documents().await.unwrap();
+    assert_eq!(
+        count(
+            db,
+            format!(
+                "SELECT COUNT(*) FROM documents WHERE id = '{}' AND embed_status = 'done'",
+                f.document
+            )
+        )
+        .await,
+        1
+    );
+    assert_eq!(f.rows("TRUE").await, 3);
+
+    execute(
+        db,
+        format!(
+            "UPDATE documents SET file_path = 'original' WHERE id = '{}'",
+            f.document
+        ),
+    )
+    .await;
+    let documents = db.repositories().await.documents;
+    documents.delete(f.vault, f.document).await.unwrap();
+    assert!(matches!(
+        documents.restore(f.vault, f.document).await,
+        Err(folio_core::Error::Conflict(message)) if message == "File revision processing is not yet enabled"
+    ));
+    assert!(documents
+        .find_trashed_by_id(f.vault, f.document)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn child_scope_cannot_drop_or_substitute_a_parent_revision() {
+    let scope = ProcessingScope {
+        group_id: Uuid::new_v4(),
+        document_id: Uuid::new_v4(),
+        vault_id: VaultId(Uuid::new_v4()),
+        revision_id: Some(Uuid::new_v4()),
+        parent_job_id: Uuid::new_v4(),
+        claim_id: Uuid::new_v4(),
+        queue_attempt: 1,
+    };
+    with_scope(Some(scope), async {
+        let legacy_child = JobType::extract_text(scope.document_id);
+        assert!(super::child_scope(&legacy_child).is_err());
+        let stale_child = JobType::ExtractRevisionText {
+            document_id: scope.document_id,
+            revision_id: Uuid::new_v4(),
+            force: false,
+        };
+        assert!(super::child_scope(&stale_child).is_err());
+        let child = JobType::ExtractRevisionText {
+            document_id: scope.document_id,
+            revision_id: scope.revision_id.unwrap(),
+            force: false,
+        };
+        let parent = super::child_scope(&child).unwrap().unwrap();
+        assert_eq!(parent.group_id, scope.group_id);
+    })
+    .await;
+}
+
+#[test]
+fn requested_processing_binds_the_current_revision_when_available() {
+    use super::{bind_requested_processing, DocumentScope};
+
+    let vault = VaultId::new();
+    let document = Uuid::new_v4();
+    let revision = Uuid::new_v4();
+    let first = DocumentScope {
+        vault_id: vault.to_string(),
+        unavailable: false,
+        revision_id: Some(revision.to_string()),
+        legacy_current: true,
+    };
+    assert!(matches!(
+        bind_requested_processing(Some(&first), vault, document, true, false).unwrap(),
+        JobType::ProcessDocument { document_id, force: true } if document_id == document
+    ));
+    assert!(matches!(
+        bind_requested_processing(Some(&first), vault, document, true, true).unwrap(),
+        JobType::ProcessDocumentRevision { document_id, revision_id, force: true }
+            if document_id == document && revision_id == revision
+    ));
+
+    let newer = DocumentScope {
+        legacy_current: false,
+        ..first
+    };
+    assert!(matches!(
+        bind_requested_processing(Some(&newer), vault, document, true, false).unwrap(),
+        JobType::ProcessDocumentRevision { document_id, revision_id, force: true }
+            if document_id == document && revision_id == revision
+    ));
+    assert!(matches!(
+        bind_requested_processing(Some(&newer), VaultId::new(), document, true, true),
+        Err(folio_core::Error::NotFound { .. })
+    ));
+}
+
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
+    revision_jobs_cannot_enqueue_or_prepare_until_fenced(db).await;
+    revision_enqueue_plan_seeds_only_the_current_revision(db).await;
     partial_supersession_keeps_the_current_parent_stage_live(db).await;
     legacy_claim_rejects_a_forged_in_memory_document(db).await;
     legacy_claim_rejects_a_forged_in_memory_job_type(db).await;
@@ -694,6 +1083,8 @@ async fn contract(db: &Database) {
     completed_parent_cannot_schedule_children(db).await;
     superseded_parent_cannot_displace_new_work(db).await;
     moved_document_retains_original_audience(db).await;
+    moving_keeps_completed_preview_and_releases_interrupted_ocr(db).await;
+    moving_a_pending_preview_queues_the_new_vault(db).await;
     unrelated_processing_roots_do_not_inherit_group(db).await;
     root_enqueue_rolls_back_job_and_supersession(db).await;
     child_enqueue_rolls_back_assignment_with_job(db).await;

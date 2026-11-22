@@ -19,6 +19,8 @@ typealias Document = FolioKit.Document
                 OnboardingLayoutFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--share-layout") {
                 ShareLayoutFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--processing-state") {
+                ProcessingStateFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--saved-views") {
                 SavedViewsFixture(service: service)
             } else {
@@ -107,6 +109,28 @@ private struct SavedViewsFixture: View {
         .task {
             await workspace.loadVaults()
             workspace.destination = .all
+        }
+    }
+}
+
+private struct ProcessingStateFixture: View {
+    var body: some View {
+        ScrollView {
+            DocumentProcessingView(
+                document: Document(
+                    title: "Processing fixture", ocrStatus: .failed, embedStatus: .failed,
+                    processingStages: [
+                        .init(
+                            runID: UUID(), stage: .ocr, attempt: 2, state: .waitingToRetry,
+                            reason: .providerFailed, retryAt: Date(timeIntervalSince1970: 1_800_000_000)
+                        ),
+                        .init(runID: UUID(), stage: .embedding, attempt: 4, state: .failed, reason: .invalidResponse),
+                        .init(
+                            runID: UUID(), stage: .thumbnail, attempt: 1, state: .skipped, reason: .unsupportedFormat),
+                    ]
+                )
+            )
+            .padding(FolioTheme.Spacing.space4)
         }
     }
 }

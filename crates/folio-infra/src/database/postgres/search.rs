@@ -19,6 +19,7 @@ use folio_core::ports::{EmbeddedChunk, SearchResult, SearchService};
 
 use super::document_repo::push_filter;
 use crate::ai::cosine_similarity;
+use crate::database::{LEGACY_CHUNK_REVISION, LIVE_CHUNK_DOCUMENT};
 
 pub struct PostgresSearchService {
     pool: PgPool,
@@ -108,12 +109,16 @@ impl PostgresSearchService {
         query.push_bind(vector_literal(query_embedding)).push(
             "::vector AS distance
              FROM document_chunks c JOIN (
-                 SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = ",
+                 SELECT id, vault_id, current_revision_id FROM documents d WHERE ",
         );
+        query.push(LIVE_CHUNK_DOCUMENT).push(" AND d.vault_id = ");
         push_vault_filter(&mut query, vault, filter)?;
         query
             .push(") d ON d.id = c.document_id WHERE c.model = ")
             .push_bind(model)
+            .push(" AND (c.revision_id = d.current_revision_id OR (c.revision_id IS NULL AND ")
+            .push(LEGACY_CHUNK_REVISION)
+            .push("))")
             .push(" AND NOT c.stale AND c.embedding_vec IS NOT NULL AND vector_dims(c.embedding_vec) = ")
             .push_bind(query_embedding.len() as i32)
             .push(" ORDER BY c.document_id, distance, c.chunk_index) best ORDER BY distance, document_id LIMIT ")
@@ -145,12 +150,16 @@ impl PostgresSearchService {
         let mut query = QueryBuilder::<Postgres>::new(
             "SELECT c.document_id, c.text, c.embedding
              FROM document_chunks c JOIN (
-                 SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = ",
+                 SELECT id, vault_id, current_revision_id FROM documents d WHERE ",
         );
+        query.push(LIVE_CHUNK_DOCUMENT).push(" AND d.vault_id = ");
         push_vault_filter(&mut query, vault, filter)?;
         query
             .push(") d ON d.id = c.document_id WHERE c.model = ")
             .push_bind(model)
+            .push(" AND (c.revision_id = d.current_revision_id OR (c.revision_id IS NULL AND ")
+            .push(LEGACY_CHUNK_REVISION)
+            .push("))")
             .push(" AND NOT c.stale");
         let rows: Vec<(Uuid, String, Vec<f32>)> = query
             .build_query_as()
@@ -191,7 +200,7 @@ fn push_vault_filter(
 ) -> Result<()> {
     query.push_bind(vault.0);
     if let Some(filter) = filter {
-        push_filter(query, filter)?;
+        push_filter(query, vault, filter)?;
     }
     Ok(())
 }
@@ -206,20 +215,35 @@ impl SearchService for PostgresSearchService {
         chunks: &[EmbeddedChunk],
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let mut document = QueryBuilder::<Postgres>::new("SELECT ");
+        document
+            .push(LEGACY_CHUNK_REVISION)
+            .push(" FROM documents d WHERE ")
+            .push(LIVE_CHUNK_DOCUMENT)
+            .push(" AND d.id = ")
+            .push_bind(document_id)
+            .push(" AND d.vault_id = ")
+            .push_bind(vault.0);
+        document.push(" FOR UPDATE OF d");
 
-        let in_vault: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM documents WHERE deleted_at IS NULL AND id = $1 AND vault_id = $2",
-        )
-        .bind(document_id)
-        .bind(vault.0)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(repo_err)?;
-        if in_vault.is_none() {
-            return Err(Error::NotFound {
-                entity_type: "Document",
-                id: document_id.to_string(),
-            });
+        match document
+            .build_query_scalar::<bool>()
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(repo_err)?
+        {
+            Some(true) => {}
+            Some(false) => {
+                return Err(Error::Conflict(
+                    "Revision-bound indexing is required".into(),
+                ))
+            }
+            None => {
+                return Err(Error::NotFound {
+                    entity_type: "Document",
+                    id: document_id.to_string(),
+                })
+            }
         }
 
         sqlx::query("DELETE FROM document_chunks WHERE document_id = $1")
@@ -265,15 +289,20 @@ impl SearchService for PostgresSearchService {
     }
 
     async fn delete_embedding(&self, vault: VaultId, document_id: Id) -> Result<()> {
-        sqlx::query(
-            "DELETE FROM document_chunks WHERE document_id = $1
-               AND document_id IN (SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = $2)",
-        )
-        .bind(document_id)
-        .bind(vault.0)
-        .execute(&self.pool)
-        .await
-        .map_err(repo_err)?;
+        let mut query = QueryBuilder::<Postgres>::new(
+            "DELETE FROM document_chunks WHERE document_id IN (SELECT d.id FROM documents d WHERE ",
+        );
+        query
+            .push(LIVE_CHUNK_DOCUMENT)
+            .push(" AND ")
+            .push(LEGACY_CHUNK_REVISION)
+            .push(" AND d.id = ")
+            .push_bind(document_id)
+            .push(" AND d.vault_id = ")
+            .push_bind(vault.0)
+            .push(" FOR UPDATE OF d")
+            .push(")");
+        query.build().execute(&self.pool).await.map_err(repo_err)?;
         Ok(())
     }
 

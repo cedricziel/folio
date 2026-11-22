@@ -17,10 +17,11 @@ use folio_core::models::{
     UpdateDocument, UserId, VaultId,
 };
 use folio_core::mutation::{current_actor, current_lineage, with_actor, with_lineage};
-use folio_core::ports::{keys, StoredObject, UploadReceiptKey, PREVIEW_PAGE_LIMIT};
+use folio_core::ports::{
+    keys, StoredObject, ThumbnailLocation, UploadReceiptKey, PREVIEW_PAGE_LIMIT,
+};
 use folio_core::services::NewUpload;
 use folio_core::services::UploadOutcome;
-use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -303,6 +304,7 @@ async fn documents_list(
 struct DocumentViewTemplate {
     sidebar: Sidebar,
     document: Document,
+    processing: Vec<crate::vault_context::ProcessingSummary>,
     facts: String,
     reading: String,
     failed: bool,
@@ -403,10 +405,16 @@ async fn document_detail(
         .map(TagView::from)
         .collect();
 
-    let live = DetailLive::of(&document);
+    let stages = state
+        .document_repo
+        .processing_stage_summaries(vault, id)
+        .await?;
+    let processing = crate::vault_context::processing_summaries(&document, &stages);
+    let live = DetailLive::of(&document, &stages);
 
     let template = DocumentViewTemplate {
         sidebar: Sidebar::load(&state, vault, Nav::None).await?,
+        processing,
         facts: live.facts,
         reading: live.reading,
         failed: live.failed,
@@ -444,10 +452,22 @@ struct DetailLive {
 }
 
 impl DetailLive {
-    fn of(document: &Document) -> Self {
+    fn of(document: &Document, stages: &[folio_core::models::ProcessingStageSummary]) -> Self {
+        use folio_core::models::StageOutcome;
+        use folio_core::processing_events::ProcessingEventStage;
         let mut facts = Vec::new();
-        // A file that could not be read has no trustworthy page count
-        let failed = document.ocr_status == folio_core::models::ProcessingStatus::Failed;
+        let current_ocr = stages
+            .iter()
+            .find(|stage| stage.stage == ProcessingEventStage::Ocr);
+        let failed = current_ocr.map_or(
+            document.ocr_status == folio_core::models::ProcessingStatus::Failed,
+            |stage| stage.state == StageOutcome::Failed,
+        );
+        let reading = match current_ocr.map(|stage| stage.state) {
+            Some(StageOutcome::WaitingToRetry) => "Waiting to retry text extraction".to_owned(),
+            Some(StageOutcome::Skipped) => "Text extraction skipped".to_owned(),
+            _ => view::reading_label(document.page_count),
+        };
         if let Some(count) = document.page_count.filter(|_| !failed) {
             facts.push(format!(
                 "{count} {}",
@@ -461,7 +481,7 @@ impl DetailLive {
         let page_count = document.page_count.unwrap_or(1).max(1);
         Self {
             facts: facts.join(" · "),
-            reading: view::reading_label(document.page_count),
+            reading,
             failed,
             pages: (1..=page_count.min(PREVIEW_PAGE_LIMIT)).collect(),
             show_page_nav: document.page_count.is_some_and(|c| c > 1),
@@ -476,6 +496,8 @@ impl DetailLive {
 #[template(path = "partials/document_detail_streams.html")]
 struct DetailStreams {
     document: Document,
+    failed: bool,
+    processing: Vec<crate::vault_context::ProcessingSummary>,
     facts: String,
     reading: String,
     pages: Vec<u32>,
@@ -485,10 +507,13 @@ struct DetailStreams {
 }
 
 impl DetailStreams {
-    fn of(document: Document) -> Self {
-        let live = DetailLive::of(&document);
+    fn of(document: Document, stages: &[folio_core::models::ProcessingStageSummary]) -> Self {
+        let processing = crate::vault_context::processing_summaries(&document, stages);
+        let live = DetailLive::of(&document, stages);
         Self {
             document,
+            failed: live.failed,
+            processing,
             facts: live.facts,
             reading: live.reading,
             pages: live.pages,
@@ -533,12 +558,11 @@ async fn document_thumbnail(
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
-    let key = state
-        .document_repo
-        .thumbnail_result_prefix(vault, id)
-        .await?
-        .map(|prefix| format!("{prefix}/thumbnail.jpg"))
-        .unwrap_or_else(|| keys::thumbnail(id));
+    let (key, can_read_original) = match state.document_repo.thumbnail_location(vault, id).await? {
+        Some(ThumbnailLocation::Committed(prefix)) => (format!("{prefix}/thumbnail.jpg"), false),
+        Some(ThumbnailLocation::Legacy) => (keys::thumbnail(id), true),
+        None => return Ok(placeholder_svg(placeholder_sheet(100, 100))),
+    };
     match state.store.get(&key).await {
         Ok(object) => return Ok(stream_object(object, "image/jpeg")),
         Err(folio_core::Error::NotFound { .. }) => {}
@@ -552,7 +576,7 @@ async fn document_thumbnail(
         .map(|m| m.starts_with("image/"))
         .unwrap_or(false);
 
-    if is_image {
+    if can_read_original && is_image {
         if let Some(ref file_path) = document.file_path {
             if let Ok(object) = state.store.get(file_path).await {
                 let mime = document
@@ -613,18 +637,16 @@ async fn document_page_thumbnail(
         return Err(ApiError::not_found("Page not found"));
     }
 
-    let key = state
-        .document_repo
-        .thumbnail_result_prefix(vault, id)
-        .await?
-        .map(|prefix| {
-            if page == 1 && document.mime_type.as_deref() != Some("application/pdf") {
-                format!("{prefix}/thumbnail.jpg")
-            } else {
-                format!("{prefix}/pages/{page}.jpg")
-            }
-        })
-        .unwrap_or_else(|| keys::page(id, page));
+    let key = match state.document_repo.thumbnail_location(vault, id).await? {
+        Some(ThumbnailLocation::Committed(prefix))
+            if page == 1 && document.mime_type.as_deref() != Some("application/pdf") =>
+        {
+            format!("{prefix}/thumbnail.jpg")
+        }
+        Some(ThumbnailLocation::Committed(prefix)) => format!("{prefix}/pages/{page}.jpg"),
+        Some(ThumbnailLocation::Legacy) => keys::page(id, page),
+        None => return Ok(placeholder_svg(placeholder_sheet(100, 140))),
+    };
     match state.store.get(&key).await {
         Ok(object) => return Ok(stream_object(object, "image/jpeg")),
         Err(folio_core::Error::NotFound { .. }) => {}
@@ -660,7 +682,11 @@ impl DocumentStreams {
 
     pub(super) async fn changed(state: &AppState, document: Document) -> ApiResult<Self> {
         let vault = document.vault_id;
-        let detail = DetailStreams::of(document.clone())
+        let stages = state
+            .document_repo
+            .processing_stage_summaries(vault, document.id)
+            .await?;
+        let detail = DetailStreams::of(document.clone(), &stages)
             .render()
             .map_err(|e| ApiError::internal(format!("Failed to render detail streams: {e}")))?;
         Ok(Self {
@@ -920,10 +946,7 @@ async fn reprocess_document(
     debug!("Queuing ProcessDocument job for {}", id);
     state
         .job_queue
-        .enqueue(JobType::ProcessDocument {
-            document_id: id,
-            force: true,
-        })
+        .enqueue_current_processing(vault, id, true)
         .await
         .map_err(|e| {
             error!("Failed to queue reprocessing job for {}: {}", id, e);
@@ -1147,4 +1170,130 @@ async fn set_document_review(
         .set_reviewed(vault, id, form.reviewed)
         .await?;
     Ok(back_to_document(id, form.return_to.as_deref()))
+}
+
+#[cfg(test)]
+mod processing_tests {
+    use super::*;
+    use folio_core::models::{ProcessingStageSummary, ProcessingStatus, StageOutcome};
+    use folio_core::processing_events::{ProcessingEventStage, ProcessingReason};
+
+    #[derive(Template)]
+    #[template(path = "partials/document_processing.html")]
+    struct ProcessingTemplate {
+        document: Document,
+        processing: Vec<crate::vault_context::ProcessingSummary>,
+    }
+
+    fn render(document: Document, stages: &[ProcessingStageSummary]) -> String {
+        ProcessingTemplate {
+            processing: crate::vault_context::processing_summaries(&document, stages),
+            document,
+        }
+        .render()
+        .unwrap()
+    }
+
+    #[test]
+    fn detail_shows_retry_schedule_instead_of_legacy_failure() {
+        let mut document = Document::new(VaultId::new(), "Scan");
+        document.ocr_status = ProcessingStatus::Failed;
+        let html = render(
+            document,
+            &[ProcessingStageSummary {
+                run_id: Uuid::new_v4(),
+                revision_id: None,
+                stage: ProcessingEventStage::Ocr,
+                attempt: 2,
+                state: StageOutcome::WaitingToRetry,
+                reason_code: Some(ProcessingReason::ProviderFailed),
+                retry_at: Some("2027-01-15T08:00:00Z".parse().unwrap()),
+                has_text: None,
+            }],
+        );
+        assert!(html.contains("Waiting to retry"));
+        assert!(html.contains("Attempt 2"));
+        assert!(html.contains("Retry after 2027-01-15 08:00 UTC"));
+        assert!(!html.contains("Last attempt failed"));
+        assert!(html.contains("Search indexing"));
+    }
+
+    #[test]
+    fn detail_uses_current_empty_result_instead_of_previous_text() {
+        let mut document = Document::new(VaultId::new(), "Scan");
+        document.content = Some("Old extracted text".into());
+        let html = render(
+            document,
+            &[ProcessingStageSummary {
+                run_id: Uuid::new_v4(),
+                revision_id: None,
+                stage: ProcessingEventStage::Ocr,
+                attempt: 1,
+                state: StageOutcome::Completed,
+                reason_code: None,
+                retry_at: None,
+                has_text: Some(false),
+            }],
+        );
+        assert!(html.contains("Completed with no text"));
+        assert!(!html.contains("Old extracted text"));
+    }
+
+    #[test]
+    fn detail_distinguishes_terminal_failure_and_thumbnail_skip() {
+        let html = render(
+            Document::new(VaultId::new(), "Scan"),
+            &[
+                ProcessingStageSummary {
+                    run_id: Uuid::new_v4(),
+                    revision_id: None,
+                    stage: ProcessingEventStage::Embedding,
+                    attempt: 3,
+                    state: StageOutcome::Failed,
+                    reason_code: Some(ProcessingReason::StorageFailed),
+                    retry_at: None,
+                    has_text: None,
+                },
+                ProcessingStageSummary {
+                    run_id: Uuid::new_v4(),
+                    revision_id: None,
+                    stage: ProcessingEventStage::Thumbnail,
+                    attempt: 1,
+                    state: StageOutcome::Skipped,
+                    reason_code: Some(ProcessingReason::UnsupportedFormat),
+                    retry_at: None,
+                    has_text: None,
+                },
+            ],
+        );
+        assert!(html.contains("Failed"));
+        assert!(html.contains("A file could not be read or saved."));
+        assert!(html.contains("Page previews"));
+        assert!(html.contains("Skipped"));
+        assert!(html.contains("Page previews are unavailable for this file type."));
+        assert!(!html.contains("Retry after"));
+    }
+
+    #[test]
+    fn detail_stream_retry_does_not_render_a_terminal_text_failure() {
+        let mut document = Document::new(VaultId::new(), "Scan");
+        document.ocr_status = ProcessingStatus::Failed;
+        let html = DetailStreams::of(
+            document,
+            &[ProcessingStageSummary {
+                run_id: Uuid::new_v4(),
+                revision_id: None,
+                stage: ProcessingEventStage::Ocr,
+                attempt: 2,
+                state: StageOutcome::WaitingToRetry,
+                reason_code: Some(ProcessingReason::ProviderFailed),
+                retry_at: None,
+                has_text: None,
+            }],
+        )
+        .render()
+        .unwrap();
+        assert!(html.contains("Waiting to retry text extraction"));
+        assert!(!html.contains("Text extraction did not finish."));
+    }
 }

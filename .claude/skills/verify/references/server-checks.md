@@ -20,6 +20,14 @@ external identifier parsing.
 Run both the package suite and native provider tests in [apple-checks.md](apple-checks.md) after these changes.
 These tests do not establish system integration in Files or Finder.
 
+## Verify vault-management OAuth consent
+
+Run `cargo test -p folio-api --test auth_flow` against its temporary SQLite
+fixtures. The vault-management cases cover explicit API consent, successful
+vault creation, rejection for the MCP resource, document-only registration
+defaults, unknown scopes, and refresh requests that attempt to widen a grant.
+Inspect the consent screen with authentication enabled using the screen tour.
+
 ## Verify forward authentication
 
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test auth_flow forward::`.
@@ -38,6 +46,10 @@ with its own SQLite database, storage directory, and loopback ports. It keeps
 and receives the final shutdown log through a local OTLP collector.
 
 ## Verify ingestion claims
+Run `cargo test -p folio-core --test ingestion_trigger_catalog` to verify
+labels, applicable condition fields, and action compatibility in the shared
+registry. This check does not exercise workflow delivery or builder selection.
+
 
 Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_outcomes --test ingest_health --test ingest_source_scope`
 with the isolated Cargo settings below. These tests use temporary SQLite databases
@@ -92,6 +104,25 @@ tests dispatch actual entry occurrences on SQLite and PostgreSQL, verify
 body-free delivery and replay deduplication, and fence dispatch and runs after
 a parent move. The web fixture creates an entry workflow with actor and subject
 filters and reads it back through the API.
+
+For the shared trigger catalog, `cargo test -p folio-api --test workflows --test vaults --test openapi`
+checks that the web choices match the API, an editor cannot fetch the catalog,
+and the generated schema describes the same choices. The infrastructure
+workflow suite dispatches a row with both a domain event and legacy projection,
+checks each trigger name in its payload, and replays the row.
+
+For owners-audience ingestion workflows, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_source_scope --test workflows`
+and `cargo test -p folio-api --test workflows --test openapi`. The shared
+database fixture dispatches distinct failed attempts and a source health
+transition, replays them, and checks that source trash fences queued delivery.
+The API fixture confirms typed source and retry filters survive the web form.
+
+For workflow revision checks, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_lifecycle --test workflows --test ingest_source_scope`.
+On SQLite and PostgreSQL, the lifecycle tests cover migration of retained runs,
+stale matches after editing or re-enabling, no-op edits, and rollback. The workflow
+suite checks that history retains the captured actions and edited runs send no webhooks.
 
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
@@ -175,6 +206,8 @@ Use the workspace suite when several crates change.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test thumbnails` with isolated build
 storage. The real-router tests cover generated JPEG bytes, unavailable thumbnails,
 store failures, bearer authentication, read scope, and vault/account isolation.
+The replacement regression checks that the API returns 404 and the web preview
+shows its placeholder until the current revision commits a preview.
 The server smoke test in `.claude/skills/verify/scripts/smoke.sh` also retrieves
 the processed fixture's thumbnail and checks its JPEG bytes and private no-store
 headers. Use that skill's disposable instance wrapper, never a user archive.
@@ -301,6 +334,15 @@ for recovery on SQLite and PostgreSQL. Unreadable-job cases cover dequeue
 quarantine and listings that retain readable jobs without altering damaged rows.
 Run the repository contract as well after changes to queue method signatures.
 These tests use temporary or in-memory data.
+
+For processing results, run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ocr_stage_transactions --test derived_stage_transactions --test processing_summaries`.
+These fixtures cover atomic artifacts and events, duplicate or expired claims,
+superseded inputs, retry lineage, and current stage reads on both databases.
+Run `cargo test -p folio-api --test processing_summaries --test thumbnails` and
+`cargo test -p folio-api --lib processing_tests` for access control, committed
+preview reads, retry copy, and legacy fallback. Regenerate the API description
+with `make openapi`. Run the document Playwright tests against the disposable
+instance to check that an open document shows a retry schedule without navigating.
 
 ## Verify document trash
 
@@ -502,6 +544,54 @@ claims, pagination, retirement, restore conflicts, no-op suppression, and rollba
 when outbox publication fails, option identity, and select-field integrity. Events are
 vault-visible non-document events. A Docker access failure requires rerunning the
 PostgreSQL case with socket access; a skipped backend is not verified parity.
+
+For field/option JSON routes, run
+`RUSTC_WRAPPER= cargo test -p folio-api --test metadata --test vaults --test personal_tokens --test routes`
+with the same isolated build settings. The metadata fixture uses temporary SQLite
+and test accounts. It covers Editor/Owner management, Viewer/Contributor reads,
+revoked membership, cross-vault IDs, option parent scope, audit attribution,
+validation and lifecycle conflicts, bounded pagination, CSRF, and independent
+bearer read/write scopes. PATCH replaces editable properties through the repository
+transaction. Field name/kind and option label are required; omitted field flags
+become false and omitted option position becomes zero. Do not merge partial PATCH
+properties from an unlocked read before a full repository update.
+
+Run `RUSTC_WRAPPER= UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi`,
+then rerun without `UPDATE_OPENAPI` to check the committed generated contract.
+
+For document assignments, run
+`RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_values`
+and the API metadata suite. These checks cover exact amounts, false, revision
+conflicts, link scope, retained Trash state, move and purge rules, and atomic
+rollback without a value-change event when a transition exceeds the event budget.
+
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_search`
+and the API metadata suite for exact filtering. Verify canonical amounts, false
+versus missing, unavailable fields, vault isolation, and cursor binding.
+
+Run `cargo test -p folio-api --test web field_management_forms` for the Fields
+forms. The isolated fixture checks retained form drafts after a name conflict
+and restoration of the same option ID and position. Run `npx playwright test
+metadata-fields.spec.ts` from `e2e/` against the disposable Folio instance to
+check field and option management at a narrow viewport.
+
+Run `cargo test -p folio-api --test web --test vaults custom_field` for the
+document editor. Check false and empty states, retained invalid and conflicting
+drafts, read-only access, and active and trashed logical links. Run
+`npx playwright test metadata-document.spec.ts` from `e2e/` on the disposable
+instance to verify exact decimal editing and same-vault link search and navigation
+at a narrow viewport.
+
+Run `cargo test -p folio-infra --test workflows metadata_workflows_use_the_committed_occurrence_and_run_once`
+for metadata workflow delivery. The test commits a field and document values
+before dispatch, then checks that delivery uses the earlier occurrence values,
+records its outbox identity, deduplicates retries, and skips workflow-origin events.
+
+Run `cargo test -p folio-api --test workflows --test openapi` for typed custom
+field workflow conditions. Verify that a field, change state, and exact previous
+or new value constrain the same occurrence change. Run
+`npx playwright test metadata-workflows.spec.ts` in the disposable instance to
+check the trigger and condition controls, including webhook-only definition events.
 
 ## Verify SQLite trash contention
 

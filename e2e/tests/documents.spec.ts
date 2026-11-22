@@ -267,16 +267,30 @@ test.describe("an open detail page follows processing", () => {
     }
   });
 
-  test("a failed read shows its notice without a reload", async ({ page, request }) => {
+  test("a failed attempt shows its retry schedule without a reload", async ({ page, request }) => {
+    test.setTimeout(45_000);
     const id = await upload(request, Buffer.from("not a pdf\n"));
     try {
+      const ocr = async () => {
+        const detail = await (await request.get(`/api/documents/${id}`)).json();
+        return detail.processing_stages.find((stage: { stage: string }) => stage.stage === "ocr");
+      };
+      const previousRun = (await ocr()).run_id;
       await page.goto(`/documents/${id}`);
       await markStale(page, id);
 
       expect((await page.request.post(`/documents/${id}/reprocess`, { maxRedirects: 0 })).status()).toBe(303);
       await expectRefreshed(page, id);
-      await settled(request, id);
-      await expect(page.getByText("Text extraction did not finish")).toBeVisible({ timeout: 30_000 });
+      await expect.poll(async () => {
+        const stage = await ocr();
+        return stage && stage.run_id !== previousRun ? stage.state : undefined;
+      }, { timeout: 30_000 }).toBe("waiting_to_retry");
+      await expect(page.getByText("Waiting to retry text extraction", { exact: true })).toBeVisible();
+      const processing = page.getByRole("region", { name: "Processing", exact: true });
+      const textStage = processing.locator('dt:text-is("Text extraction") + dd');
+      await expect(textStage).toContainText("Waiting to retry");
+      await expect(textStage.getByText(/^Retry after /)).toBeVisible();
+      await expect(page.getByText("Text extraction did not finish")).toHaveCount(0);
     } finally {
       await request.delete(`/api/documents/${id}`);
     }
