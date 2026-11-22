@@ -455,4 +455,14 @@ async fn replacement_does_not_serve_previous_revision_previews() {
         .await
         .unwrap();
     assert_eq!(page.headers()[header::CONTENT_TYPE], "image/svg+xml");
+
+    sqlx::query("UPDATE documents SET current_revision_id = NULL WHERE id = ?")
+        .bind(id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        get(&h, id, None, None).await.status(),
+        StatusCode::NOT_FOUND
+    );
 }

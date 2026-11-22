@@ -157,6 +157,36 @@ async fn summary_contract(db: &Database) {
             .unwrap(),
         vec![completed.clone(), skipped]
     );
+    assert_eq!(
+        repos
+            .documents
+            .thumbnail_location(vault, doc.id)
+            .await
+            .unwrap(),
+        Some(folio_core::ports::ThumbnailLocation::Legacy)
+    );
+    execute(
+        db,
+        format!(
+            "UPDATE documents SET current_revision_id = NULL WHERE id = '{}'",
+            doc.id
+        ),
+    )
+    .await;
+    assert!(repos
+        .documents
+        .processing_stage_summaries(vault, doc.id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        repos
+            .documents
+            .thumbnail_location(vault, doc.id)
+            .await
+            .unwrap(),
+        None
+    );
     let next_revision = Id::new_v4();
     execute(db, format!("INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at)
         VALUES ('{next_revision}', '{}', '{vault}', 2, '{file}', '2026-11-22T00:01:00Z');

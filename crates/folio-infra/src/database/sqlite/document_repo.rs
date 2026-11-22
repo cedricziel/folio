@@ -733,7 +733,9 @@ impl DocumentRepository for SqliteDocumentRepository {
                AND d.purge_requested_at IS NULL
                AND r.is_current = 1
                AND (r.revision_id = d.current_revision_id OR (r.revision_id IS NULL AND (
-                   d.current_revision_id IS NULL OR EXISTS (
+                   (d.current_revision_id IS NULL AND NOT EXISTS (
+                       SELECT 1 FROM document_revisions history WHERE history.document_id = d.id
+                   )) OR EXISTS (
                        SELECT 1 FROM document_revisions revision
                        WHERE revision.id = d.current_revision_id AND revision.document_id = d.id
                          AND revision.vault_id = d.vault_id AND revision.number = 1
@@ -765,20 +767,24 @@ impl DocumentRepository for SqliteDocumentRepository {
     ) -> Result<Option<folio_core::ports::ThumbnailLocation>> {
         use folio_core::ports::ThumbnailLocation;
         let row: Option<(Option<String>, bool)> = sqlx::query_as(
-            "SELECT (
+            "WITH current_document AS (
+                 SELECT d.id, d.vault_id, d.current_revision_id,
+                        COALESCE(current_revision.number = 1, d.current_revision_id IS NULL AND NOT EXISTS (
+                            SELECT 1 FROM document_revisions history WHERE history.document_id = d.id
+                        )) AS legacy_preview
+                 FROM documents d
+                 JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
+                 LEFT JOIN document_revisions current_revision ON current_revision.id = d.current_revision_id
+                   AND current_revision.document_id = d.id AND current_revision.vault_id = d.vault_id
+                 WHERE d.id = ? AND d.vault_id = ? AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL
+             )
+             SELECT (
                  SELECT r.result_prefix FROM processing_stage_runs r
                  WHERE r.document_id = d.id AND r.vault_id = d.vault_id
                    AND r.stage = 'thumbnail' AND r.state = 'completed' AND r.result_prefix IS NOT NULL
-                   AND (r.revision_id = d.current_revision_id OR (r.revision_id IS NULL AND (
-                       d.current_revision_id IS NULL OR current_revision.number = 1
-                   )))
+                   AND (r.revision_id = d.current_revision_id OR (r.revision_id IS NULL AND d.legacy_preview))
                  ORDER BY r.created_at DESC, r.updated_at DESC, r.id DESC LIMIT 1
-             ), (d.current_revision_id IS NULL OR COALESCE(current_revision.number = 1, FALSE))
-             FROM documents d
-             JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
-             LEFT JOIN document_revisions current_revision ON current_revision.id = d.current_revision_id
-               AND current_revision.document_id = d.id AND current_revision.vault_id = d.vault_id
-             WHERE d.id = ? AND d.vault_id = ? AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL",
+             ), d.legacy_preview FROM current_document d",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
