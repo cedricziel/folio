@@ -818,7 +818,7 @@ extension Document {
                 runID: LiveFolioService.uuid(stage.runId),
                 revisionID: stage.revisionId.map(LiveFolioService.uuid),
                 stage: kind, attempt: Int(stage.attempt), state: state,
-                reason: stage.reasonCode.flatMap { ProcessingStageSummary.Reason(rawValue: $0.rawValue) },
+                reason: stage.reasonCode.flatMap { ProcessingStageSummary.Reason(rawValue: $0) },
                 retryAt: stage.retryAt, hasText: stage.hasText
             )
         }

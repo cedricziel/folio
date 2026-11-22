@@ -181,14 +181,16 @@ pub fn processing_summaries(
                 ProcessingStatus::Failed => "Last attempt failed",
                 ProcessingStatus::Skipped => "Skipped",
             };
-            let detail = if legacy == ProcessingStatus::Failed {
-                Some(if stage == ProcessingEventStage::Ocr {
-                    "Text extraction did not finish. The original file is unchanged."
-                } else {
-                    "Search indexing did not finish. The original file is unchanged."
-                })
-            } else {
-                None
+            let detail = match (legacy, stage) {
+                (ProcessingStatus::Failed, ProcessingEventStage::Ocr)
+                    if document.content.is_some() =>
+                {
+                    Some("Text extraction did not finish. The original file is unchanged.")
+                }
+                (ProcessingStatus::Failed, ProcessingEventStage::Embedding) => {
+                    Some("Search indexing did not finish. The original file is unchanged.")
+                }
+                _ => None,
             };
             summaries.push(ProcessingSummary {
                 title,

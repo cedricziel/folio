@@ -9710,18 +9710,6 @@
           "thumbnail"
         ]
       },
-      "ProcessingReason": {
-        "type": "string",
-        "enum": [
-          "provider_disabled",
-          "no_text",
-          "unsupported_format",
-          "provider_failed",
-          "invalid_response",
-          "storage_failed",
-          "lease_expired"
-        ]
-      },
       "ProcessingStageSummary": {
         "type": "object",
         "description": "Current persisted stage state; absent legacy runs are never synthesized.",
@@ -9746,14 +9734,11 @@
             "description": "Set only for completed OCR; `false` is a successful completion with no extracted text."
           },
           "reason_code": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ProcessingReason"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Allowlisted reason for a retry, skip, or terminal failure."
           },
           "retry_at": {
             "type": [

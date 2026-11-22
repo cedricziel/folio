@@ -16,6 +16,8 @@ pub struct ProcessingStageSummary {
     /// Counts stage starts within this run; zero means the stage has not started.
     pub attempt: u32,
     pub state: StageOutcome,
+    /// Allowlisted reason for a retry, skip, or terminal failure.
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub reason_code: Option<ProcessingReason>,
     pub retry_at: Option<DateTime<Utc>>,
     /// Set only for completed OCR; `false` is a successful completion with no extracted text.
