@@ -85,7 +85,7 @@ async fn settle(pool: &SqlitePool, id: Uuid, failure: Failure<'_>) -> Result<Opt
     .bind(now.to_rfc3339())
     .bind(id.to_string())
     .bind(row.attempts)
-    .bind(row.claim_id)
+    .bind(row.claim_id.as_deref())
     .bind(failure.expired())
     .bind(failure.expired())
     .execute(&mut *tx)

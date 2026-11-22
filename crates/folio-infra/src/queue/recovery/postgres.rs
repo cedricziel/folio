@@ -87,7 +87,7 @@ async fn settle(pool: &PgPool, id: Uuid, failure: Failure<'_>) -> Result<Option<
         .bind(if decision.retry_at.is_some() { "pending" } else { "failed" })
         .bind(&decision.error).bind(decision.retry_at.map(|at| at.to_rfc3339()))
         .bind(decision.retry_at.is_none().then(|| now.to_rfc3339())).bind(now.to_rfc3339())
-        .bind(id.to_string()).bind(row.attempts).bind(row.claim_id)
+        .bind(id.to_string()).bind(row.attempts).bind(row.claim_id.as_deref())
         .bind(failure.expired()).bind(failure.expired())
         .execute(&mut *tx).await.map_err(repo_err)?;
     if changed.rows_affected() != 1 {
