@@ -122,6 +122,7 @@ struct FieldDetail {
     draft: FieldForm,
     options: Vec<MetadataOption>,
     next: Option<Uuid>,
+    option_query: String,
     option_draft: OptionForm,
     error: Option<String>,
 }
@@ -148,8 +149,12 @@ fn take_page<Row>(mut rows: Vec<Row>, id: impl FnOnce(&Row) -> Uuid) -> (Vec<Row
     (rows, next)
 }
 
-fn field_url(field: Uuid) -> String {
-    crate::vault_context::url(&format!("{INDEX}/{field}"))
+fn page_query(after: Option<Uuid>) -> String {
+    after.map_or_else(String::new, |after| format!("?after={after}"))
+}
+
+fn field_url(field: Uuid, after: Option<Uuid>) -> String {
+    crate::vault_context::url(&format!("{INDEX}/{field}{}", page_query(after)))
 }
 
 async fn index(
@@ -279,6 +284,7 @@ async fn detail_with(
             draft,
             options,
             next,
+            option_query: page_query(after),
             option_draft,
             error,
         },
@@ -296,7 +302,7 @@ async fn create_field(
         .create(vault, form.clone().into())
         .await
     {
-        Ok(field) => Ok(Redirect::to(&field_url(field.id)).into_response()),
+        Ok(field) => Ok(Redirect::to(&field_url(field.id, None)).into_response()),
         Err(error) => index_with(&state, vault, None, Some((form, validation_error(error)?))).await,
     }
 }
@@ -312,7 +318,7 @@ async fn update_field(
         .update(vault, id, form.clone().into())
         .await
     {
-        Ok(_) => Ok(Redirect::to(&field_url(id)).into_response()),
+        Ok(_) => Ok(Redirect::to(&field_url(id, None)).into_response()),
         Err(error) => {
             detail_with(
                 &state,
@@ -337,7 +343,7 @@ async fn set_field_retired(
     retired: bool,
 ) -> ApiResult<Response> {
     match state.metadata_fields.set_deleted(vault, id, retired).await {
-        Ok(_) => Ok(Redirect::to(&field_url(id)).into_response()),
+        Ok(_) => Ok(Redirect::to(&field_url(id, None)).into_response()),
         Err(error) => {
             detail_with(
                 &state,
@@ -375,6 +381,7 @@ async fn save_option(
     vault: VaultId,
     field: Uuid,
     id: Option<Uuid>,
+    after: Option<Uuid>,
     form: OptionForm,
 ) -> ApiResult<Response> {
     let result = match id {
@@ -392,13 +399,13 @@ async fn save_option(
         }
     };
     match result {
-        Ok(_) => Ok(Redirect::to(&field_url(field)).into_response()),
+        Ok(_) => Ok(Redirect::to(&field_url(field, after)).into_response()),
         Err(error) => {
             detail_with(
                 &state,
                 vault,
                 field,
-                None,
+                after,
                 DetailDraft {
                     option: Some((id, form)),
                     error: Some(validation_error(error)?),
@@ -414,18 +421,20 @@ async fn create_option(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(field): Path<Uuid>,
+    Query(page): Query<Page>,
     Form(form): Form<OptionForm>,
 ) -> ApiResult<Response> {
-    save_option(state, vault, field, None, form).await
+    save_option(state, vault, field, None, page.after, form).await
 }
 
 async fn update_option(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path((field, id)): Path<(Uuid, Uuid)>,
+    Query(page): Query<Page>,
     Form(form): Form<OptionForm>,
 ) -> ApiResult<Response> {
-    save_option(state, vault, field, Some(id), form).await
+    save_option(state, vault, field, Some(id), page.after, form).await
 }
 
 async fn set_option_retired(
@@ -433,6 +442,7 @@ async fn set_option_retired(
     vault: VaultId,
     field: Uuid,
     id: Uuid,
+    after: Option<Uuid>,
     retired: bool,
 ) -> ApiResult<Response> {
     match state
@@ -440,13 +450,13 @@ async fn set_option_retired(
         .set_deleted(vault, field, id, retired)
         .await
     {
-        Ok(_) => Ok(Redirect::to(&field_url(field)).into_response()),
+        Ok(_) => Ok(Redirect::to(&field_url(field, after)).into_response()),
         Err(error) => {
             detail_with(
                 &state,
                 vault,
                 field,
-                None,
+                after,
                 DetailDraft {
                     error: Some(validation_error(error)?),
                     ..DetailDraft::default()
@@ -461,16 +471,18 @@ async fn retire_option(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path((field, id)): Path<(Uuid, Uuid)>,
+    Query(page): Query<Page>,
 ) -> ApiResult<Response> {
-    set_option_retired(state, vault, field, id, true).await
+    set_option_retired(state, vault, field, id, page.after, true).await
 }
 
 async fn restore_option(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path((field, id)): Path<(Uuid, Uuid)>,
+    Query(page): Query<Page>,
 ) -> ApiResult<Response> {
-    set_option_retired(state, vault, field, id, false).await
+    set_option_retired(state, vault, field, id, page.after, false).await
 }
 
 fn kind_label(kind: MetadataKind) -> &'static str {

@@ -728,19 +728,22 @@ async fn field_management_forms_preserve_invalid_drafts_and_restore_options() {
     use axum::{body::Body, http::Request};
 
     let h = harness().await;
-    let form = |path: &str, body: &'static str| {
+    let form = |path: &str, body: Body| {
         Request::post(path)
             .header(header::HOST, "localhost")
             .header(header::ORIGIN, "http://localhost")
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Body::from(body))
+            .body(body)
             .unwrap()
     };
     let index = "/manage/fields";
     let result = h
         .app
         .clone()
-        .oneshot(form(index, "name=Phase&kind=select&required=true"))
+        .oneshot(form(
+            index,
+            Body::from("name=Phase&kind=select&required=true"),
+        ))
         .await
         .unwrap();
     assert_eq!(result.status(), StatusCode::SEE_OTHER);
@@ -755,7 +758,7 @@ async fn field_management_forms_preserve_invalid_drafts_and_restore_options() {
     let result = h
         .app
         .clone()
-        .oneshot(form(index, "name=PHASE&kind=select"))
+        .oneshot(form(index, Body::from("name=PHASE&kind=select")))
         .await
         .unwrap();
     assert_eq!(result.status(), StatusCode::CONFLICT);
@@ -767,7 +770,7 @@ async fn field_management_forms_preserve_invalid_drafts_and_restore_options() {
     let result = h
         .app
         .clone()
-        .oneshot(form(&options, "label=Pending&position=4"))
+        .oneshot(form(&options, Body::from("label=Pending&position=4")))
         .await
         .unwrap();
     assert_eq!(result.status(), StatusCode::SEE_OTHER);
@@ -789,7 +792,10 @@ async fn field_management_forms_preserve_invalid_drafts_and_restore_options() {
     let retired = h
         .app
         .clone()
-        .oneshot(form(&format!("{options}/{}/retire", option.id), ""))
+        .oneshot(form(
+            &format!("{options}/{}/retire", option.id),
+            Body::empty(),
+        ))
         .await
         .unwrap();
     assert_eq!(retired.status(), StatusCode::SEE_OTHER);
@@ -798,7 +804,10 @@ async fn field_management_forms_preserve_invalid_drafts_and_restore_options() {
     let restored = h
         .app
         .clone()
-        .oneshot(form(&format!("{options}/{}/restore", option.id), ""))
+        .oneshot(form(
+            &format!("{options}/{}/restore", option.id),
+            Body::empty(),
+        ))
         .await
         .unwrap();
     assert_eq!(restored.status(), StatusCode::SEE_OTHER);
@@ -812,4 +821,51 @@ async fn field_management_forms_preserve_invalid_drafts_and_restore_options() {
     assert_eq!(current.label, "Pending");
     assert_eq!(current.position, 4);
     assert!(current.deleted_at.is_none());
+
+    for number in 0..50 {
+        h.state
+            .metadata_options
+            .create(
+                h.vault,
+                field_record.id,
+                folio_core::models::MetadataOptionInput {
+                    label: format!("Option {number}"),
+                    position: number,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let ordered = h
+        .state
+        .metadata_options
+        .list(h.vault, field_record.id, false, None, 51)
+        .await
+        .unwrap();
+    let after = ordered[49].id;
+    let last = &ordered[50];
+    let conflict = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("label", &ordered[0].label)
+        .append_pair("position", "987")
+        .finish();
+    let editor = format!("{options}/{}?after={after}", last.id);
+    let page = text(
+        h.app
+            .clone()
+            .oneshot(get(&format!("{field}?after={after}")))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(page.contains(&format!("action=\"{editor}\"")));
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(&editor, Body::from(conflict)))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::CONFLICT);
+    let page = text(result).await;
+    assert!(page.contains(&format!("action=\"{editor}\"")));
+    assert!(page.contains("value=\"987\""));
 }

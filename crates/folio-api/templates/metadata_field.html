@@ -42,7 +42,7 @@
   <section class="panel" aria-labelledby="field-options">
     <h2 id="field-options" class="heading">Options</h2>
     {% if true|can_manage && field.deleted_at.is_none() %}
-    <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options" method="post" class="metadata-form" data-turbo="false">
+    <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options{{ option_query }}" method="post" class="metadata-form" data-turbo="false">
       {% include "partials/metadata_csrf.html" %}
       <label class="f-field" for="option-label">
         <span class="f-field-label">New option</span>
@@ -64,18 +64,18 @@
           <p class="f-row-sub">Position {{ option.position }}{% if option.deleted_at.is_some() %} · Retired{% endif %}</p>
           {% if true|can_manage && field.deleted_at.is_none() %}
           {% if option.deleted_at.is_none() %}
-          <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options/{{ option.id }}" method="post" class="metadata-form" data-turbo="false">
+          <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options/{{ option.id }}{{ option_query }}" method="post" class="metadata-form" data-turbo="false">
             {% include "partials/metadata_csrf.html" %}
             <label class="f-field"><span class="f-field-label">Name</span><input class="f-input" name="label" value="{{ option.label }}" maxlength="128" required></label>
             <label class="f-field"><span class="f-field-label">Position</span><input class="f-input" name="position" type="number" min="0" max="4294967295" value="{{ option.position }}" required></label>
             <button class="f-btn" type="submit">Save option</button>
           </form>
-          <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options/{{ option.id }}/retire" method="post" class="metadata-form" data-turbo="false">
+          <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options/{{ option.id }}/retire{{ option_query }}" method="post" class="metadata-form" data-turbo="false">
             {% include "partials/metadata_csrf.html" %}
             <button class="f-btn f-btn-quiet" type="submit">Retire option</button>
           </form>
           {% else %}
-          <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options/{{ option.id }}/restore" method="post" class="metadata-form" data-turbo="false">
+          <form action="{{ "/manage/fields"|vault_url }}/{{ field.id }}/options/{{ option.id }}/restore{{ option_query }}" method="post" class="metadata-form" data-turbo="false">
             {% include "partials/metadata_csrf.html" %}
             <button class="f-btn" type="submit">Restore option</button>
           </form>
