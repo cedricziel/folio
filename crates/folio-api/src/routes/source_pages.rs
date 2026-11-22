@@ -91,13 +91,31 @@ async fn rows(
         let status = state.ingestion.managed.status(def.id).await?;
         rows.push(Row {
             deleted,
-            lifecycle_summary: def.lifecycle.as_ref().map(|m| match m.deleted_at {
-                Some(at) => format!("Deleted {}", at.format("%Y-%m-%d %H:%M UTC")),
-                None => format!(
-                    "Created {}, updated {}",
+            lifecycle_summary: def.lifecycle.as_ref().map(|m| {
+                let created_by = m
+                    .created_by
+                    .as_ref()
+                    .map(|actor| actor.as_str())
+                    .unwrap_or("System or unknown");
+                let updated_by = m
+                    .updated_by
+                    .as_ref()
+                    .map(|actor| actor.as_str())
+                    .unwrap_or("System or unknown");
+                let history = format!(
+                    "Created {} by {}, updated {} by {}",
                     m.created_at.format("%Y-%m-%d %H:%M UTC"),
-                    m.updated_at.format("%Y-%m-%d %H:%M UTC")
-                ),
+                    created_by,
+                    m.updated_at.format("%Y-%m-%d %H:%M UTC"),
+                    updated_by
+                );
+                match m.deleted_at {
+                    Some(at) => format!(
+                        "{history}, moved to Trash {}",
+                        at.format("%Y-%m-%d %H:%M UTC")
+                    ),
+                    None => history,
+                }
             }),
             id: def.id.to_string(),
             kind: match def.config {

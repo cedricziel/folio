@@ -260,6 +260,7 @@ async fn managed_sources_can_be_trashed_and_restored_from_the_existing_page() {
     assert_eq!(status, StatusCode::OK);
     assert!(page.contains("Lifecycle folder"));
     assert!(page.contains(&format!("/{id}/restore")));
+    assert!(page.contains("by System or unknown"));
     let (status, _) = send(&h, "POST", &format!("/settings/sources/{id}/restore"), None).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let (_, restored) = json_request(&h, "GET", &format!("/api/sources/{id}"), None).await;
@@ -355,6 +356,123 @@ async fn source_trash_and_restore_preserve_owner_authorization_and_server_actors
     let body: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(body["updated_by"], "source-owner");
     assert!(body["deleted_at"].is_null());
+}
+
+#[tokio::test]
+async fn source_pages_show_server_recorded_actors_in_active_and_trash_lists() {
+    let h = common::harness_requiring_login().await;
+    let owner = common::vault_session(
+        &h,
+        "source-owner",
+        folio_core::models::VaultRole::Owner,
+        false,
+    )
+    .await;
+    let created = h
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/api/sources")
+                .header("cookie", &owner)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Attributed source",
+                        "created_by": "forged", "updated_by": "forged",
+                        "config": {"type": "folder", "path": "/unused/source"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let source: Value = serde_json::from_str(&common::text(created).await).unwrap();
+    assert_eq!(source["created_by"], "source-owner");
+    let page = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/settings/sources")
+                .header("cookie", &owner)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let page = common::text(page).await;
+    assert!(page.contains("by source-owner"));
+    assert!(!page.contains("by forged"));
+    let removed = h
+        .app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/api/sources/{}", source["id"].as_str().unwrap()))
+                .header("cookie", &owner)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+    let trash = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/settings/sources?deleted=true")
+                .header("cookie", &owner)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(trash.status(), StatusCode::OK);
+    let trash = common::text(trash).await;
+    assert!(trash.contains("by source-owner"));
+    assert!(trash.contains("moved to Trash"));
+    assert!(!trash.contains("by forged"));
+}
+
+#[tokio::test]
+async fn source_pages_escape_retained_actor_identifiers() {
+    use folio_core::{models::UserId, mutation::with_actor};
+
+    let app = test_app(vec![]).await;
+    let input = serde_json::from_value(json!({
+        "name": "Escaped source", "config": {"type": "folder", "path": "/unused/source"}
+    }))
+    .unwrap();
+    let source = with_actor(
+        Some(UserId::from("creator<script>")),
+        app.state.ingestion.managed.create(app.vault, input),
+    )
+    .await
+    .unwrap();
+    let (status, active) = send(&app, "GET", "/settings/sources", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        active.contains("by creator&lt;script&gt;")
+            || active.contains("by creator&#60;script&#62;")
+    );
+    assert!(!active.contains("by creator<script>"));
+
+    with_actor(
+        Some(UserId::from("remover<script>")),
+        app.state.ingestion.managed.delete(app.vault, source.id),
+    )
+    .await
+    .unwrap();
+    let (status, trash) = send(&app, "GET", "/settings/sources?deleted=true", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        trash.contains("by creator&lt;script&gt;") || trash.contains("by creator&#60;script&#62;")
+    );
+    assert!(
+        trash.contains("by remover&lt;script&gt;") || trash.contains("by remover&#60;script&#62;")
+    );
+    assert!(!trash.contains("by remover<script>"));
 }
 
 #[tokio::test]

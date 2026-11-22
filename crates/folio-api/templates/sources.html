@@ -48,7 +48,7 @@
                     {% if row.admin_only %}<span class="f-meta">Only an instance admin can change it</span>{% endif %}
                     {% if !row.enabled %}<span class="f-status f-status-pending">Off</span>{% endif %}
                 </div>
-                {% match row.lifecycle_summary %}{% when Some with (history) %}<div class="f-row-sub"><span class="f-meta">{{ history }}</span></div>{% when None %}{% endmatch %}
+                {% match row.lifecycle_summary %}{% when Some with (history) %}<div class="f-row-sub lifecycle-meta"><span class="f-meta">{{ history }}</span></div>{% when None %}{% endmatch %}
                 <div class="f-row-sub">
                     {% match row.last_run %}
                     {% when Some with (when) %}

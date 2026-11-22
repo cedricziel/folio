@@ -380,6 +380,10 @@ JSON and HTML, owner-only access, revoked membership, deleted vaults, cross-vaul
 denial, and the return link to Trash. Run the screen tour for `sources`, then open
 Outcomes from a source in Trash and return to Trash in the same vault. Inspect
 desktop and mobile layouts in both themes using only the disposable instance.
+The source page tests verify server-recorded creation and update actors on active
+and trashed sources, the explicit system or unknown fallback, and HTML escaping
+of retained actor identifiers. Inspect long actor labels for wrapping and overflow
+in the same screen tour.
 Regenerate OpenAPI and run the isolated Apple package suite in [apple-checks.md](apple-checks.md) when changing source response fields. Never poll an existing folder or mailbox
 while verifying source management.
 

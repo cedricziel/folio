@@ -435,6 +435,10 @@ a:not([class]):hover,
   gap: 2px;
   min-width: 0;
 }
+.lifecycle-meta {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .row-main .f-status {
   margin-top: var(--space-1);
 }
