@@ -136,6 +136,17 @@ impl JobType {
         }
     }
 
+    fn embedding_for_revision(document_id: Uuid, revision_id: Option<Uuid>) -> Self {
+        match revision_id {
+            Some(revision_id) => Self::GenerateRevisionEmbedding {
+                document_id,
+                revision_id,
+                origin: EventOrigin::User,
+            },
+            None => Self::generate_embedding(document_id),
+        }
+    }
+
     pub fn process_document(document_id: Uuid) -> Self {
         JobType::ProcessDocument {
             document_id,
@@ -355,6 +366,11 @@ impl JobQueue {
             self,
             enqueue_current_processing(vault, document_id, force, trace)
         )
+    }
+
+    /// Re-embed documents whose current OCR text is ready, without inheriting the settings trace.
+    pub async fn reembed_documents(&self) -> Result<usize> {
+        dispatch!(self, reembed_documents())
     }
 
     /// Claim the next available job of any class
