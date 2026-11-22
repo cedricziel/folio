@@ -37,6 +37,20 @@ async fn revision_history_contract(db: Database) {
         Some(first.clone()),
     );
 
+    docs.delete(vault, document.id).await.unwrap();
+    assert!(docs
+        .find_revision(vault, document.id, first.id)
+        .await
+        .unwrap()
+        .is_none());
+    docs.restore(vault, document.id).await.unwrap();
+    assert_eq!(
+        docs.find_revision(vault, document.id, first.id)
+            .await
+            .unwrap(),
+        Some(first.clone())
+    );
+
     let latest_id = Id::new_v4();
     let document_id = document.id;
     let sql = sqlx::AssertSqlSafe(format!(
@@ -68,7 +82,7 @@ async fn revision_history_contract(db: Database) {
         .unwrap();
     let mut expected_first = first.clone();
     expected_first.is_current = false;
-    assert_eq!(older, vec![expected_first.clone()]);
+    assert_eq!(older, vec![expected_first]);
 
     assert!(docs
         .list_revisions(vault, document.id, Some(1), 10)
@@ -97,24 +111,6 @@ async fn revision_history_contract(db: Database) {
         .unwrap()
         .is_none());
 
-    docs.delete(vault, document.id).await.unwrap();
-    assert!(docs
-        .list_revisions(vault, document.id, None, 10)
-        .await
-        .unwrap()
-        .is_empty());
-    assert!(docs
-        .find_revision(vault, document.id, first.id)
-        .await
-        .unwrap()
-        .is_none());
-    docs.restore(vault, document.id).await.unwrap();
-    assert_eq!(
-        docs.find_revision(vault, document.id, first.id)
-            .await
-            .unwrap(),
-        Some(expected_first),
-    );
     let sql = sqlx::AssertSqlSafe(format!(
         "UPDATE vaults SET deleted_at = '2001-02-03T04:05:07Z' WHERE id = '{vault}'"
     ));
@@ -128,6 +124,28 @@ async fn revision_history_contract(db: Database) {
     }
     assert!(docs
         .find_revision(vault, document.id, latest_id)
+        .await
+        .unwrap()
+        .is_none());
+    let sql = sqlx::AssertSqlSafe(format!(
+        "UPDATE vaults SET deleted_at = NULL WHERE id = '{vault}'"
+    ));
+    match &db {
+        Database::Sqlite(pool) => {
+            sqlx::query(sql).execute(pool).await.unwrap();
+        }
+        Database::Postgres(pool) => {
+            sqlx::query(sql).execute(pool).await.unwrap();
+        }
+    }
+    docs.delete(vault, document.id).await.unwrap();
+    assert!(docs
+        .list_revisions(vault, document.id, None, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(docs
+        .find_revision(vault, document.id, first.id)
         .await
         .unwrap()
         .is_none());
