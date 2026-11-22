@@ -201,6 +201,9 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         filters.searchQuery = draft.query.text
         filters.createdAfter = draft.query.filter.createdAfter
         filters.createdBefore = draft.query.filter.createdBefore
+        filters.reviewed = draft.query.filter.reviewed
+        filters.documentDateFrom = draft.query.filter.documentDateFrom?.rawValue
+        filters.documentDateTo = draft.query.filter.documentDateTo?.rawValue
         var query = Components.Schemas.SavedViewQuery(version: 1)
         query.filters = filters
         query.sort = .init(rawValue: draft.query.sort.rawValue)
@@ -222,7 +225,9 @@ public struct LiveFolioService: FolioService, SourceActivityService {
                 tagIDs: (filters.tagIds ?? []).map(Self.uuid),
                 correspondentID: filters.correspondentId.map(Self.uuid),
                 documentTypeID: filters.documentTypeId.map(Self.uuid),
-                createdAfter: filters.createdAfter, createdBefore: filters.createdBefore
+                createdAfter: filters.createdAfter, createdBefore: filters.createdBefore,
+                reviewed: filters.reviewed, documentDateFrom: Self.documentDate(filters.documentDateFrom),
+                documentDateTo: Self.documentDate(filters.documentDateTo)
             ), sort: .init(rawValue: value.query.sort?.rawValue ?? "newest") ?? .newest
         )
         return try SavedView(
