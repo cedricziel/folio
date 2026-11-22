@@ -9,6 +9,7 @@ public final class CustomMetadataViewModel {
     public private(set) var isLoading = false
     public private(set) var hasMore = false
     public private(set) var isSaving = false
+    public private(set) var isReloading = false
     public private(set) var needsReload = false
     private let documentID: UUID
     private let service: any CustomMetadataService
@@ -20,7 +21,7 @@ public final class CustomMetadataViewModel {
     }
 
     public func load(more: Bool = false) async {
-        guard !isLoading, !isSaving, more ? hasMore : !loaded else { return }
+        guard !isLoading, !isSaving, !isReloading, more ? hasMore : !loaded else { return }
         isLoading = true
         defer { isLoading = false }
         error = nil
@@ -49,7 +50,7 @@ public final class CustomMetadataViewModel {
     }
 
     public func save(fieldID: UUID, value: CustomFieldValue?) async throws {
-        guard loaded, !isSaving, !needsReload else {
+        guard loaded, !isSaving, !isReloading, !needsReload else {
             throw FolioError.server(status: 409, message: "Reload the current custom fields first.")
         }
         isSaving = true
@@ -67,7 +68,9 @@ public final class CustomMetadataViewModel {
     }
 
     public func reload() async throws {
-        guard !isSaving else { return }
+        guard loaded, !isLoading, !isSaving, !isReloading else { return }
+        isReloading = true
+        defer { isReloading = false }
         let updated = try await service.customMetadata(documentID: documentID)
         try Task.checkCancellation()
         snapshot = updated
