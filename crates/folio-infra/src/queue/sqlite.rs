@@ -312,14 +312,11 @@ impl SqliteJobQueue {
             return Ok(false);
         }
 
-        let job = match (stage, request.revision_id()) {
-            (ProcessingStage::Ocr, _) => request,
-            (ProcessingStage::Embed, Some(revision_id)) => JobType::GenerateRevisionEmbedding {
-                document_id,
-                revision_id,
-                origin: folio_core::EventOrigin::User,
-            },
-            (ProcessingStage::Embed, None) => JobType::generate_embedding(document_id),
+        let job = match stage {
+            ProcessingStage::Ocr => request,
+            ProcessingStage::Embed => {
+                JobType::embedding_for_revision(document_id, request.revision_id())
+            }
         };
         insert_job(
             &mut tx,
@@ -381,6 +378,82 @@ impl SqliteJobQueue {
             .await
             .map_err(|error| Error::Repository(error.to_string()))?;
         Ok(id)
+    }
+
+    pub(super) async fn reembed_documents(&self) -> Result<usize> {
+        let candidates: Vec<(String, String)> = sqlx::query_as(
+            "SELECT d.id, d.vault_id FROM documents d
+             JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
+             WHERE d.deleted_at IS NULL AND d.purge_requested_at IS NULL
+               AND d.ocr_status NOT IN ('pending', 'running')
+               AND d.content IS NOT NULL AND d.content <> ''",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| Error::Repository(error.to_string()))?;
+        let mut queued = 0;
+        for (document_id, vault) in candidates {
+            let document_id = document_id
+                .parse::<Uuid>()
+                .map_err(|error| Error::Repository(error.to_string()))?;
+            let vault = folio_core::models::VaultId(
+                vault
+                    .parse::<Uuid>()
+                    .map_err(|error| Error::Repository(error.to_string()))?,
+            );
+            match self.reembed_current_document(vault, document_id).await {
+                Ok(true) => queued += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::error!(%document_id, %error, "Failed to enqueue re-embedding")
+                }
+            }
+        }
+        Ok(queued)
+    }
+
+    async fn reembed_current_document(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+    ) -> Result<bool> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        let scope = super::processing_scope::sqlite::document(&mut tx, document_id).await?;
+        let current = match super::processing_scope::bind_requested_processing(
+            scope.as_ref(),
+            vault,
+            document_id,
+            false,
+            super::REVISION_DISPATCH_ENABLED,
+        ) {
+            Ok(job) => job,
+            Err(Error::NotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let updated = sqlx::query(
+            "UPDATE documents SET embed_status = 'pending'
+             WHERE id = ?1 AND vault_id = ?2 AND deleted_at IS NULL
+               AND purge_requested_at IS NULL AND ocr_status NOT IN ('pending', 'running')
+               AND content IS NOT NULL AND content <> ''
+               AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL)",
+        )
+        .bind(document_id.to_string()).bind(vault.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| Error::Repository(error.to_string()))?;
+        if updated.rows_affected() != 1 {
+            return Ok(false);
+        }
+        let job = JobType::embedding_for_revision(document_id, current.revision_id());
+        insert_job(&mut tx, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, None).await?;
+        tx.commit()
+            .await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        Ok(true)
     }
 
     /// Dequeue the next available job

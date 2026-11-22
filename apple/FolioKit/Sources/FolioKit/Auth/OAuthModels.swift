@@ -5,7 +5,12 @@ public enum OAuthConfiguration {
     public static let clientName = "Folio"
     public static var callbackScheme: String { AppConfiguration.callbackScheme }
     public static var redirectURI: String { AppConfiguration.redirectURI(scheme: callbackScheme) }
-    public static let scopes = "documents:read documents:write"
+    public static let documentScopes = "documents:read documents:write"
+    public static let scopes = "documents:read documents:write vaults:manage"
+
+    public static func scopes(for metadata: OAuthMetadata) -> String {
+        metadata.scopesSupported?.contains("vaults:manage") == true ? scopes : documentScopes
+    }
 }
 
 /// RFC 7636 proof key for code exchange, S256 only.
@@ -81,16 +86,18 @@ public struct OAuthMetadata: Decodable, Equatable, Sendable {
     public let tokenEndpoint: URL
     public let registrationEndpoint: URL
     public let revocationEndpoint: URL?
+    public let scopesSupported: [String]?
 
     public init(
         issuer: String, authorizationEndpoint: URL, tokenEndpoint: URL, registrationEndpoint: URL,
-        revocationEndpoint: URL?
+        revocationEndpoint: URL?, scopesSupported: [String]? = nil
     ) {
         self.issuer = issuer
         self.authorizationEndpoint = authorizationEndpoint
         self.tokenEndpoint = tokenEndpoint
         self.registrationEndpoint = registrationEndpoint
         self.revocationEndpoint = revocationEndpoint
+        self.scopesSupported = scopesSupported
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -99,5 +106,6 @@ public struct OAuthMetadata: Decodable, Equatable, Sendable {
         case tokenEndpoint = "token_endpoint"
         case registrationEndpoint = "registration_endpoint"
         case revocationEndpoint = "revocation_endpoint"
+        case scopesSupported = "scopes_supported"
     }
 }
