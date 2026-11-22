@@ -862,6 +862,53 @@ async fn revision_claims_preserve_identity(db: &Database) {
             second.to_string()
         );
     }
+
+    execute(
+        db,
+        format!(
+            "UPDATE documents SET content = 'Second original text' WHERE id = '{doc}';
+         UPDATE processing_stage_runs SET is_current = FALSE
+         WHERE document_id = '{doc}' AND stage = 'embedding';"
+        ),
+    )
+    .await;
+    let embedding_job = seed_revision_run(
+        db,
+        vault,
+        JobType::GenerateRevisionEmbedding {
+            document_id: doc,
+            revision_id: second,
+            origin: EventOrigin::User,
+        },
+        "embedding",
+    )
+    .await;
+    let job = repos.jobs.dequeue().await.unwrap().unwrap();
+    assert_eq!(job.id, embedding_job);
+    let fence = repos
+        .jobs
+        .start_derived(&job, ProcessingEventStage::Embedding)
+        .await
+        .unwrap()
+        .unwrap();
+    let chunks = [EmbeddedChunk {
+        index: 0,
+        text: "Second original text".into(),
+        embedding: vec![1.0, 0.0],
+    }];
+    assert!(repos
+        .jobs
+        .complete_embedding(&fence, "Second original text", "revision-model", &chunks)
+        .await
+        .unwrap());
+    let results = repos
+        .search
+        .search(vault, "revision-model", &[1.0, 0.0], 10)
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].document_id, doc);
+    assert_eq!(results[0].snippet.as_deref(), Some("Second original text"));
 }
 
 #[tokio::test]

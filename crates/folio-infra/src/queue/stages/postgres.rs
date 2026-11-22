@@ -551,9 +551,9 @@ async fn finish_derived(
             let pgvector: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'document_chunks' AND column_name = 'embedding_vec' AND table_schema = current_schema())").fetch_one(&mut *tx).await.map_err(repo_err)?;
             for chunk in *chunks {
                 let query = if pgvector {
-                    sqlx::query("INSERT INTO document_chunks (document_id, chunk_index, text, model, dimensions, embedding, stale, created_at, embedding_vec) VALUES ($1,$2,$3,$4,$5,$6,FALSE,$7,$8::vector)")
+                    sqlx::query("INSERT INTO document_chunks (document_id, chunk_index, text, model, dimensions, embedding, stale, created_at, revision_id, embedding_vec) VALUES ($1,$2,$3,$4,$5,$6,FALSE,$7,$8,$9::vector)")
                 } else {
-                    sqlx::query("INSERT INTO document_chunks (document_id, chunk_index, text, model, dimensions, embedding, stale, created_at) VALUES ($1,$2,$3,$4,$5,$6,FALSE,$7)")
+                    sqlx::query("INSERT INTO document_chunks (document_id, chunk_index, text, model, dimensions, embedding, stale, created_at, revision_id) VALUES ($1,$2,$3,$4,$5,$6,FALSE,$7,$8)")
                 };
                 let query = query
                     .bind(fence.document_id)
@@ -562,7 +562,8 @@ async fn finish_derived(
                     .bind(*model)
                     .bind(chunk.embedding.len() as i32)
                     .bind(&chunk.embedding)
-                    .bind(now);
+                    .bind(now)
+                    .bind(fence.revision_id);
                 let query = if pgvector {
                     query.bind(format!(
                         "[{}]",

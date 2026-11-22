@@ -788,9 +788,109 @@ async fn revision_jobs_cannot_enqueue_or_prepare_until_fenced(db: &Database) {
     );
 }
 
+async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
+    let f = Fixture::new(db).await;
+    let revision = Uuid::new_v4();
+    execute(db, format!(
+        "INSERT INTO document_files (id, document_id, vault_id, role, storage_key, mime_type, verification_state)
+         VALUES ('{doc}', '{doc}', '{vault}', 'original', 'original', 'application/pdf', 'pending');
+         INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at)
+         VALUES ('{doc}', '{doc}', '{vault}', 1, '{doc}', '2026-11-22T00:00:00Z'),
+                ('{revision}', '{doc}', '{vault}', 2, '{doc}', '2026-11-22T01:00:00Z');
+         UPDATE documents SET current_revision_id = '{revision}' WHERE id = '{doc}';",
+        doc = f.document, vault = f.vault.0,
+    )).await;
+
+    assert!(matches!(
+        f.queue.enqueue(JobType::process_document(f.document)).await,
+        Err(folio_core::Error::Conflict(_))
+    ));
+    let current = JobType::ProcessDocumentRevision {
+        document_id: f.document,
+        revision_id: revision,
+        force: false,
+    };
+    let obsolete = JobType::ProcessDocumentRevision {
+        document_id: f.document,
+        revision_id: f.document,
+        force: false,
+    };
+    let id = Uuid::new_v4();
+    match db {
+        Database::Sqlite(pool) => {
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+            assert!(matches!(
+                super::sqlite::prepare_enqueue(&mut tx, &obsolete, id).await,
+                Err(folio_core::Error::Conflict(_))
+            ));
+            let plan = super::sqlite::prepare_enqueue(&mut tx, &current, id)
+                .await
+                .unwrap();
+            super::sqlite::finish_enqueue(&mut tx, &current, &plan)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+        Database::Postgres(pool) => {
+            let mut tx = pool.begin().await.unwrap();
+            assert!(matches!(
+                super::postgres::prepare_enqueue(&mut tx, &obsolete, id).await,
+                Err(folio_core::Error::Conflict(_))
+            ));
+            let plan = super::postgres::prepare_enqueue(&mut tx, &current, id)
+                .await
+                .unwrap();
+            super::postgres::finish_enqueue(&mut tx, &current, &plan)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+    }
+    assert_eq!(
+        f.rows(&format!(
+            "group_id = '{id}' AND is_current AND revision_id = '{revision}'"
+        ))
+        .await,
+        3
+    );
+    assert_eq!(f.rows("TRUE").await, 3);
+}
+
+#[tokio::test]
+async fn child_scope_cannot_drop_or_substitute_a_parent_revision() {
+    let scope = ProcessingScope {
+        group_id: Uuid::new_v4(),
+        document_id: Uuid::new_v4(),
+        vault_id: VaultId(Uuid::new_v4()),
+        revision_id: Some(Uuid::new_v4()),
+        parent_job_id: Uuid::new_v4(),
+        claim_id: Uuid::new_v4(),
+        queue_attempt: 1,
+    };
+    with_scope(Some(scope), async {
+        let legacy_child = JobType::extract_text(scope.document_id);
+        assert!(super::child_scope(&legacy_child).is_err());
+        let stale_child = JobType::ExtractRevisionText {
+            document_id: scope.document_id,
+            revision_id: Uuid::new_v4(),
+            force: false,
+        };
+        assert!(super::child_scope(&stale_child).is_err());
+        let child = JobType::ExtractRevisionText {
+            document_id: scope.document_id,
+            revision_id: scope.revision_id.unwrap(),
+            force: false,
+        };
+        let parent = super::child_scope(&child).unwrap().unwrap();
+        assert_eq!(parent.group_id, scope.group_id);
+    })
+    .await;
+}
+
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
     revision_jobs_cannot_enqueue_or_prepare_until_fenced(db).await;
+    revision_enqueue_plan_seeds_only_the_current_revision(db).await;
     partial_supersession_keeps_the_current_parent_stage_live(db).await;
     legacy_claim_rejects_a_forged_in_memory_document(db).await;
     legacy_claim_rejects_a_forged_in_memory_job_type(db).await;

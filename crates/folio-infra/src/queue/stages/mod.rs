@@ -67,6 +67,7 @@ impl StageFence {
             group_id: self.group_id,
             document_id: self.document_id,
             vault_id: self.vault_id,
+            revision_id: self.revision_id,
             parent_job_id: self.job_id,
             claim_id: self.claim_id,
             queue_attempt: self.queue_attempt,
