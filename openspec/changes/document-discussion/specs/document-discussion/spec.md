@@ -95,9 +95,14 @@ The system SHALL publish versioned document-targeted note/comment events through
 - **WHEN** a mutation rolls back, repeats a deletion, submits unchanged text, or retries an already committed idempotency identity
 - **THEN** no duplicate entry or transition event is persisted
 
-#### Scenario: Workflow owner loses access
-- **WHEN** an entry event is delivered after its document moves out of the workflow owner's authorized vault or their membership is revoked
-- **THEN** the workflow does not execute document actions or expose entry data to that owner
+#### Scenario: A document leaves the event vault
+- **WHEN** an entry event is delivered after its document has moved out of the originating vault, or the document moves before a queued action executes
+- **THEN** the workflow does not execute document actions for that event
+
+#### Scenario: The workflow creator loses vault access
+- **WHEN** the creator's vault membership is revoked
+- **THEN** the vault-owned workflow continues to run for eligible entry events
+- **AND** the former member can no longer access the workflow or its runs
 
 #### Scenario: Select entry triggers
 - **WHEN** an authorized user edits a workflow in either client
