@@ -479,6 +479,178 @@ async fn seed_outcome(app: &Harness, source: Uuid, result: &str, document: Optio
 }
 
 #[tokio::test]
+async fn retained_source_outcomes_require_current_owner_and_active_vault() {
+    use folio_core::models::{Principal, UserId, VaultRole};
+    let app = common::harness_requiring_login().await;
+    let owner = common::vault_session(&app, "history-owner", VaultRole::Owner, false).await;
+    let _backup = common::vault_session(&app, "history-backup", VaultRole::Owner, false).await;
+    let viewer = common::vault_session(&app, "history-viewer", VaultRole::Viewer, true).await;
+    let input = serde_json::from_value(json!({"name":"Private history", "enabled":false,
+        "config":{"type":"folder", "path":"/unused/private-history"}}))
+    .unwrap();
+    let source = app
+        .state
+        .ingestion
+        .managed
+        .create(app.vault, input)
+        .await
+        .unwrap();
+    app.state
+        .ingestion
+        .managed
+        .delete(app.vault, source.id)
+        .await
+        .unwrap();
+    for prefix in ["/api/sources", "/settings/sources"] {
+        let path = format!("{prefix}/{}/outcomes", source.id);
+        let allowed = app
+            .app
+            .clone()
+            .oneshot(
+                Request::get(&path)
+                    .header("cookie", &owner)
+                    .header("X-Folio-Vault", app.vault.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let denied = app
+            .app
+            .clone()
+            .oneshot(
+                Request::get(&path)
+                    .header("cookie", &viewer)
+                    .header("X-Folio-Vault", app.vault.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    }
+    app.members
+        .revoke(app.vault, &Principal::User(UserId::from("history-owner")))
+        .await
+        .unwrap();
+    for prefix in ["/api/sources", "/settings/sources"] {
+        let denied = app
+            .app
+            .clone()
+            .oneshot(
+                Request::get(format!("{prefix}/{}/outcomes", source.id))
+                    .header("cookie", &owner)
+                    .header("X-Folio-Vault", app.vault.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    }
+    let vault = app
+        .vault_repository
+        .create(
+            "Deleted history vault",
+            Some(&UserId::from("history-owner")),
+        )
+        .await
+        .unwrap();
+    let input = serde_json::from_value(json!({"name":"Deleted vault source", "enabled":false,
+        "config":{"type":"folder", "path":"/unused/deleted-vault"}}))
+    .unwrap();
+    let source = app
+        .state
+        .ingestion
+        .managed
+        .create(vault.id, input)
+        .await
+        .unwrap();
+    app.state
+        .ingestion
+        .managed
+        .delete(vault.id, source.id)
+        .await
+        .unwrap();
+    app.vault_repository.delete(vault.id).await.unwrap();
+    for prefix in ["/api/sources", "/settings/sources"] {
+        let denied = app
+            .app
+            .clone()
+            .oneshot(
+                Request::get(format!("{prefix}/{}/outcomes", source.id))
+                    .header("cookie", &owner)
+                    .header("X-Folio-Vault", vault.id.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
+async fn trashed_source_outcomes_remain_readable_in_their_vault() {
+    let app = test_app(vec![]).await;
+    let (status, source) = json_request(
+        &app,
+        "POST",
+        "/api/sources",
+        Some(json!({
+            "name": "Retained history", "enabled": false,
+            "config": {"type": "folder", "path": "/unused/retained-source"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = Uuid::parse_str(source["id"].as_str().unwrap()).unwrap();
+    let outcome = seed_outcome(&app, id, "failed", None).await;
+    let (status, _) = send(&app, "DELETE", &format!("/api/sources/{id}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, page) =
+        json_request(&app, "GET", &format!("/api/sources/{id}/outcomes"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["outcomes"][0]["id"], outcome);
+    let (status, page) = send(
+        &app,
+        "GET",
+        &format!("/settings/sources/{id}/outcomes"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("Import failed"));
+    assert!(page.contains("This source is in Trash"));
+    assert!(page.contains("/settings/sources?deleted=true"));
+    let (status, trash) = send(&app, "GET", "/settings/sources?deleted=true", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(trash.contains(&format!("/{id}/outcomes")));
+
+    let other = app
+        .vault_repository
+        .create("Other history", None)
+        .await
+        .unwrap();
+    for prefix in ["/api/sources", "/settings/sources"] {
+        let response = app
+            .app
+            .clone()
+            .oneshot(
+                Request::get(format!("{prefix}/{id}/outcomes"))
+                    .header("X-Folio-Vault", other.id.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
 async fn source_outcomes_page_retains_history_without_linking_missing_documents() {
     let source = configured_folder("/isolated/nonexistent-source");
     let id = source.id;

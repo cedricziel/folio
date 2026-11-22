@@ -588,6 +588,6 @@ pub(crate) async fn list_source_outcomes(
     ApiPath(id): ApiPath<Uuid>,
     crate::extract::ApiQuery(query): crate::extract::ApiQuery<OutcomeQuery>,
 ) -> ApiResult<Json<folio_core::models::IngestOutcomePage>> {
-    find(vault, &state, id).await?;
+    find_retained(vault, &state, id).await?;
     Ok(Json(outcome_page(&state, vault, id, query).await?))
 }

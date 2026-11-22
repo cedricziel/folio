@@ -66,8 +66,9 @@
             </div>
             <div class="form-actions">
                 {% if row.admin_only %}
-                {% if !row.deleted %}<a href="{{ "/settings/sources"|vault_url }}/{{ row.id }}/outcomes" class="f-btn f-btn-quiet">Outcomes</a>{% endif %}
+                <a href="{{ "/settings/sources"|vault_url }}/{{ row.id }}/outcomes" class="f-btn f-btn-quiet">Outcomes</a>
                 {% else if row.deleted %}
+                <a href="{{ "/settings/sources"|vault_url }}/{{ row.id }}/outcomes" class="f-btn f-btn-quiet">Outcomes</a>
                 <form action="{{ "/settings/sources"|vault_url }}/{{ row.id }}/restore" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-primary">Restore</button>
                 </form>

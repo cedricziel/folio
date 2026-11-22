@@ -375,7 +375,12 @@ claim fencing, active-name reuse, restore conflicts, no-op suppression, and atom
 source/outbox rollback. Configured sources remain outside managed lifecycle storage.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test sources --test vaults` for the
 existing management page, deleted-source listing, restore controls, masked credentials,
-and vault authorization. Regenerate OpenAPI and run the isolated Apple package suite in [apple-checks.md](apple-checks.md) when changing source response fields. Never poll an existing folder or mailbox
+and vault authorization. The source suite also checks retained outcomes through
+JSON and HTML, owner-only access, revoked membership, deleted vaults, cross-vault
+denial, and the return link to Trash. Run the screen tour for `sources`, then open
+Outcomes from a source in Trash and return to Trash in the same vault. Inspect
+desktop and mobile layouts in both themes using only the disposable instance.
+Regenerate OpenAPI and run the isolated Apple package suite in [apple-checks.md](apple-checks.md) when changing source response fields. Never poll an existing folder or mailbox
 while verifying source management.
 
 ## Verify classification lifecycle

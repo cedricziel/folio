@@ -7,13 +7,13 @@
 {% block content %}
 <section class="page">
     <header class="page-head">
-        <a href="{{ "/settings/sources"|vault_url }}" class="back-link">{{ icons::arrow_left() }} Sources</a>
+        <a href="{{ "/settings/sources"|vault_url }}{% if deleted %}?deleted=true{% endif %}" class="back-link">{{ icons::arrow_left() }} Sources</a>
         <div class="page-head-row">
             <h1 class="title">{{ source_name }}</h1>
             <a href="{{ "/settings/sources"|vault_url }}/{{ source_id }}/outcomes?limit={{ limit }}" class="f-btn">Refresh</a>
         </div>
         <p class="lede">Recent item outcomes. Import rules run before an item is saved.</p>
-        {% if !enabled %}<p class="f-meta">This source is off. Earlier outcomes remain available.</p>{% endif %}
+        {% if deleted %}<p class="f-meta">This source is in Trash. Earlier outcomes remain available.</p>{% else if !enabled %}<p class="f-meta">This source is off. Earlier outcomes remain available.</p>{% endif %}
         {% if unavailable %}
         <div class="f-notice f-notice-danger" role="status"><p>Source unavailable. Check its connection settings.</p></div>
         {% else %}

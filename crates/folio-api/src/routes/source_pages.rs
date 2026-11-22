@@ -712,6 +712,7 @@ impl From<folio_core::models::IngestOutcomeRecord> for OutcomeRow {
 #[derive(Template)]
 #[template(path = "source_outcomes.html")]
 struct OutcomesTemplate {
+    deleted: bool,
     sidebar: Sidebar,
     title: String,
     source_name: String,
@@ -735,7 +736,7 @@ async fn outcomes_page(
     if query.before.is_some_and(|id| id <= 0) || !(1..=100).contains(&query.limit) {
         return Err(ApiError::bad_request("Invalid outcome pagination"));
     }
-    let source = find(vault, &state, id).await?;
+    let source = find_retained(vault, &state, id).await?;
     let status = state.ingestion.managed.status(id).await?;
     let retry_path = match query.before {
         Some(before) => format!(
@@ -763,6 +764,10 @@ async fn outcomes_page(
         axum::http::StatusCode::OK
     };
     let html = render(OutcomesTemplate {
+        deleted: source
+            .lifecycle
+            .as_ref()
+            .is_some_and(|lifecycle| lifecycle.deleted_at.is_some()),
         sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: format!("{} outcomes - Folio", source.name),
         source_name: source.name,
