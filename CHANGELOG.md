@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.1](https://github.com/cedricziel/folio/compare/v0.18.0...v0.18.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **web:** standardize select styling across themes ([d40b272](https://github.com/cedricziel/folio/commit/d40b272ec1fc6cc139bd38bb86151ce9827f4a1b))
+* **web:** standardize select styling across themes ([#599](https://github.com/cedricziel/folio/issues/599)) ([ddbda57](https://github.com/cedricziel/folio/commit/ddbda5766c048a541c78f1669f91708f9494dea9))
+
 ## [0.18.0](https://github.com/cedricziel/folio/compare/v0.17.0...v0.18.0) (2026-11-23)
 
 
