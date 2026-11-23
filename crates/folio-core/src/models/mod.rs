@@ -32,6 +32,7 @@ mod vault;
 mod webhook;
 mod workflow;
 mod workflow_event_conditions;
+mod workflow_schedule;
 mod workflow_trigger;
 
 pub use apple_app_id::{AppleAppId, InvalidAppleAppId};
@@ -119,6 +120,7 @@ pub use workflow_event_conditions::{
     MetadataChangeState, WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
     WorkflowMetadataConditions, WorkflowProcessingConditions,
 };
+pub use workflow_schedule::{DueWorkflowOccurrences, WorkflowCadence};
 pub use workflow_trigger::{
     WorkflowConditionField, WorkflowConditionType, WorkflowTarget, WorkflowTriggerDefinition,
     WorkflowTriggerRegistry,

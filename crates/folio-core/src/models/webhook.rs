@@ -246,8 +246,25 @@ impl WebhookPayload {
         }
     }
 
+    pub fn for_clock(occurred_at: DateTime<Utc>) -> Self {
+        Self {
+            event: WorkflowTrigger::Scheduled,
+            version: PAYLOAD_VERSION,
+            occurred_at,
+            document: None,
+            entry: None,
+            ingest: None,
+            metadata: None,
+            processing: None,
+            source_event: None,
+        }
+    }
+
     /// A payload with made-up content, for the "send test" action
     pub fn sample(event: WorkflowTrigger, base_url: &str) -> Self {
+        if event == WorkflowTrigger::Scheduled {
+            return Self::for_clock(Utc::now());
+        }
         if event.is_custom_metadata() {
             let id = Id::nil();
             let data = match event.as_str().split('.').next() {
