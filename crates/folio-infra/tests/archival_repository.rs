@@ -64,6 +64,24 @@ async fn archival_contract(db: Database) {
 
     let source = archives.current_source(vault, id).await.unwrap().unwrap();
     assert_eq!(source.original, original);
+    documents.complete_ocr(vault, id, "Grüße").await.unwrap();
+    let exported = archives
+        .export_document(&source, 7, 1024)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(exported.content.as_deref(), Some("Grüße"));
+    assert!(archives
+        .export_document(&source, 6, 1024)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(archives
+        .export_document(&source, 7, 1)
+        .await
+        .unwrap()
+        .is_none());
+
     assert!(archives
         .current_source(other_vault, id)
         .await

@@ -330,3 +330,31 @@ async fn read_tokens_can_request_document_thumbnails() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn portable_exports_require_a_personal_tokens_document_read_scope() {
+    let h = harness_requiring_login().await;
+    let cookie = account(&h, "portable-export-reader").await;
+    let path = "/api/documents/00000000-0000-0000-0000-000000000001/export";
+    for (scope, expected) in [
+        ("documents:read", StatusCode::NOT_FOUND),
+        ("documents:write", StatusCode::FORBIDDEN),
+    ] {
+        let mut options = creation();
+        options["scopes"] = json!([scope]);
+        let token = create(&h, &cookie, options).await;
+        let response = h
+            .app
+            .clone()
+            .oneshot(req(
+                "GET",
+                path,
+                "",
+                token["token"].as_str().unwrap(),
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}

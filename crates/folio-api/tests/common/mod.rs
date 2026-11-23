@@ -158,6 +158,7 @@ async fn harness_full(
         configured,
     );
     let state = AppState::new(
+        repos.archival,
         repos.metadata_fields,
         repos.metadata_options,
         repos.metadata_values,
