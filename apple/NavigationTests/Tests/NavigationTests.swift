@@ -79,6 +79,130 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Second fixture"].waitForExistence(timeout: 5), app.debugDescription)
     }
 
+    func testCompactSidebarOpensEveryDestinationAfterReturning() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
+        let inbox = ("inbox", "Inbox")
+        let all = ("all", "All documents")
+        for (id, title) in [all, inbox, inbox, all, all, inbox] {
+            returnToSidebar(in: app)
+            let row = app.buttons["workspace-destination-\(id)"].firstMatch
+            guard row.waitForExistence(timeout: 5) else {
+                XCTFail("The sidebar must show the \(title) destination after returning.")
+                return
+            }
+            row.tap()
+            XCTAssertTrue(
+                app.navigationBars[title].waitForExistence(timeout: 5),
+                "Tapping \(title) in the sidebar must open it."
+            )
+        }
+    }
+
+    func testCompactSidebarOpensASavedViewAfterReturning() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--saved-views"]
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        let saveCurrent = app.buttons["Save current view"]
+        XCTAssertTrue(saveCurrent.waitForExistence(timeout: 10), app.debugDescription)
+        saveCurrent.tap()
+        let name = app.textFields["Name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
+        name.tap()
+        name.typeText("Saved fixture")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        for destination in ["Inbox", "Saved fixture", "All documents", "Saved fixture", "Saved fixture"] {
+            returnToSidebar(in: app)
+            let row = app.buttons[destination].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+            row.tap()
+            XCTAssertTrue(
+                app.navigationBars[destination].waitForExistence(timeout: 5),
+                "Tapping \(destination) in the sidebar must open it.\n\(app.debugDescription)"
+            )
+        }
+    }
+
+    func testDocumentsOpenInInboxAndAllDocumentsWhileSwitchingBetweenThem() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
+        for (destination, title) in [
+            ("Inbox", "First fixture"), ("All documents", "Second fixture"), ("Inbox", "First fixture"),
+        ] {
+            if !app.navigationBars[destination].exists {
+                returnToSidebar(in: app)
+                app.buttons[destination].firstMatch.tap()
+                XCTAssertTrue(app.navigationBars[destination].waitForExistence(timeout: 5), app.debugDescription)
+            }
+            let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+            XCTAssertTrue(
+                row.waitForExistence(timeout: 5), "\(destination) must list \(title).\n\(app.debugDescription)")
+            row.tap()
+            XCTAssertTrue(
+                app.navigationBars[title].waitForExistence(timeout: 5),
+                "Opening \(title) from \(destination) must show it.\n\(app.debugDescription)")
+            navigateBack(in: app)
+        }
+    }
+
+    func testCompactSidebarShowsADocumentOpenedByHandoffWhileAllDocumentsIsCurrent() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--handoff"]
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
+        navigateBack(in: app)
+        let all = app.buttons["All documents"].firstMatch
+        XCTAssertTrue(all.waitForExistence(timeout: 5), app.debugDescription)
+        all.tap()
+        XCTAssertTrue(app.navigationBars["All documents"].waitForExistence(timeout: 5), app.debugDescription)
+        returnToSidebar(in: app)
+        app.buttons["Simulate handoff"].tap()
+        XCTAssertTrue(
+            app.navigationBars["First fixture"].waitForExistence(timeout: 5),
+            "A continued document must open over the sidebar.\n\(app.debugDescription)"
+        )
+    }
+
+    func testALateSavedViewResponseDoesNotOverrideALaterChoice() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--saved-views", "--slow-saved-view"]
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        let saveCurrent = app.buttons["Save current view"]
+        XCTAssertTrue(saveCurrent.waitForExistence(timeout: 10), app.debugDescription)
+        saveCurrent.tap()
+        let name = app.textFields["Name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
+        name.tap()
+        name.typeText("Saved fixture")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        returnToSidebar(in: app)
+        app.buttons["Inbox"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
+        returnToSidebar(in: app)
+        app.buttons["Saved fixture"].firstMatch.tap()
+        returnToSidebar(in: app)
+        app.buttons["Inbox"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(
+            app.navigationBars["Saved fixture"].waitForExistence(timeout: 14),
+            "The slow saved view must not replace the screen chosen after it.\n\(app.debugDescription)")
+        XCTAssertTrue(app.navigationBars["Inbox"].exists, app.debugDescription)
+    }
+
     func testOpenDocumentOffersSharing() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -221,10 +345,21 @@ import XCTest
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
     }
 
+    /// Goes back to the sidebar, repeating once when the first tap lands during the push animation.
+    private func returnToSidebar(in app: XCUIApplication) {
+        let sidebarTitle = app.navigationBars["Folio"]
+        navigateBack(in: app)
+        if sidebarTitle.waitForExistence(timeout: 3) { return }
+        navigateBack(in: app)
+        XCTAssertTrue(sidebarTitle.waitForExistence(timeout: 5), "The Folio sidebar must reopen.")
+    }
+
     /// The iOS 27.1 runtime reports the bar's back button as `Other` to type queries and gives it no identifier,
     /// so when no bar button is found this swipes back from the leading edge, like a person would.
     private func navigateBack(in app: XCUIApplication) {
-        let back = app.navigationBars.buttons.element(boundBy: 0)
+        let back =
+            app.buttons["BackButton"].exists
+            ? app.buttons["BackButton"] : app.navigationBars.buttons.element(boundBy: 0)
         if back.waitForExistence(timeout: 2) {
             back.tap()
             return
