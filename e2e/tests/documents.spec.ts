@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test, uniqueTitle, uploadViaUi, samplePdf } from "./fixtures";
@@ -293,6 +293,116 @@ test("the file history publishes a replacement and restores an earlier original"
       return rect.top >= (toolbar?.bottom ?? 0) && rect.bottom <= window.innerHeight;
     })).toBe(true);
     await expect(page).toHaveURL(new RegExp(`/documents/${id}`));
+  } finally {
+    await request.delete(document);
+    await request.delete(`${document}/purge`);
+  }
+});
+
+test("replacement and restoration publish immutable files and reprocess the current original", async ({ request }) => {
+  test.setTimeout(90_000);
+  const title = uniqueTitle("revision-publication");
+  const original = blankPdf(1);
+  const uploaded = await request.post("/api/documents/upload", {
+    multipart: { title, file: { name: "first.pdf", mimeType: "application/pdf", buffer: original } },
+  });
+  await expect(uploaded).toBeOK();
+  const { id, created_at } = await uploaded.json();
+  const document = `/api/documents/${id}`;
+  const history = `${document}/revisions`;
+  const read = async () => {
+    const response = await request.get(document);
+    await expect(response).toBeOK();
+    return response.json();
+  };
+  const pages = async (count: number) => {
+    await expect.poll(async () => (await read()).page_count, { timeout: 20_000 }).toBe(count);
+  };
+  const list = async () => {
+    const response = await request.get(history);
+    await expect(response).toBeOK();
+    return (await response.json()).revisions;
+  };
+  const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+  const download = async (url: string, name: string, bytes: Buffer) => {
+    const response = await request.get(url);
+    await expect(response).toBeOK();
+    expect(response.headers()["content-disposition"]).toContain(name);
+    expect(await response.body()).toEqual(bytes);
+  };
+
+  try {
+    await pages(1);
+    await expect(await request.patch(document, { data: { document_date: "2020-02-29" } })).toBeOK();
+    const reviewed = await request.put(`${document}/review`, { data: { reviewed: true } });
+    await expect(reviewed).toBeOK();
+    expect((await reviewed.json()).reviewed).toBe(true);
+    const [first] = await list();
+    expect(first).toMatchObject({
+      number: 1, is_current: true, original: { filename: "first.pdf", sha256: digest(original) },
+    });
+
+    const candidates = [2, 3].map(count => ({
+      count, key: randomUUID(), name: `replacement-${count}.pdf`, bytes: blankPdf(count),
+    }));
+    const replace = (candidate: typeof candidates[number]) => request.post(history, {
+      headers: { "Idempotency-Key": candidate.key },
+      multipart: {
+        expected_current_revision_id: first.id,
+        file: { name: candidate.name, mimeType: "application/pdf", buffer: candidate.bytes },
+      },
+    });
+    const results = await Promise.all(candidates.map(replace));
+    expect(results.map(response => response.status()).sort()).toEqual([201, 409]);
+    const winnerIndex = results.findIndex(response => response.status() === 201);
+    const winner = candidates[winnerIndex];
+    const replacement = await results[winnerIndex].json();
+    const replay = await replace(winner);
+    expect(replay.status()).toBe(200);
+    expect((await replay.json()).id).toBe(replacement.id);
+    expect(replacement).toMatchObject({
+      number: 2, is_current: true, original: { filename: winner.name, sha256: digest(winner.bytes) },
+    });
+    expect((await list()).map((revision: { id: string }) => revision.id)).toEqual([replacement.id, first.id]);
+    expect(await read()).toMatchObject({ title, created_at, document_date: "2020-02-29", reviewed: false });
+    await pages(winner.count);
+    await download(`${document}/download`, winner.name, winner.bytes);
+    await download(`${history}/${first.id}/download`, "first.pdf", original);
+
+    const restoreKey = randomUUID();
+    const restore = (key: string, expected: string) => request.post(`${history}/${first.id}/restore`, {
+      headers: { "Idempotency-Key": key }, data: { expected_current_revision_id: expected },
+    });
+    expect((await restore(randomUUID(), first.id)).status()).toBe(409);
+    const restoredResponse = await restore(restoreKey, replacement.id);
+    expect(restoredResponse.status()).toBe(201);
+    const restored = await restoredResponse.json();
+    expect(restored).toMatchObject({
+      number: 3, is_current: true, restored_from_revision_id: first.id,
+      original: { filename: "first.pdf", sha256: digest(original) },
+    });
+    const restoreReplay = await restore(restoreKey, replacement.id);
+    expect(restoreReplay.status()).toBe(200);
+    expect((await restoreReplay.json()).id).toBe(restored.id);
+    expect((await list()).map((revision: { id: string }) => revision.id)).toEqual([restored.id, replacement.id, first.id]);
+    await pages(1);
+    await download(`${document}/download`, "first.pdf", original);
+    await download(`${history}/${replacement.id}/download`, winner.name, winner.bytes);
+
+    expect((await request.delete(document)).status()).toBe(204);
+    expect((await request.get(`${history}/${replacement.id}/download`)).status()).toBe(404);
+    await expect(await request.post(`${document}/restore`)).toBeOK();
+    expect((await list())[0]).toMatchObject({ id: restored.id, is_current: true });
+    await download(`${history}/${replacement.id}/download`, winner.name, winner.bytes);
+
+    expect((await request.delete(document)).status()).toBe(204);
+    expect((await request.delete(`${document}/purge`)).status()).toBe(202);
+    await expect.poll(async () => {
+      const response = await request.get("/api/documents/trash");
+      await expect(response).toBeOK();
+      return (await response.json()).some((entry: { id: string }) => entry.id === id);
+    }, { timeout: 20_000 }).toBe(false);
+    expect((await request.post(`${document}/restore`)).status()).toBe(404);
   } finally {
     await request.delete(document);
     await request.delete(`${document}/purge`);
