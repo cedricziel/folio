@@ -55,6 +55,7 @@ pub struct AppState {
     pub thumbnail_service: Arc<ThumbnailService>,
     pub job_queue: JobQueue,
     pub store: Arc<dyn DocumentStore>,
+    pub archive: Option<Arc<folio_infra::queue::ArchiveService>>,
     pub event_broadcaster: EventBroadcaster,
     /// Source of truth for events; SSE replays from it
     pub outbox: Arc<dyn OutboxStore>,
@@ -167,6 +168,7 @@ impl AppState {
             thumbnail_service,
             job_queue,
             store,
+            archive: None,
             event_broadcaster,
             outbox,
             health_checks: Arc::from(Vec::new()),
