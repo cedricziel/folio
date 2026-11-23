@@ -1117,6 +1117,110 @@ async fn document_detail_distinguishes_empty_ocr_from_indexing_failure() {
 }
 
 #[tokio::test]
+async fn original_exports_keep_both_revisions_after_the_current_pointer_changes() {
+    let h = test_app().await;
+    let doc = h
+        .state
+        .document_repo
+        .create_for_upload(
+            h.vault,
+            CreateDocument {
+                title: "Updated invoice".into(),
+                original_filename: Some("first.pdf".into()),
+                mime_type: Some("application/pdf".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let first = b"unchanged bytes from revision one";
+    let next = b"new bytes from revision two";
+    let next_id = Uuid::new_v4();
+    let first_key = keys::original(doc.id);
+    let next_key = keys::revision_original(doc.id, next_id);
+    let first_identity =
+        folio_core::models::FileIdentity::from_bytes(&first_key, "application/pdf", first);
+    let next_identity =
+        folio_core::models::FileIdentity::from_bytes(&next_key, "application/pdf", next);
+
+    h.state
+        .store
+        .put(&first_key, first.as_slice().into())
+        .await
+        .unwrap();
+    h.state
+        .store
+        .put(&next_key, next.as_slice().into())
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .finalize_verified_upload(h.vault, doc.id, &first_identity)
+        .await
+        .unwrap();
+
+    let Database::Sqlite(pool) =
+        Database::connect(&format!("sqlite://{}/test.db", h.dir.display()))
+            .await
+            .unwrap()
+    else {
+        panic!("expected the file-backed route fixture");
+    };
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    sqlx::query(
+        "INSERT INTO document_files (id, document_id, vault_id, role, storage_key, original_filename,
+             mime_type, verification_state, sha256, byte_size)
+         VALUES (?, ?, ?, 'original', ?, 'second.pdf', 'application/pdf', 'verified', ?, ?)",
+    )
+    .bind(next_id.to_string())
+    .bind(doc.id.to_string())
+    .bind(h.vault.to_string())
+    .bind(&next_identity.storage_key)
+    .bind(&next_identity.sha256)
+    .bind(i64::try_from(next_identity.byte_size).unwrap())
+    .execute(&mut *tx).await.unwrap();
+    sqlx::query(
+        "INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at)
+         VALUES (?, ?, ?, 2, ?, '2026-11-22T21:00:00Z')",
+    )
+    .bind(next_id.to_string())
+    .bind(doc.id.to_string())
+    .bind(h.vault.to_string())
+    .bind(next_id.to_string())
+    .execute(&mut *tx).await.unwrap();
+    sqlx::query("UPDATE documents SET current_revision_id = ?, file_path = ?, original_filename = 'second.pdf' WHERE id = ?")
+        .bind(next_id.to_string()).bind(&next_identity.storage_key).bind(doc.id.to_string())
+        .execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let root = format!("/api/documents/{}", doc.id);
+    let history = format!("{root}/revisions");
+    let (status, response) = request(&h, "GET", &history).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["revisions"][0]["id"], next_id.to_string());
+    assert_eq!(response["revisions"][0]["is_current"], true);
+    assert_eq!(response["revisions"][1]["id"], doc.id.to_string());
+    assert_eq!(response["revisions"][1]["is_current"], false);
+    for (uri, contents) in [
+        (format!("{root}/download"), next.as_slice()),
+        (format!("{history}/{next_id}/download"), next.as_slice()),
+        (format!("{history}/{}/download", doc.id), first.as_slice()),
+    ] {
+        let response = h
+            .router
+            .clone()
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), contents);
+    }
+}
+
+#[tokio::test]
 async fn revision_history_lists_metadata_and_downloads_the_original() {
     let h = test_app().await;
     let doc = h

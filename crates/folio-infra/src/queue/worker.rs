@@ -11,7 +11,7 @@ use tracing::{debug, error, info, info_span, warn, Instrument};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use folio_core::events::{DocumentEvent, EventOrigin};
-use folio_core::models::{ProcessingStage, ProcessingStatus, VaultId};
+use folio_core::models::{Document, ProcessingStage, ProcessingStatus, VaultId};
 use folio_core::ports::{
     DocumentRepository, DocumentStore, EmbeddedChunk, EmbeddingService, OcrService, OutboxStore,
     SearchService,
@@ -45,6 +45,17 @@ fn processing_failure(
         reason,
         source: source.into(),
     })
+}
+
+fn ocr_child(document_id: uuid::Uuid, revision_id: Option<uuid::Uuid>, force: bool) -> JobType {
+    match revision_id {
+        Some(revision_id) => JobType::ExtractRevisionText {
+            document_id,
+            revision_id,
+            force,
+        },
+        None => JobType::ExtractText { document_id, force },
+    }
 }
 
 async fn run_with_lease<T>(
@@ -583,21 +594,25 @@ impl Worker {
                         .await
                         .map_err(Into::into)
                 }
-                JobType::ExtractText { .. } => Box::pin(self.process_claimed_ocr(job)).await,
-                JobType::GenerateEmbedding { .. } => {
+                JobType::ExtractText { .. } | JobType::ExtractRevisionText { .. } => {
+                    Box::pin(self.process_claimed_ocr(job)).await
+                }
+                JobType::GenerateEmbedding { .. } | JobType::GenerateRevisionEmbedding { .. } => {
                     Box::pin(self.process_claimed_embedding(job)).await
                 }
-                JobType::GenerateThumbnail { .. } => Box::pin(self.process_claimed_thumbnail(job))
-                    .await
-                    .map(|_| ()),
-                JobType::ProcessDocument { document_id, force } => {
+                JobType::GenerateThumbnail { .. } | JobType::GenerateRevisionThumbnail { .. } => {
+                    Box::pin(self.process_claimed_thumbnail(job))
+                        .await
+                        .map(|_| ())
+                }
+                JobType::ProcessDocument { document_id, force }
+                | JobType::ProcessDocumentRevision {
+                    document_id, force, ..
+                } => {
                     Box::pin(async {
                         if let Err(error) = self
                             .queue
-                            .enqueue(JobType::ExtractText {
-                                document_id: *document_id,
-                                force: *force,
-                            })
+                            .enqueue(ocr_child(*document_id, job_type.revision_id(), *force))
                             .await
                         {
                             if !super::processing_scope::is_stale_parent(&error) {
@@ -801,6 +816,32 @@ impl Worker {
         }
     }
 
+    async fn claimed_document(
+        &self,
+        vault_id: VaultId,
+        document_id: uuid::Uuid,
+        revision_id: Option<uuid::Uuid>,
+    ) -> Result<Option<Document>, BoxError> {
+        let mut document = self
+            .document_repo
+            .find_by_id(vault_id, document_id)
+            .await?
+            .ok_or("Document not found")?;
+        if let Some(revision_id) = revision_id {
+            let Some(revision) = self
+                .document_repo
+                .find_revision(vault_id, document_id, revision_id)
+                .await?
+                .filter(|revision| revision.is_current)
+            else {
+                return Ok(None);
+            };
+            document.file_path = Some(revision.original.storage_key);
+            document.mime_type = Some(revision.original.mime_type);
+        }
+        Ok(Some(document))
+    }
+
     async fn process_claimed_thumbnail(&self, job: &Job) -> Result<bool, BoxError> {
         use folio_core::processing_events::{ProcessingEventStage, ProcessingReason};
         let Some(fence) = self
@@ -810,19 +851,26 @@ impl Worker {
         else {
             return Ok(false);
         };
-        if matches!(job.job_type, JobType::ProcessDocument { .. })
-            && !self.pipeline.settings().await.processing.auto_thumbnail
+        if matches!(
+            job.job_type,
+            JobType::ProcessDocument { .. } | JobType::ProcessDocumentRevision { .. }
+        ) && !self.pipeline.settings().await.processing.auto_thumbnail
         {
             return Ok(self
                 .queue
                 .skip_derived(&fence, ProcessingReason::ProviderDisabled)
                 .await?);
         }
-        let document = self
-            .document_repo
-            .find_by_id(fence.vault_id(), fence.document_id())
+        let Some(document) = self
+            .claimed_document(
+                fence.vault_id(),
+                fence.document_id(),
+                job.job_type.revision_id(),
+            )
             .await?
-            .ok_or("Document not found")?;
+        else {
+            return Ok(false);
+        };
         let mime = document
             .mime_type
             .as_deref()
@@ -878,9 +926,6 @@ impl Worker {
 
     async fn process_claimed_embedding(&self, job: &Job) -> Result<(), BoxError> {
         use folio_core::processing_events::{ProcessingEventStage, ProcessingReason};
-        let JobType::GenerateEmbedding { .. } = job.job_type else {
-            return Ok(());
-        };
         let Some(fence) = self
             .queue
             .start_derived(job, ProcessingEventStage::Embedding)
@@ -888,11 +933,16 @@ impl Worker {
         else {
             return Ok(());
         };
-        let document = self
-            .document_repo
-            .find_by_id(fence.vault_id(), fence.document_id())
+        let Some(document) = self
+            .claimed_document(
+                fence.vault_id(),
+                fence.document_id(),
+                job.job_type.revision_id(),
+            )
             .await?
-            .ok_or("Document not found")?;
+        else {
+            return Ok(());
+        };
         let content = document.content.unwrap_or_default();
         let chunks = chunk_text(&content, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS);
         let reason = if chunks.is_empty() {
@@ -927,14 +977,23 @@ impl Worker {
         let Some(fence) = self.queue.start_ocr(job).await? else {
             return Ok(());
         };
-        let force = matches!(job.job_type, JobType::ExtractText { force: true, .. });
+        let force = matches!(
+            job.job_type,
+            JobType::ExtractText { force: true, .. }
+                | JobType::ExtractRevisionText { force: true, .. }
+        );
         let settings = self.pipeline.settings().await;
         let embed = settings.processing.auto_embed && settings.embeddings.provider != "none";
-        let document = self
-            .document_repo
-            .find_by_id(fence.vault_id(), fence.document_id())
+        let Some(document) = self
+            .claimed_document(
+                fence.vault_id(),
+                fence.document_id(),
+                job.job_type.revision_id(),
+            )
             .await?
-            .ok_or("Document not found")?;
+        else {
+            return Ok(());
+        };
         if let Some(content) = document
             .content
             .as_deref()
@@ -1781,6 +1840,67 @@ mod tests {
         );
         assert_eq!(events[3].data()["attempt"], 2);
         assert_eq!(events[3].data()["run_id"], events[1].data()["run_id"]);
+    }
+
+    #[test]
+    fn revision_parent_passes_identity_and_force_to_ocr() {
+        let document_id = uuid::Uuid::new_v4();
+        let revision_id = uuid::Uuid::new_v4();
+        assert!(matches!(
+            ocr_child(document_id, Some(revision_id), true),
+            JobType::ExtractRevisionText {
+                document_id: actual_document, revision_id: actual_revision, force: true
+            } if actual_document == document_id && actual_revision == revision_id
+        ));
+        assert!(matches!(
+            ocr_child(document_id, None, false),
+            JobType::ExtractText { document_id: actual, force: false } if actual == document_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_bound_worker_reads_its_original_instead_of_the_document_projection() {
+        let f = fixture("").await;
+        let vault = crate::database::test_vault();
+        let document_id = f
+            .repo
+            .create_for_upload(
+                vault,
+                CreateDocument {
+                    title: "Bound original".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+        let file = folio_core::models::FileIdentity::from_bytes(
+            "revision-original",
+            "application/pdf",
+            b"first",
+        );
+        assert!(f
+            .repo
+            .finalize_verified_upload(vault, document_id, &file)
+            .await
+            .unwrap());
+
+        sqlx::query("UPDATE documents SET file_path = 'different-projection', mime_type = 'image/png' WHERE id = ?")
+            .bind(document_id.to_string()).execute(&f.pool).await.unwrap();
+        let input = f
+            .worker
+            .claimed_document(vault, document_id, Some(document_id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(input.file_path.as_deref(), Some("revision-original"));
+        assert_eq!(input.mime_type.as_deref(), Some("application/pdf"));
+        let missing_revision = f
+            .worker
+            .claimed_document(vault, document_id, Some(uuid::Uuid::new_v4()))
+            .await
+            .unwrap();
+        assert!(missing_revision.is_none());
     }
 
     struct Fixture {
