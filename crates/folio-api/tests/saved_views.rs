@@ -530,3 +530,168 @@ async fn saving_inbox_keeps_reviewed_documents_until_they_are_filed() {
     assert_eq!(views[0]["query"]["version"], 2);
     assert_eq!(views[0]["query"]["filters"]["inbox_only"], true);
 }
+
+#[tokio::test]
+async fn typed_metadata_view_restores_exact_results_and_rejects_an_unavailable_field() {
+    use folio_core::models::{
+        CreateDocument, MetadataChange, MetadataFieldInput, MetadataKind, MetadataValue,
+    };
+    use serde_json::{json, Value};
+
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "alice").await;
+    let field = h
+        .state
+        .metadata_fields
+        .create(
+            alice.vault,
+            MetadataFieldInput {
+                name: "Paid".into(),
+                kind: MetadataKind::Boolean,
+                required: false,
+                unique: false,
+            },
+        )
+        .await
+        .unwrap();
+    let mut unpaid_id = None;
+    for (title, paid) in [("Outstanding invoice", false), ("Settled invoice", true)] {
+        let document = h
+            .state
+            .document_repo
+            .create(
+                alice.vault,
+                CreateDocument {
+                    title: title.into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        h.state
+            .metadata_values
+            .patch(
+                alice.vault,
+                document.id,
+                None,
+                vec![MetadataChange {
+                    field_id: field.id,
+                    value: Some(MetadataValue::Boolean(paid)),
+                }],
+            )
+            .await
+            .unwrap();
+        if !paid {
+            unpaid_id = Some(document.id);
+        }
+    }
+    let vault = format!("/vaults/{}", alice.vault);
+    let new = format!(
+        "{vault}/saved-views/new?metadata_document_id={}&metadata_field_id={}",
+        unpaid_id.unwrap(),
+        field.id
+    );
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &new, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = common::text(response).await;
+    assert!(html.contains("Paid = No"));
+    assert!(html.contains("Outstanding invoice"));
+    assert!(!html.contains("Settled invoice"));
+
+    let exact = json!({
+        "field_id": field.id,
+        "value": {"kind": "boolean", "value": false}
+    });
+    let form = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("name", "Outstanding")
+        .append_pair("visibility", "private")
+        .append_pair("presentation", "list")
+        .append_pair("metadata_exact", &exact.to_string())
+        .finish();
+    let mut create = request(
+        "POST",
+        &format!("{vault}/saved-views"),
+        &alice,
+        Body::from(form),
+    );
+    create.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/x-www-form-urlencoded".parse().unwrap(),
+    );
+    let response = h.app.clone().oneshot(create).await.unwrap();
+    assert!(response.status().is_redirection());
+    let saved = response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+    let collection = format!("/api{vault}/saved-views");
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &collection, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(common::text(response).await, "[]");
+
+    let path = format!("/api{saved}");
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &path, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let current_client = || {
+        let mut req = request("GET", &path, &alice, Body::empty());
+        req.headers_mut()
+            .insert("x-folio-saved-view-query-version", "3".parse().unwrap());
+        req
+    };
+    let response = h.app.clone().oneshot(current_client()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: Value = serde_json::from_str(&common::text(response).await).unwrap();
+    assert_eq!(payload["query"]["version"], 3);
+    assert_eq!(payload["query"]["filters"]["metadata_exact"], exact);
+
+    let mut browse = request(
+        "POST",
+        "/api/documents/browse",
+        &alice,
+        Body::from(json!({"query": payload["query"]}).to_string()),
+    );
+    browse
+        .headers_mut()
+        .insert("x-folio-vault", alice.vault.to_string().parse().unwrap());
+    let response = h.app.clone().oneshot(browse).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: Value = serde_json::from_str(&common::text(response).await).unwrap();
+    let documents = payload["documents"].as_array().unwrap();
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0]["title"], "Outstanding invoice");
+
+    h.state
+        .metadata_fields
+        .set_deleted(alice.vault, field.id, true)
+        .await
+        .unwrap();
+    let response = h.app.clone().oneshot(current_client()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &saved, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = common::text(response).await;
+    assert!(html.contains("The custom field is unavailable"));
+    assert!(!html.contains("Outstanding invoice"));
+    assert!(!html.contains("Settled invoice"));
+}

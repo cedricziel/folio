@@ -1865,6 +1865,89 @@
             "bearerAuth": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "browseFilteredDocuments",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowseFilteredInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One page matching the versioned query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowseResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/ids": {
@@ -7901,6 +7984,20 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Saved-View-Query-Version",
+            "in": "header",
+            "description": "Maximum saved query version the client can read. Defaults to 2.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -8047,6 +8144,20 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Saved-View-Query-Version",
+            "in": "header",
+            "description": "Maximum saved query version the client can read. Defaults to 2.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
             }
           }
         ],
@@ -8971,6 +9082,32 @@
           }
         }
       },
+      "BrowseFilteredInput": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "query": {
+            "$ref": "#/components/schemas/SavedViewQuery"
+          }
+        },
+        "additionalProperties": false
+      },
       "BrowseResponse": {
         "type": "object",
         "required": [
@@ -9830,6 +9967,10 @@
           "inbox_only": {
             "type": "boolean",
             "description": "Exclude filed documents while retaining documents with active or failed processing."
+          },
+          "metadata_exact": {
+            "$ref": "#/components/schemas/MetadataExactFilter",
+            "description": "Match one custom field's exact typed value."
           },
           "reviewed": {
             "type": [
@@ -10700,6 +10841,23 @@
           "replaced",
           "cleared"
         ]
+      },
+      "MetadataExactFilter": {
+        "type": "object",
+        "required": [
+          "field_id",
+          "value"
+        ],
+        "properties": {
+          "field_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "value": {
+            "$ref": "#/components/schemas/MetadataValue"
+          }
+        },
+        "additionalProperties": false
       },
       "MetadataField": {
         "type": "object",

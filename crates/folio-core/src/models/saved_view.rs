@@ -44,10 +44,18 @@ impl Default for SavedViewQuery {
 }
 
 impl SavedViewQuery {
+    fn version_for(filters: &DocumentFilter) -> u32 {
+        match (filters.metadata_exact.is_some(), filters.inbox_only) {
+            (true, _) => 3,
+            (false, true) => 2,
+            (false, false) => 1,
+        }
+    }
+
     /// Save the filters and sort without retaining the page size or continuation.
     pub fn from_document_page(page: DocumentPageQuery) -> Self {
         Self {
-            version: if page.filter.inbox_only { 2 } else { 1 },
+            version: Self::version_for(&page.filter),
             filters: page.filter,
             sort: page.sort,
         }
@@ -60,13 +68,13 @@ impl SavedViewQuery {
         limit: u32,
         cursor: Option<DocumentCursor>,
     ) -> Result<DocumentPageQuery> {
-        if !matches!(
-            (self.version, self.filters.inbox_only),
-            (1, false) | (2, true)
-        ) {
+        if self.version != Self::version_for(&self.filters) {
             return Err(Error::Validation(
                 "Unsupported saved-view query version".into(),
             ));
+        }
+        if let Some(exact) = &self.filters.metadata_exact {
+            exact.value.clone().validate(exact.value.kind(), false)?;
         }
         if self
             .filters

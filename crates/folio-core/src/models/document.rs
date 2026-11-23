@@ -319,9 +319,9 @@ pub struct DocumentFilter {
     pub created_after: Option<DateTime<Utc>>,
     /// Only documents created strictly before this instant
     pub created_before: Option<DateTime<Utc>>,
-    /// Internal until saved-query clients negotiate support for typed metadata.
-    #[serde(skip)]
-    #[cfg_attr(feature = "openapi", schema(ignore))]
+    /// Match one custom field's exact typed value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = MetadataExactFilter, required = false))]
     pub metadata_exact: Option<MetadataExactFilter>,
 }
 

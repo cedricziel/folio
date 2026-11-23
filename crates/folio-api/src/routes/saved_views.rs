@@ -5,7 +5,8 @@ use axum::{
     Json, Router,
 };
 use folio_core::models::{
-    SavedView, SavedViewInput, SavedViewQuery, VaultId, VaultRole, ViewPresentation, ViewVisibility,
+    MetadataExactFilter, MetadataValue, SavedView, SavedViewInput, SavedViewQuery, VaultId,
+    VaultRole, ViewPresentation, ViewVisibility,
 };
 use folio_core::ports::SavedViewAccess;
 use serde::Deserialize;
@@ -96,6 +97,61 @@ pub(super) async fn validate_references(
             return Err(ApiError::bad_request("A saved-view tag is unavailable"));
         }
     }
+    if let Some(exact) = &filters.metadata_exact {
+        validate_metadata_filter(state, vault, exact).await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn validate_metadata_filter(
+    state: &AppState,
+    vault: VaultId,
+    exact: &MetadataExactFilter,
+) -> ApiResult<()> {
+    let field = state
+        .metadata_fields
+        .find(vault, exact.field_id)
+        .await?
+        .filter(|field| field.deleted_at.is_none())
+        .ok_or_else(|| ApiError::bad_request("The custom field is unavailable"))?;
+    let value = exact.value.clone().validate(field.kind, false)?;
+    if let MetadataValue::Select(option) = value {
+        if state
+            .metadata_options
+            .find(vault, field.id, option)
+            .await?
+            .is_none_or(|option| option.deleted_at.is_some())
+        {
+            return Err(ApiError::bad_request(
+                "The custom field option is unavailable",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn max_query_version(headers: &HeaderMap, default: u32) -> ApiResult<u32> {
+    Ok(headers
+        .get("x-folio-saved-view-query-version")
+        .map(|value| {
+            value
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|version| *version > 0)
+                .ok_or_else(|| ApiError::bad_request("Invalid saved-view query version"))
+        })
+        .transpose()?
+        .unwrap_or(default))
+}
+
+fn require_supported_query(headers: &HeaderMap, query: &SavedViewQuery) -> ApiResult<()> {
+    // Inbox clients advertise version 2 on list requests only.
+    if query.version > max_query_version(headers, 2)? {
+        return Err(ApiError::bad_request(
+            "Update your client to open this saved view",
+        ));
+    }
     Ok(())
 }
 
@@ -133,18 +189,7 @@ pub(crate) async fn list(
     ApiQuery(query): ApiQuery<ListViewsQuery>,
 ) -> ApiResult<Json<Vec<SavedView>>> {
     let access = access(&state, vault, uploader).await?;
-    let max_query_version = headers
-        .get("x-folio-saved-view-query-version")
-        .map(|value| {
-            value
-                .to_str()
-                .ok()
-                .and_then(|value| value.parse::<u32>().ok())
-                .filter(|version| *version > 0)
-                .ok_or_else(|| ApiError::bad_request("Invalid saved-view query version"))
-        })
-        .transpose()?
-        .unwrap_or(1);
+    let max_query_version = max_query_version(&headers, 1)?;
     Ok(Json(
         state
             .saved_views
@@ -190,16 +235,19 @@ pub(super) async fn visible(
 }
 
 #[utoipa::path(get, path = "/api/vaults/{vault_id}/saved-views/{id}", operation_id = "getSavedView", tag = "saved-views",
-    params(("vault_id" = Uuid, Path), ("id" = Uuid, Path)),
+    params(("vault_id" = Uuid, Path), ("id" = Uuid, Path),
+        ("X-Folio-Saved-View-Query-Version" = Option<u32>, Header, description = "Maximum saved query version the client can read. Defaults to 2.")),
     responses((status = 200, description = "Saved view with validated references", body = SavedView), (status = 401, description = "Sign-in required"), crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::InternalError))]
 pub(crate) async fn find(
     DefaultVault(vault): DefaultVault,
     uploader: Uploader,
     State(state): State<AppState>,
+    headers: HeaderMap,
     ApiPath((_vault_id, id)): ApiPath<(Uuid, Uuid)>,
 ) -> ApiResult<Json<SavedView>> {
     let access = access(&state, vault, uploader).await?;
     let view = visible(&state, vault, &access, id).await?;
+    require_supported_query(&headers, &view.query)?;
     validate_references(&state, vault, &view.query).await?;
     Ok(Json(view))
 }
@@ -230,17 +278,20 @@ where
 }
 
 #[utoipa::path(patch, path = "/api/vaults/{vault_id}/saved-views/{id}", operation_id = "updateSavedView", tag = "saved-views",
-    params(("vault_id" = Uuid, Path), ("id" = Uuid, Path)), request_body = UpdateSavedView,
+    params(("vault_id" = Uuid, Path), ("id" = Uuid, Path),
+        ("X-Folio-Saved-View-Query-Version" = Option<u32>, Header, description = "Maximum saved query version the client can read. Defaults to 2.")), request_body = UpdateSavedView,
     responses((status = 200, description = "Updated saved view", body = SavedView), (status = 401, description = "Sign-in required"), (status = 403, description = "Editing is not allowed"), crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::Conflict, crate::openapi::InternalError))]
 pub(crate) async fn update(
     DefaultVault(vault): DefaultVault,
     uploader: Uploader,
     State(state): State<AppState>,
+    headers: HeaderMap,
     ApiPath((_vault_id, id)): ApiPath<(Uuid, Uuid)>,
     ApiJson(patch): ApiJson<UpdateSavedView>,
 ) -> ApiResult<Json<SavedView>> {
     let access = access(&state, vault, uploader).await?;
     let view = visible(&state, vault, &access, id).await?;
+    require_supported_query(&headers, &view.query)?;
     may_edit(&view, &access)?;
     let input = SavedViewInput {
         name: patch.name.unwrap_or(view.name),

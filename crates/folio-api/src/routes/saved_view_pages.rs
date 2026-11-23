@@ -7,7 +7,8 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use folio_core::models::{
-    SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility,
+    MetadataExactFilter, MetadataValue, SavedView, SavedViewInput, SavedViewQuery, VaultId,
+    ViewPresentation, ViewVisibility,
 };
 use uuid::Uuid;
 
@@ -96,6 +97,7 @@ struct Editor {
     name: String,
     search: String,
     inbox_only: bool,
+    metadata_filter: Option<MetadataFilterSummary>,
     reviewed: String,
     document_date_from: String,
     document_date_to: String,
@@ -114,6 +116,52 @@ struct Editor {
     rows: Vec<DocumentRow>,
     next: String,
     is_saved: bool,
+}
+
+struct MetadataFilterSummary {
+    field: String,
+    value: String,
+    json: String,
+}
+
+async fn metadata_summary(
+    state: &AppState,
+    vault: VaultId,
+    filter: &MetadataExactFilter,
+) -> ApiResult<MetadataFilterSummary> {
+    let field = state
+        .metadata_fields
+        .find(vault, filter.field_id)
+        .await?
+        .filter(|field| field.deleted_at.is_none())
+        .map_or_else(|| "Unavailable custom field".into(), |field| field.name);
+    let value = match &filter.value {
+        MetadataValue::Text(value) | MetadataValue::LongText(value) if value.is_empty() => {
+            "Empty text".into()
+        }
+        MetadataValue::Text(value)
+        | MetadataValue::LongText(value)
+        | MetadataValue::Integer(value)
+        | MetadataValue::Decimal(value)
+        | MetadataValue::Date(value)
+        | MetadataValue::Url(value) => value.clone(),
+        MetadataValue::Boolean(value) => if *value { "Yes" } else { "No" }.into(),
+        MetadataValue::Money { amount, currency } => format!("{amount} {currency}"),
+        MetadataValue::Select(id) => state
+            .metadata_options
+            .find(vault, filter.field_id, *id)
+            .await?
+            .filter(|option| option.deleted_at.is_none())
+            .map_or_else(|| "Unavailable option".into(), |option| option.label),
+        MetadataValue::DocumentLink(id) => state
+            .document_repo
+            .find_by_id(vault, *id)
+            .await?
+            .map_or_else(|| "Unavailable document".into(), |document| document.title),
+    };
+    let json =
+        serde_json::to_string(filter).map_err(|_| ApiError::internal("Invalid saved filter"))?;
+    Ok(MetadataFilterSummary { field, value, json })
 }
 
 fn preserve_missing(choices: &mut Vec<Choice>, ids: impl IntoIterator<Item = Uuid>, label: &str) {
@@ -217,6 +265,10 @@ async fn editor(
         .as_str()
         .unwrap_or("newest")
         .to_owned();
+    let metadata_filter = match &query.filters.metadata_exact {
+        Some(filter) => Some(metadata_summary(state, vault, filter).await?),
+        None => None,
+    };
     render(Editor {
         query_error,
         sidebar,
@@ -230,6 +282,7 @@ async fn editor(
             .unwrap_or_default(),
         search: query.filters.search_query.unwrap_or_default(),
         inbox_only: query.filters.inbox_only,
+        metadata_filter,
         reviewed: query
             .filters
             .reviewed
@@ -296,7 +349,41 @@ async fn new(
     RawQuery(raw): RawQuery,
 ) -> ApiResult<Html<String>> {
     let access = saved_views::access(&state, vault, uploader).await?;
-    let query = super::browse::query(raw.as_deref())?;
+    let mut query = super::browse::query(raw.as_deref())?;
+    let mut document = None;
+    let mut field = None;
+    for (key, value) in url::form_urlencoded::parse(raw.as_deref().unwrap_or_default().as_bytes()) {
+        let target = match key.as_ref() {
+            "metadata_document_id" => &mut document,
+            "metadata_field_id" => &mut field,
+            _ => continue,
+        };
+        if target.is_some() {
+            return Err(ApiError::bad_request(
+                "Specify one custom field on one document",
+            ));
+        }
+        *target = Some(
+            Uuid::parse_str(&value)
+                .map_err(|_| ApiError::bad_request("Invalid custom field source"))?,
+        );
+    }
+    match (document, field) {
+        (Some(document), Some(field_id)) if query.filter.metadata_exact.is_none() => {
+            let value = state
+                .metadata_values
+                .get(vault, document)
+                .await?
+                .values
+                .into_iter()
+                .find(|value| value.field_id == field_id && value.deleted_at.is_none())
+                .and_then(|value| value.value)
+                .ok_or_else(|| ApiError::bad_request("The custom field value is unavailable"))?;
+            query.filter.metadata_exact = Some(MetadataExactFilter { field_id, value });
+        }
+        (None, None) => {}
+        _ => return Err(ApiError::bad_request("Invalid custom field source")),
+    }
     editor(
         &state,
         vault,
@@ -354,6 +441,9 @@ fn input(bytes: &[u8]) -> ApiResult<SavedViewInput> {
     };
     let mut query = url::form_urlencoded::Serializer::new(String::new());
     for (key, value) in &values {
+        if key == "metadata_exact" || key == "remove_metadata_filter" {
+            continue;
+        }
         if value.is_empty() || key == "created_after_original" || key == "created_before_original" {
             continue;
         }
@@ -373,7 +463,17 @@ fn input(bytes: &[u8]) -> ApiResult<SavedViewInput> {
             query.append_pair(key, value);
         }
     }
-    let page = super::browse::query(Some(&query.finish()))?;
+    let mut page = super::browse::query(Some(&query.finish()))?;
+    if field("remove_metadata_filter") != "true" {
+        page.filter.metadata_exact = values
+            .iter()
+            .find(|(key, _)| key == "metadata_exact")
+            .map(|(_, value)| {
+                serde_json::from_str(value)
+                    .map_err(|_| ApiError::bad_request("Invalid custom field filter"))
+            })
+            .transpose()?;
+    }
     Ok(SavedViewInput {
         name: field("name").into(),
         visibility,

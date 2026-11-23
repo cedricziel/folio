@@ -20,7 +20,7 @@ use super::view::{Nav, Sidebar};
 use crate::{
     error::{ApiError, ApiResult},
     state::AppState,
-    vault::{filters, DefaultVault},
+    vault::{filters, DefaultVault, Uploader},
 };
 
 const PAGE_SIZE: usize = 50;
@@ -45,6 +45,7 @@ struct FieldRow {
     display: String,
     href: Option<String>,
     edit_href: Option<String>,
+    saved_view_href: Option<String>,
     retired: bool,
 }
 
@@ -135,6 +136,7 @@ async fn panel(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Query(query): Query<FieldsQuery>,
+    Uploader(user): Uploader,
 ) -> ApiResult<Html<String>> {
     let document = document(&state, vault, id).await?;
     let can_edit = crate::vault_context::can_edit_document(&document);
@@ -176,12 +178,22 @@ async fn panel(
                 query.return_to.as_deref(),
             )
         });
+        let saved_view_href = (user.is_some()
+            && field.deleted_at.is_none()
+            && assignment.is_some_and(|value| value.deleted_at.is_none() && value.value.is_some()))
+        .then(|| {
+            crate::vault::url(&format!(
+                "/saved-views/new?metadata_document_id={id}&metadata_field_id={}",
+                field.id
+            ))
+        });
         rows.push(FieldRow {
             name: field.name,
             retired: field.deleted_at.is_some(),
             display,
             href,
             edit_href,
+            saved_view_href,
         });
     }
     FieldsPanel { rows, next }

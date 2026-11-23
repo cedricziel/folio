@@ -14,6 +14,9 @@
                 {% if let Some(href) = row.edit_href %}
                 <a class="f-btn f-btn-quiet" href="{{ href }}" data-turbo-frame="_top" aria-label="Edit {{ row.name }}">Edit</a>
                 {% endif %}
+                {% if let Some(href) = row.saved_view_href %}
+                <a class="f-btn f-btn-quiet" href="{{ href }}" data-turbo-frame="_top" aria-label="Save a view matching {{ row.name }}">Save matching view</a>
+                {% endif %}
             </dd>
             {% endfor %}
         </dl>

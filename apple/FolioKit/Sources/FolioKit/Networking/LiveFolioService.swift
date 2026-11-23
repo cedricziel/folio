@@ -142,7 +142,7 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
             try await client.listSavedViews(
                 path: .init(vaultId: vaultID.uuidString.lowercased()),
                 query: .init(after: after?.uuidString.lowercased(), limit: 50),
-                headers: .init(xFolioSavedViewQueryVersion: 2)
+                headers: .init(xFolioSavedViewQueryVersion: 3)
             ).ok.body.json.map { try Self.savedView($0) }
         }
     }
@@ -152,7 +152,8 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
         return try await call("saved_views.get") {
             try await Self.savedView(
                 client.getSavedView(
-                    path: .init(vaultId: vaultID.uuidString.lowercased(), id: id.uuidString.lowercased())
+                    path: .init(vaultId: vaultID.uuidString.lowercased(), id: id.uuidString.lowercased()),
+                    headers: .init(xFolioSavedViewQueryVersion: 3)
                 ).ok.body.json
             )
         }
@@ -181,6 +182,7 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
             return try await Self.savedView(
                 client.updateSavedView(
                     path: .init(vaultId: vaultID.uuidString.lowercased(), id: id.uuidString.lowercased()),
+                    headers: .init(xFolioSavedViewQueryVersion: 3),
                     body: .json(patch)
                 ).ok.body.json
             )
@@ -196,22 +198,29 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
         }
     }
 
-    private static func savedViewInput(_ draft: SavedViewDraft) -> Components.Schemas.SavedViewInput {
+    private static func savedQueryInput(_ browse: DocumentBrowseQuery) -> Components.Schemas.SavedViewQuery {
         var filters = Components.Schemas.DocumentFilter()
-        filters.correspondentId = draft.query.filter.correspondentID?.uuidString.lowercased()
-        filters.documentTypeId = draft.query.filter.documentTypeID?.uuidString.lowercased()
-        filters.tagIds = draft.query.filter.tagIDs.map { $0.uuidString.lowercased() }
-        filters.searchQuery = draft.query.text
-        filters.createdAfter = draft.query.filter.createdAfter
-        filters.createdBefore = draft.query.filter.createdBefore
-        filters.reviewed = draft.query.filter.reviewed
-        filters.documentDateFrom = draft.query.filter.documentDateFrom?.rawValue
-        filters.documentDateTo = draft.query.filter.documentDateTo?.rawValue
-        filters.inboxOnly = draft.query.filter.inboxOnly ? true : nil
-        var query = Components.Schemas.SavedViewQuery(version: draft.query.filter.inboxOnly ? 2 : 1)
+        filters.correspondentId = browse.filter.correspondentID?.uuidString.lowercased()
+        filters.documentTypeId = browse.filter.documentTypeID?.uuidString.lowercased()
+        filters.tagIds = browse.filter.tagIDs.map { $0.uuidString.lowercased() }
+        filters.searchQuery = browse.text
+        filters.createdAfter = browse.filter.createdAfter
+        filters.createdBefore = browse.filter.createdBefore
+        filters.reviewed = browse.filter.reviewed
+        filters.documentDateFrom = browse.filter.documentDateFrom?.rawValue
+        filters.documentDateTo = browse.filter.documentDateTo?.rawValue
+        filters.inboxOnly = browse.filter.inboxOnly ? true : nil
+        filters.metadataExact = browse.filter.metadataExact.map(Self.exactMetadataInput)
+        var query = Components.Schemas.SavedViewQuery(
+            version: filters.metadataExact != nil ? 3 : (browse.filter.inboxOnly ? 2 : 1)
+        )
         query.filters = filters
-        query.sort = .init(rawValue: draft.query.sort.rawValue)
-        var input = Components.Schemas.SavedViewInput(name: draft.name, query: query)
+        query.sort = .init(rawValue: browse.sort.rawValue)
+        return query
+    }
+
+    private static func savedViewInput(_ draft: SavedViewDraft) -> Components.Schemas.SavedViewInput {
+        var input = Components.Schemas.SavedViewInput(name: draft.name, query: Self.savedQueryInput(draft.query))
         input.visibility = .init(rawValue: draft.visibility.rawValue)
         input.presentation = .init(rawValue: draft.presentation.rawValue)
         return input
@@ -220,7 +229,8 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     private static func savedView(_ value: Components.Schemas.SavedView) throws -> SavedView {
         let filters = value.query.filters ?? .init()
         let inboxOnly = filters.inboxOnly == true
-        guard value.query.version == (inboxOnly ? 2 : 1),
+        let expectedVersion = filters.metadataExact != nil ? 3 : (inboxOnly ? 2 : 1)
+        guard Int(value.query.version) == expectedVersion,
             let visibility = SavedView.Visibility(rawValue: value.visibility.rawValue),
             let presentation = SavedView.Presentation(rawValue: value.presentation.rawValue)
         else { throw FolioError.unreadableResponse }
@@ -232,7 +242,12 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
                 documentTypeID: filters.documentTypeId.map(Self.uuid),
                 createdAfter: filters.createdAfter, createdBefore: filters.createdBefore,
                 reviewed: filters.reviewed, documentDateFrom: Self.documentDate(filters.documentDateFrom),
-                documentDateTo: Self.documentDate(filters.documentDateTo), inboxOnly: inboxOnly
+                documentDateTo: Self.documentDate(filters.documentDateTo), inboxOnly: inboxOnly,
+                metadataExact: filters.metadataExact.map { filter in
+                    try ExactCustomFieldFilter(
+                        fieldID: Self.uuid(filter.fieldId), value: CustomFieldValue(filter.value)
+                    )
+                }
             ), sort: .init(rawValue: value.query.sort?.rawValue ?? "newest") ?? .newest
         )
         return try SavedView(
@@ -241,6 +256,10 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
             createdAt: value.createdAt, updatedAt: value.updatedAt,
             createdBy: value.createdBy, updatedBy: value.updatedBy
         )
+    }
+
+    private static func exactMetadataInput(_ filter: ExactCustomFieldFilter) -> Components.Schemas.MetadataExactFilter {
+        .init(fieldId: filter.fieldID.uuidString.lowercased(), value: filter.value.apiValue)
     }
 
     public func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) async throws -> DocumentEntryPage
@@ -296,18 +315,31 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     public func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage {
         try await call("documents.browse", attributes: query.telemetryAttributes(cursor: cursor)) {
             let filter = query.filter
-            let input = Operations.BrowseDocuments.Input.Query(
-                inboxOnly: filter.inboxOnly ? true : nil,
-                q: query.text.isEmpty ? nil : query.text,
-                limit: query.limit, sort: query.sort.rawValue, cursor: cursor,
-                reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
-                documentDateTo: filter.documentDateTo?.rawValue,
-                correspondentId: filter.correspondentID?.uuidString.lowercased(),
-                documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
-                tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
-                createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
-            )
-            let page = try await client.browseDocuments(query: input).ok.body.json
+            let page: Components.Schemas.BrowseResponse
+            if filter.metadataExact != nil {
+                do {
+                    page = try await mappedCall {
+                        try await client.browseFilteredDocuments(
+                            body: .json(.init(cursor: cursor, limit: query.limit, query: Self.savedQueryInput(query)))
+                        ).ok.body.json
+                    }
+                } catch let FolioError.server(status, _) where status == 405 {
+                    throw FolioError.server(status: 501, message: "This server does not support custom field filters.")
+                }
+            } else {
+                let input = Operations.BrowseDocuments.Input.Query(
+                    inboxOnly: filter.inboxOnly ? true : nil,
+                    q: query.text.isEmpty ? nil : query.text,
+                    limit: query.limit, sort: query.sort.rawValue, cursor: cursor,
+                    reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
+                    documentDateTo: filter.documentDateTo?.rawValue,
+                    correspondentId: filter.correspondentID?.uuidString.lowercased(),
+                    documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
+                    tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
+                    createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
+                )
+                page = try await client.browseDocuments(query: input).ok.body.json
+            }
             try requireReviewFilters(filter, supported: page.supportsDocumentReviewFilters)
             return try DocumentPage(
                 vaultID: Self.uuid(page.vaultId), documents: page.documents.map { try Document($0) },
