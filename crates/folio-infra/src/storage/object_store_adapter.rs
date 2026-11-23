@@ -1,6 +1,7 @@
 //! `DocumentStore` over any `object_store` backend
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,7 +19,7 @@ use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions, RetryConfig
 use folio_core::error::{Error, Result};
 use folio_core::ports::{DocumentStore, StoredObject};
 
-use super::storage_err;
+use super::{local_create_cleanup, storage_err};
 use crate::config::S3Config;
 use crate::telemetry::metrics;
 
@@ -26,6 +27,7 @@ pub struct ObjectStoreDocumentStore {
     store: Arc<dyn ObjectStore>,
     single_create: Option<Arc<dyn ObjectStore>>,
     backend: &'static str,
+    local_root: Option<PathBuf>,
     signer: Option<Arc<AmazonS3>>,
     /// Key prefix the signer must add, because it sees the unprefixed bucket.
     prefix: Option<Path>,
@@ -37,13 +39,17 @@ impl ObjectStoreDocumentStore {
         tokio::fs::create_dir_all(root)
             .await
             .map_err(|e| storage_err("Failed to create storage directory", e))?;
-        let store = LocalFileSystem::new_with_prefix(root)
+        let root = tokio::fs::canonicalize(root)
+            .await
+            .map_err(|e| storage_err("Failed to resolve local storage directory", e))?;
+        let store = LocalFileSystem::new_with_prefix(&root)
             .map_err(|e| storage_err("Failed to open local storage", e))?
             .with_automatic_cleanup(true);
         Ok(Self {
             store: Arc::new(store),
             single_create: None,
             backend: "local",
+            local_root: Some(root),
             signer: None,
             prefix: None,
         })
@@ -110,6 +116,7 @@ impl ObjectStoreDocumentStore {
             store: with_prefix(s3.clone()),
             single_create: Some(with_prefix(single_create)),
             backend: "s3",
+            local_root: None,
             signer: Some(s3),
             prefix,
         })
@@ -121,6 +128,7 @@ impl ObjectStoreDocumentStore {
             store: Arc::new(InMemory::new()),
             single_create: None,
             backend: "memory",
+            local_root: None,
             signer: None,
             prefix: None,
         }
@@ -136,6 +144,22 @@ impl ObjectStoreDocumentStore {
 
     fn path(key: &str) -> Result<Path> {
         Path::parse(key).map_err(|e| Error::Storage(format!("Invalid object key {key:?}: {e}")))
+    }
+
+    async fn clean_local_create(
+        root: &std::path::Path,
+        key: &str,
+        discard_object: bool,
+    ) -> Result<()> {
+        let path = Self::path(key)?;
+        let root = root.to_owned();
+        let failure = |error| storage_err(&format!("Failed to clean up create for {key}"), error);
+        tokio::task::spawn_blocking(move || {
+            local_create_cleanup::clean(&root, &path, discard_object)
+        })
+        .await
+        .map_err(|error| storage_err("Local create cleanup task failed", error))?
+        .map_err(failure)
     }
 
     fn map_get_error(key: &str, e: object_store::Error) -> Error {
@@ -183,6 +207,29 @@ impl DocumentStore for ObjectStoreDocumentStore {
             }
         })
         .await
+    }
+
+    async fn clear_create_staging(&self, key: &str) -> Result<()> {
+        if let Some(root) = &self.local_root {
+            self.timed(
+                "clear_create_staging",
+                Self::clean_local_create(root, key, false),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn discard_create(&self, key: &str, write_settled: bool) -> Result<()> {
+        if let Some(root) = &self.local_root {
+            return self
+                .timed("discard_create", Self::clean_local_create(root, key, true))
+                .await;
+        }
+        if write_settled || self.exists(key).await? {
+            self.delete(key).await?;
+        }
+        Ok(())
     }
 
     async fn get(&self, key: &str) -> Result<StoredObject> {

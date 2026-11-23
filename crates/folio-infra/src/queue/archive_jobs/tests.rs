@@ -8,6 +8,7 @@ use folio_core::models::CreateDocument;
 use folio_core::ports::{purge_document, DocumentRepository, StoredObject};
 use std::collections::HashSet;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tokio::sync::Notify;
 
@@ -569,6 +570,123 @@ async fn repair_removes_a_timed_out_create_that_commits_after_purge() {
             .await
             .unwrap();
     assert!(!settled);
+}
+
+async fn use_local_store(fixture: &mut Fixture) -> PathBuf {
+    let root = fixture._dir.path().join("storage");
+    fixture.archive.store = Arc::new(
+        ObjectStoreDocumentStore::local(root.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    fixture
+        .archive
+        .store
+        .put(&fixture.original.storage_key, ORIGINAL.into())
+        .await
+        .unwrap();
+    root
+}
+
+#[tokio::test]
+async fn local_publication_clears_staging_before_retaining_the_archive() {
+    let mut fixture = Fixture::new(|dir| tools(dir, true)).await;
+    let root = use_local_store(&mut fixture).await;
+    let attempt = fixture
+        .archive
+        .enqueue(test_vault(), fixture.document)
+        .await
+        .unwrap();
+    let revision = fixture.status().await.source.revision_id;
+    let path = root.join(keys::revision_artifact(fixture.document, revision, attempt));
+    let staging = PathBuf::from(format!("{}#1", path.display()));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&staging, b"abandoned stage").unwrap();
+
+    fixture.run().await;
+
+    assert!(matches!(
+        fixture.status().await.state,
+        ArchiveState::Completed(ArchiveCompletion::Ready(_))
+    ));
+    assert_eq!(std::fs::read(path).unwrap(), COPY);
+    assert!(!staging.exists(), "publication left a staging file on disk");
+}
+
+async fn interrupted_local_create() -> (Fixture, PathBuf) {
+    let mut fixture = Fixture::new(|dir| tools(dir, true)).await;
+    let root = use_local_store(&mut fixture).await;
+    let attempt = fixture
+        .archive
+        .enqueue(test_vault(), fixture.document)
+        .await
+        .unwrap();
+    let source = fixture.status().await.source;
+    let job = fixture.claim().await;
+    assert!(fixture
+        .archive
+        .database
+        .reserve_archive_output(&source, &job)
+        .await
+        .unwrap());
+    assert!(fixture.queue.complete(&job).await.unwrap());
+
+    let key = keys::revision_artifact(fixture.document, source.revision_id, attempt);
+    let path = root.join(key);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    (fixture, path)
+}
+
+#[tokio::test]
+async fn repair_removes_only_the_interrupted_local_creates_staging_files() {
+    let (fixture, path) = interrupted_local_create().await;
+    let first = PathBuf::from(format!("{}#1", path.display()));
+    let second = PathBuf::from(format!("{}#23", path.display()));
+    let other = path.with_file_name("other-attempt#1");
+    let ordinary = PathBuf::from(format!("{}#1.pdf", path.display()));
+    std::fs::write(&first, COPY).unwrap();
+    std::fs::write(&second, COPY).unwrap();
+    std::fs::write(&other, b"unrelated staging").unwrap();
+    std::fs::write(&ordinary, b"ordinary sibling").unwrap();
+
+    fixture.archive.repair().await.unwrap();
+
+    assert!(!first.exists(), "first staging file remains on disk");
+    assert!(!second.exists(), "numbered staging file remains on disk");
+    assert_eq!(std::fs::read(other).unwrap(), b"unrelated staging");
+    assert_eq!(std::fs::read(ordinary).unwrap(), b"ordinary sibling");
+    fixture.assert_original().await;
+}
+
+#[tokio::test]
+async fn repair_removes_the_local_staging_link_after_document_purge() {
+    let (fixture, path) = interrupted_local_create().await;
+    let staging = PathBuf::from(format!("{}#1", path.display()));
+    std::fs::write(&staging, COPY).unwrap();
+    std::fs::hard_link(&staging, &path).unwrap();
+
+    let vault = test_vault();
+    fixture.docs.delete(vault, fixture.document).await.unwrap();
+    fixture
+        .docs
+        .request_purge(vault, fixture.document)
+        .await
+        .unwrap();
+    purge_document(fixture.archive.store.as_ref(), fixture.document)
+        .await
+        .unwrap();
+    fixture
+        .docs
+        .finalize_purge(vault, fixture.document)
+        .await
+        .unwrap();
+    assert!(!path.exists(), "the published name survives document purge");
+    fixture.archive.repair().await.unwrap();
+
+    assert!(
+        !staging.exists(),
+        "the staged hard link keeps the bytes alive"
+    );
 }
 
 #[tokio::test]

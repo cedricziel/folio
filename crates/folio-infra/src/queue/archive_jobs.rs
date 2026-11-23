@@ -261,10 +261,13 @@ impl ArchiveService {
                 version: output.verapdf_version,
             },
         };
-        let write = tokio::time::timeout(
-            STORAGE_TIMEOUT,
-            self.store.put_if_absent(&key, output.bytes.into()),
-        )
+        let write = tokio::time::timeout(STORAGE_TIMEOUT, async {
+            let created = self.store.put_if_absent(&key, output.bytes.into()).await?;
+            if created {
+                self.store.clear_create_staging(&key).await?;
+            }
+            Ok::<_, Error>(created)
+        })
         .await;
         let completion = match write {
             Ok(Ok(true)) => {
@@ -286,14 +289,10 @@ impl ArchiveService {
             .await?
         {
             let key = keys::revision_artifact(entry.document, entry.revision, entry.attempt);
-            tokio::time::timeout(STORAGE_TIMEOUT, async {
-                // A timed-out or interrupted create can commit after any delete.
-                // Keep checking its key and avoid deletes on absent objects.
-                if entry.write_settled || self.store.exists(&key).await? {
-                    self.store.delete(&key).await?;
-                }
-                Ok::<_, Error>(())
-            })
+            tokio::time::timeout(
+                STORAGE_TIMEOUT,
+                self.store.discard_create(&key, entry.write_settled),
+            )
             .await
             .map_err(|_| Error::Storage("Archival cleanup timed out".into()))??;
             if entry.write_settled {

@@ -157,6 +157,23 @@ pub trait DocumentStore: Send + Sync {
         ))
     }
 
+    /// Clear temporary files from a completed create while preserving its object.
+    /// The caller must own the key exclusively.
+    async fn clear_create_staging(&self, _key: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Delete an abandoned create's object and any temporary files for its key.
+    /// The caller must fence publication and repeat cleanup for unsettled
+    /// writes, which can still leave files after this call returns.
+    async fn discard_create(&self, key: &str, write_settled: bool) -> Result<()> {
+        self.clear_create_staging(key).await?;
+        if write_settled || self.exists(key).await? {
+            self.delete(key).await?;
+        }
+        Ok(())
+    }
+
     /// Open an object for streaming. Missing keys yield [`Error::NotFound`].
     async fn get(&self, key: &str) -> Result<StoredObject>;
 

@@ -157,6 +157,33 @@ async fn local_directory_satisfies_the_contract() {
 }
 
 #[tokio::test]
+async fn local_create_cleanup_refuses_symlinked_parent_directories() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let store = ObjectStoreDocumentStore::local(root.path().to_str().unwrap())
+        .await
+        .unwrap();
+    let key = keys::revision_artifact(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let final_name = std::path::Path::new(&key)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let final_path = outside.path().join(final_name);
+    let staged_path = outside.path().join(format!("{final_name}#1"));
+    let parent = root.path().join(&key).parent().unwrap().to_owned();
+    std::fs::create_dir_all(parent.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(outside.path(), parent).unwrap();
+    std::fs::write(&final_path, b"outside final").unwrap();
+    std::fs::write(&staged_path, b"outside staging").unwrap();
+
+    assert!(store.discard_create(&key, true).await.is_err());
+
+    assert_eq!(std::fs::read(final_path).unwrap(), b"outside final");
+    assert_eq!(std::fs::read(staged_path).unwrap(), b"outside staging");
+}
+
+#[tokio::test]
 async fn local_store_has_no_presigned_urls() {
     let store = ObjectStoreDocumentStore::in_memory();
     assert!(store
