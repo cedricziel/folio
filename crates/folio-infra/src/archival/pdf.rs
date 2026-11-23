@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde_json::Value;
@@ -41,7 +42,12 @@ impl ArchiveConverter {
         inspect_structure(&output.stdout)
     }
 
-    pub(super) async fn has_images(&self, work: &Path, input: &Path) -> Result<bool, SkipReason> {
+    pub(super) async fn raster_pages(
+        &self,
+        work: &Path,
+        input: &Path,
+        pages: usize,
+    ) -> Result<BTreeSet<usize>, SkipReason> {
         let output = run_command(
             Tool::PdfImages,
             self.command(Tool::PdfImages, work)
@@ -51,18 +57,26 @@ impl ArchiveConverter {
             INFO_TIMEOUT,
         )
         .await?;
+        let invalid = SkipReason::ToolFailed(Tool::PdfImages);
         if !output.status.success() {
-            return Err(SkipReason::ToolFailed(Tool::PdfImages));
+            return Err(invalid);
         }
-        let list = std::str::from_utf8(&output.stdout)
-            .map_err(|_| SkipReason::ToolFailed(Tool::PdfImages))?;
+        let list = std::str::from_utf8(&output.stdout).map_err(|_| invalid)?;
         let mut lines = list.lines();
         if lines.next().and_then(|line| line.split_whitespace().next()) != Some("page")
             || !lines.next().is_some_and(|line| line.starts_with("---"))
         {
             return Err(SkipReason::ToolFailed(Tool::PdfImages));
         }
-        Ok(lines.next().is_some())
+        lines
+            .map(|line| {
+                line.split_whitespace()
+                    .next()
+                    .and_then(|page| page.parse::<usize>().ok())
+                    .filter(|page| (1..=pages).contains(page))
+                    .ok_or(SkipReason::ToolFailed(Tool::PdfImages))
+            })
+            .collect()
     }
 
     pub(super) async fn has_text_on_each_page(

@@ -37,9 +37,10 @@ Settings: `ocr.provider`, `ocr.model` (empty = provider default),
 
 The document-level converter accepts PDF, JPEG, PNG and TIFF. It uses
 OCRmyPDF to add text to scanned pages and to scanned regions on pages with
-digital text. Existing visible text and vector content are preserved. OCRmyPDF
-can replace an existing invisible OCR layer and skips unsupported conversions
-such as raster-bearing PDFs with fillable forms.
+digital text. The converter reruns OCR only on pages with raster images.
+Existing visible text and vector content are preserved. OCRmyPDF can replace
+an existing invisible OCR layer and skips unsupported conversions such as
+raster-bearing PDFs with fillable forms.
 
 Images are imported at 300 DPI. Transparent PNG pixels are composited over a
 white background. For PDFs, qpdf checks the object structure before conversion.

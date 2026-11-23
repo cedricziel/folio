@@ -242,7 +242,10 @@ async fn real_archival_tools_keep_digital_text_and_ocr_a_scan() {
     assert!(!archive.verapdf_version.is_empty());
     let pages = crate::ai::pdf::text_layer(&archive.bytes).await.unwrap();
     assert_eq!(pages.len(), 5);
-    assert!(pages[0].contains("Page 1 digital document reference information"));
+    assert!(
+        pages[0].contains("Page 1 digital document reference information"),
+        "{pages:?}"
+    );
     assert!(pages[2].contains("Cobalt Orchard 9716"), "{pages:?}");
 
     let dir = tempfile::tempdir().unwrap();

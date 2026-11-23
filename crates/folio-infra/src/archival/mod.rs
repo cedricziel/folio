@@ -148,11 +148,11 @@ impl ArchiveConverter {
                 .map_err(|_| SkipReason::TemporaryStorage)??;
         }
 
-        let (source_pages, ocr_mode) = if input_name == "source.pdf" {
+        let (source_pages, raster_pages) = if input_name == "source.pdf" {
             let pages = self.inspect_pdf(&work, &input).await?;
-            let has_images = self.has_images(&work, &input).await?;
+            let raster_pages = self.raster_pages(&work, &input, pages).await?;
             let validation = self.validate(&work, &input, source.len() as u64).await?;
-            if let Some(version) = validation.filter(|_| !has_images) {
+            if let Some(version) = validation.filter(|_| raster_pages.is_empty()) {
                 if self.has_text_on_each_page(&work, &input, pages).await {
                     return Ok(ValidatedArchive {
                         bytes: source.to_vec(),
@@ -162,14 +162,9 @@ impl ArchiveConverter {
                     });
                 }
             }
-            let mode = if has_images {
-                "--redo-ocr"
-            } else {
-                "--skip-text"
-            };
-            (Some(pages), mode)
+            (Some(pages), raster_pages)
         } else {
-            (None, "--skip-text")
+            (None, Default::default())
         };
 
         let version = self
@@ -185,7 +180,6 @@ impl ArchiveConverter {
         command.args([
             "--output-type",
             "pdfa-2",
-            ocr_mode,
             "--optimize",
             "0",
             "--pdfa-image-compression",
@@ -197,6 +191,17 @@ impl ArchiveConverter {
             "--language",
             &self.languages,
         ]);
+        if raster_pages.is_empty() {
+            command.arg("--skip-text");
+        } else {
+            let pages = raster_pages
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            // Whole-document redo can duplicate existing text on image-free pages.
+            command.args(["--redo-ocr", "--pages", &pages]);
+        }
         if source_pages.is_none() {
             command.args(["--image-dpi", "300"]);
         }
