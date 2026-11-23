@@ -239,3 +239,37 @@ async fn s3_satisfies_the_contract_on_minio() {
     let body = reqwest::get(&url).await.unwrap().bytes().await.unwrap();
     assert_eq!(&body[..], b"scoped");
 }
+
+#[tokio::test]
+async fn s3_create_only_does_not_replay_after_a_gateway_error() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/folio-test/tenant-a/documents/artifact"))
+        .and(header("if-none-match", "*"))
+        .respond_with(ResponseTemplate::new(502))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let store = ObjectStoreDocumentStore::s3(&S3Config {
+        bucket: Some("folio-test".into()),
+        endpoint: Some(server.uri()),
+        access_key_id: Some("test-access-key".into()),
+        secret_access_key: Some("test-secret-key".into()),
+        region: Some("us-east-1".into()),
+        path_style: Some(true),
+        allow_http: true,
+        prefix: Some("tenant-a".into()),
+    })
+    .unwrap();
+
+    assert!(matches!(
+        store
+            .put_if_absent("documents/artifact", Bytes::from_static(b"artifact"))
+            .await,
+        Err(Error::Storage(_))
+    ));
+    server.verify().await;
+}

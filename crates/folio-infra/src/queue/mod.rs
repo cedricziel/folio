@@ -612,7 +612,8 @@ impl ProcessingQueue for JobQueue {
     }
 
     async fn processing_status(&self, document_id: Uuid) -> Result<ProcessingStatus> {
-        let active = self.find_active_jobs_for_document(document_id).await?;
+        let mut active = self.find_active_jobs_for_document(document_id).await?;
+        active.retain(|job| !matches!(job.job_type, JobType::GenerateArchive { .. }));
         if active.iter().any(|j| j.status == JobStatus::Processing) {
             Ok(ProcessingStatus::Processing)
         } else if !active.is_empty() {

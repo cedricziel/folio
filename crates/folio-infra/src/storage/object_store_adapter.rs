@@ -13,7 +13,7 @@ use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::prefix::PrefixStore;
 use object_store::signer::Signer;
-use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions};
+use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions, RetryConfig};
 
 use folio_core::error::{Error, Result};
 use folio_core::ports::{DocumentStore, StoredObject};
@@ -24,6 +24,7 @@ use crate::telemetry::metrics;
 
 pub struct ObjectStoreDocumentStore {
     store: Arc<dyn ObjectStore>,
+    single_create: Option<Arc<dyn ObjectStore>>,
     backend: &'static str,
     signer: Option<Arc<AmazonS3>>,
     /// Key prefix the signer must add, because it sees the unprefixed bucket.
@@ -41,6 +42,7 @@ impl ObjectStoreDocumentStore {
             .with_automatic_cleanup(true);
         Ok(Self {
             store: Arc::new(store),
+            single_create: None,
             backend: "local",
             signer: None,
             prefix: None,
@@ -76,6 +78,7 @@ impl ObjectStoreDocumentStore {
         }
         let s3 = Arc::new(
             builder
+                .clone()
                 .build()
                 .map_err(|e| storage_err("Failed to configure S3 storage", e))?,
         );
@@ -86,12 +89,26 @@ impl ObjectStoreDocumentStore {
             .map(|p| p.trim_matches('/'))
             .filter(|p| !p.is_empty())
             .map(Path::from);
-        let store: Arc<dyn ObjectStore> = match &prefix {
-            Some(prefix) => Arc::new(PrefixStore::new(s3.clone(), prefix.clone())),
-            None => s3.clone(),
+        // An intermediary can return a retryable error while a PUT is still
+        // in flight. Do not let a later retry succeed and hide that first PUT.
+        let single_create = Arc::new(
+            builder
+                .with_retry(RetryConfig {
+                    max_retries: 0,
+                    ..Default::default()
+                })
+                .build()
+                .map_err(|e| storage_err("Failed to configure single-request S3 writes", e))?,
+        );
+        let with_prefix = |client: Arc<AmazonS3>| -> Arc<dyn ObjectStore> {
+            match &prefix {
+                Some(prefix) => Arc::new(PrefixStore::new(client, prefix.clone())),
+                None => client,
+            }
         };
         Ok(Self {
-            store,
+            store: with_prefix(s3.clone()),
+            single_create: Some(with_prefix(single_create)),
             backend: "s3",
             signer: Some(s3),
             prefix,
@@ -102,6 +119,7 @@ impl ObjectStoreDocumentStore {
     pub fn in_memory() -> Self {
         Self {
             store: Arc::new(InMemory::new()),
+            single_create: None,
             backend: "memory",
             signer: None,
             prefix: None,
@@ -154,8 +172,8 @@ impl DocumentStore for ObjectStoreDocumentStore {
                 mode: PutMode::Create,
                 ..Default::default()
             };
-            match self
-                .store
+            let store = self.single_create.as_ref().unwrap_or(&self.store);
+            match store
                 .put_opts(&Self::path(key)?, data.into(), options)
                 .await
             {

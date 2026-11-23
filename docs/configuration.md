@@ -47,7 +47,7 @@ preserve existing database rows, including values seeded by earlier releases.
 | `processing.auto_ocr` | `FOLIO_PROCESSING__AUTO_OCR` | `true` | Run OCR automatically. |
 | `processing.auto_thumbnail` | `FOLIO_PROCESSING__AUTO_THUMBNAIL` | `true` | Stored thumbnail preference; the worker currently generates thumbnails regardless. |
 | `processing.auto_embed` | `FOLIO_PROCESSING__AUTO_EMBED` | `true` | Generate embeddings automatically when a provider is configured. |
-| `archival.automatic` | `FOLIO_ARCHIVAL__AUTOMATIC` | `false` | Generate PDF/A copies for eligible originals automatically. |
+| `archival.automatic` | `FOLIO_ARCHIVAL__AUTOMATIC` | `true` in the official image, `false` on native installations | Generate PDF/A copies for eligible originals automatically. |
 | `archival.languages` | `FOLIO_ARCHIVAL__LANGUAGES` | `eng` | Tesseract languages for archival OCR, joined with `+`. |
 | `archival.verapdf` | `FOLIO_ARCHIVAL__VERAPDF` | `verapdf` | Validator executable on PATH or at an absolute path. |
 | `server.host` | `FOLIO_SERVER__HOST` | `127.0.0.1` | Address to bind. Use `0.0.0.0` in containers. |

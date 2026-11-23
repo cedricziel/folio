@@ -148,6 +148,9 @@ pub trait DocumentStore: Send + Sync {
     async fn put(&self, key: &str, data: Bytes) -> Result<()>;
 
     /// Atomically create an object. Returns false if the key already exists.
+    /// A successful create acknowledges the only write. Implementations must
+    /// not replay a potentially in-flight write after an ambiguous response.
+    /// An error or cancellation can still leave an in-flight write.
     async fn put_if_absent(&self, _key: &str, _data: Bytes) -> Result<bool> {
         Err(Error::Storage(
             "Storage does not support create-only writes".into(),

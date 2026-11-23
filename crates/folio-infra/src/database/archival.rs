@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::Utc;
 
 use folio_core::models::{
     ArchiveAttempt, ArchiveCompletion, ArchiveSource, ArchiveState, ArchiveTool, FileIdentity, Id,
@@ -9,6 +10,8 @@ use folio_core::{Error, Result};
 
 use super::Database;
 use crate::queue::{self, Job, JobType};
+
+const ARCHIVE_CLEANUP_RETRY_SECONDS: i64 = 300;
 
 macro_rules! live_original {
     () => {
@@ -344,7 +347,7 @@ impl ArchivalRepository for Database {
 
             sqlx::query(
                 "UPDATE archival_attempts
-                SET cleanup_pending = cleanup_pending AND $1 <> 'ready', state = $1, reason = $2, output_storage_key = $3, output_sha256 = $4, output_size = $5,
+                SET state = $1, reason = $2, output_storage_key = $3, output_sha256 = $4, output_size = $5,
                     profile = $6, converter_name = $7, converter_version = $8,
                     validator_name = $9, validator_version = $10 WHERE id = $11",
             )
@@ -362,6 +365,13 @@ impl ArchivalRepository for Database {
             .execute(&mut *tx)
             .await
             .map_err(repo_error)?;
+            if output.is_some() {
+                sqlx::query("DELETE FROM archive_output_cleanup WHERE attempt_id = $1")
+                    .bind(id(attempt))
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(repo_error)?;
+            }
             tx.commit().await.map_err(repo_error)?;
             Ok(true)
         })
@@ -473,10 +483,13 @@ impl Database {
                 return Ok(false);
             }
             let reserved = sqlx::query(
-                "UPDATE archival_attempts SET cleanup_pending = TRUE
-                 WHERE id = $1 AND document_id = $2 AND revision_id = $3 AND is_current
-                 AND state = 'queued' AND NOT cleanup_pending",
+                "INSERT INTO archive_output_cleanup (attempt_id, document_id, revision_id, next_check_at)
+                 SELECT id, document_id, revision_id, $1 FROM archival_attempts
+                 WHERE id = $2 AND document_id = $3 AND revision_id = $4 AND is_current
+                  AND state = 'queued'
+                 ON CONFLICT (attempt_id) DO NOTHING",
             )
+            .bind(Utc::now().timestamp())
             .bind(id(attempt))
             .bind(id(source.document_id))
             .bind(id(source.revision_id))
@@ -508,24 +521,52 @@ impl Database {
         })
     }
 
-    pub(crate) async fn abandoned_archive_outputs(&self) -> Result<Vec<(Id, Id, Id)>> {
-        on_backend!(self, |pool, _id, _sqlite, _insert| {
-            let rows: Vec<(String, String, String)> = sqlx::query_as(
-                "SELECT CAST(document_id AS TEXT), CAST(revision_id AS TEXT), CAST(id AS TEXT)
-                 FROM archival_attempts a WHERE cleanup_pending AND state IN ('skipped', 'failed')
-                  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = a.id AND j.status = 'processing')
-                 ORDER BY id LIMIT 32",
+    /// An acknowledged create has finished, even if we crash before publication.
+    pub(crate) async fn settle_archive_write(&self, attempt: Id) -> Result<()> {
+        on_backend!(self, |pool, id, _sqlite, _insert| {
+            sqlx::query(
+                "UPDATE archive_output_cleanup SET write_settled = TRUE WHERE attempt_id = $1",
             )
+            .bind(id(attempt))
+            .execute(pool)
+            .await
+            .map_err(repo_error)?;
+            Ok(())
+        })
+    }
+
+    /// Defer each selected key before touching storage. Oldest due keys come
+    /// first, and a failed check or a crashed repair cannot pin the first batch.
+    pub(crate) async fn take_archive_cleanup_batch(&self) -> Result<Vec<ArchiveOutputCleanup>> {
+        let now = Utc::now().timestamp();
+        on_backend!(self, |pool, _id, _sqlite, _insert| {
+            let rows: Vec<(String, String, String, bool)> = sqlx::query_as(
+                "UPDATE archive_output_cleanup SET next_check_at = $1
+                 WHERE next_check_at <= $2 AND attempt_id IN (
+                     SELECT c.attempt_id FROM archive_output_cleanup c
+                     WHERE c.next_check_at <= $2
+                       AND NOT EXISTS (SELECT 1 FROM archival_attempts a
+                           WHERE a.id = c.attempt_id AND a.state = 'queued')
+                       AND NOT EXISTS (SELECT 1 FROM jobs j
+                           WHERE j.id = c.attempt_id AND j.status = 'processing')
+                     ORDER BY c.next_check_at, c.attempt_id LIMIT 32
+                 )
+                 RETURNING CAST(document_id AS TEXT), CAST(revision_id AS TEXT),
+                           CAST(attempt_id AS TEXT), write_settled",
+            )
+            .bind(now + ARCHIVE_CLEANUP_RETRY_SECONDS)
+            .bind(now)
             .fetch_all(pool)
             .await
             .map_err(repo_error)?;
             rows.into_iter()
-                .map(|(doc, rev, attempt)| {
-                    Ok((
-                        doc.parse().map_err(repo_error)?,
-                        rev.parse().map_err(repo_error)?,
-                        attempt.parse().map_err(repo_error)?,
-                    ))
+                .map(|(document, revision, attempt, write_settled)| {
+                    Ok(ArchiveOutputCleanup {
+                        document: document.parse().map_err(repo_error)?,
+                        revision: revision.parse().map_err(repo_error)?,
+                        attempt: attempt.parse().map_err(repo_error)?,
+                        write_settled,
+                    })
                 })
                 .collect()
         })
@@ -533,12 +574,21 @@ impl Database {
 
     pub(crate) async fn acknowledge_archive_cleanup(&self, attempt: Id) -> Result<()> {
         on_backend!(self, |pool, id, _sqlite, _insert| {
-            sqlx::query("UPDATE archival_attempts SET cleanup_pending = FALSE WHERE id = $1 AND state IN ('skipped', 'failed')")
-                .bind(id(attempt))
-                .execute(pool)
-                .await
-                .map_err(repo_error)?;
+            sqlx::query(
+                "DELETE FROM archive_output_cleanup WHERE attempt_id = $1 AND write_settled",
+            )
+            .bind(id(attempt))
+            .execute(pool)
+            .await
+            .map_err(repo_error)?;
             Ok(())
         })
     }
+}
+
+pub(crate) struct ArchiveOutputCleanup {
+    pub document: Id,
+    pub revision: Id,
+    pub attempt: Id,
+    pub write_settled: bool,
 }

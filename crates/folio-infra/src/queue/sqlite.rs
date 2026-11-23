@@ -738,7 +738,8 @@ impl SqliteJobQueue {
                 SELECT status, ROW_NUMBER() OVER (
                     PARTITION BY job_type ORDER BY created_at DESC, completed_at DESC, id DESC
                 ) AS position FROM jobs
-                WHERE payload LIKE ? AND status IN ('completed', 'failed')
+                WHERE payload LIKE ? AND job_type <> 'generate_archive'
+                  AND status IN ('completed', 'failed')
             ) WHERE position = 1 AND status = 'failed'
             "#,
         )

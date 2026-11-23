@@ -606,7 +606,8 @@ impl PostgresJobQueue {
                 SELECT status, ROW_NUMBER() OVER (
                     PARTITION BY job_type ORDER BY created_at DESC, completed_at DESC, id DESC
                 ) AS position FROM jobs
-                WHERE payload->'data'->>'document_id' = $1 AND status IN ('completed', 'failed')
+                WHERE payload->'data'->>'document_id' = $1 AND job_type <> 'generate_archive'
+                  AND status IN ('completed', 'failed')
             ) AS latest WHERE position = 1 AND status = 'failed')",
         )
         .bind(document_id.to_string())

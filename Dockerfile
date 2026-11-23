@@ -74,7 +74,8 @@ COPY config.toml ./config.toml
 ENV FOLIO_SERVER__HOST=0.0.0.0 \
     FOLIO_SERVER__PORT=3000 \
     FOLIO_DATABASE__URL="sqlite:/data/folio.db?mode=rwc" \
-    FOLIO_STORAGE__PATH=/data/documents
+    FOLIO_STORAGE__PATH=/data/documents \
+    FOLIO_ARCHIVAL__AUTOMATIC=true
 
 USER folio
 VOLUME /data

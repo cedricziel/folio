@@ -3,9 +3,13 @@ use crate::archival::{ToolPaths, PROFILE};
 use crate::database::{test_pool, test_vault};
 use crate::queue::{JobClass, JobQueue};
 use crate::storage::ObjectStoreDocumentStore;
+use bytes::Bytes;
 use folio_core::models::CreateDocument;
-use folio_core::ports::DocumentRepository;
+use folio_core::ports::{purge_document, DocumentRepository, StoredObject};
+use std::collections::HashSet;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::Mutex;
+use tokio::sync::Notify;
 
 const ORIGINAL: &[u8] = include_bytes!("../../../../../static/icons/icon-192.png");
 const COPY: &[u8] = b"%PDF-test archival bytes";
@@ -423,4 +427,190 @@ exit 1"#,
     let key = keys::revision_artifact(fixture.document, status.source.revision_id, status.id);
     assert!(!fixture.archive.store.exists(&key).await.unwrap());
     fixture.assert_original().await;
+}
+
+struct UnreliableStore {
+    inner: Arc<dyn DocumentStore>,
+    pending_write: Mutex<Option<(String, Bytes)>>,
+    write_started: Notify,
+    blocked_deletes: HashSet<String>,
+}
+
+#[async_trait::async_trait]
+impl DocumentStore for UnreliableStore {
+    fn backend(&self) -> &'static str {
+        "remote-test"
+    }
+
+    async fn put(&self, key: &str, data: Bytes) -> Result<()> {
+        self.inner.put(key, data).await
+    }
+
+    async fn put_if_absent(&self, key: &str, data: Bytes) -> Result<bool> {
+        *self.pending_write.lock().unwrap() = Some((key.into(), data));
+        self.write_started.notify_one();
+        std::future::pending().await
+    }
+
+    async fn get(&self, key: &str) -> Result<StoredObject> {
+        self.inner.get(key).await
+    }
+
+    async fn size(&self, key: &str) -> Result<Option<u64>> {
+        self.inner.size(key).await
+    }
+
+    async fn exists(&self, key: &str) -> Result<bool> {
+        self.inner.exists(key).await
+    }
+
+    async fn delete(&self, key: &str) -> Result<()> {
+        if self.blocked_deletes.contains(key) {
+            return Err(Error::Storage("Delete denied".into()));
+        }
+        self.inner.delete(key).await
+    }
+
+    async fn delete_prefix(&self, prefix: &str) -> Result<u64> {
+        self.inner.delete_prefix(prefix).await
+    }
+
+    async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        self.inner.list(prefix).await
+    }
+}
+
+#[tokio::test]
+async fn repair_removes_a_timed_out_create_that_commits_after_purge() {
+    let mut fixture = Fixture::new(|dir| tools(dir, true)).await;
+    let store = Arc::new(UnreliableStore {
+        inner: fixture.archive.store.clone(),
+        pending_write: Mutex::default(),
+        write_started: Notify::new(),
+        blocked_deletes: HashSet::new(),
+    });
+    fixture.archive.store = store.clone();
+    let vault = test_vault();
+    let attempt = fixture
+        .archive
+        .enqueue(vault, fixture.document)
+        .await
+        .unwrap();
+    let job = fixture.claim().await;
+    let (result, ()) = tokio::join!(fixture.archive.generate(&fixture.queue, &job), async {
+        store.write_started.notified().await;
+        tokio::time::pause();
+        tokio::time::advance(STORAGE_TIMEOUT).await;
+        tokio::time::resume();
+    });
+    result.unwrap();
+    assert!(fixture.queue.complete(&job).await.unwrap());
+    assert!(matches!(
+        fixture.status().await.state,
+        ArchiveState::Completed(ArchiveCompletion::Failed(_))
+    ));
+
+    let (key, bytes) = store.pending_write.lock().unwrap().take().unwrap();
+    assert!(!store.exists(&key).await.unwrap());
+    fixture.archive.repair().await.unwrap();
+
+    fixture.docs.delete(vault, fixture.document).await.unwrap();
+    fixture
+        .docs
+        .request_purge(vault, fixture.document)
+        .await
+        .unwrap();
+    purge_document(store.as_ref(), fixture.document)
+        .await
+        .unwrap();
+    fixture
+        .docs
+        .finalize_purge(vault, fixture.document)
+        .await
+        .unwrap();
+    assert!(fixture
+        .docs
+        .locate_trashed(fixture.document)
+        .await
+        .unwrap()
+        .is_none());
+
+    // The client future has been dropped, but the remote request can still
+    // commit. A fresh repair service must be able to find the key after purge.
+    assert!(store.inner.put_if_absent(&key, bytes).await.unwrap());
+    let database = fixture.archive.database.clone();
+    let Database::Sqlite(pool) = &database else {
+        unreachable!()
+    };
+    let deferred: i64 =
+        sqlx::query_scalar("SELECT next_check_at FROM archive_output_cleanup WHERE attempt_id = ?")
+            .bind(attempt.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(deferred > chrono::Utc::now().timestamp());
+    sqlx::query("UPDATE archive_output_cleanup SET next_check_at = 0")
+        .execute(pool)
+        .await
+        .unwrap();
+    let restarted = ArchiveService::new(
+        database.clone(),
+        fixture.archive.repository.clone(),
+        store.clone(),
+        ArchiveConverter::with_tools("eng", ToolPaths::default()),
+        false,
+    );
+    restarted.repair().await.unwrap();
+    assert!(!store.exists(&key).await.unwrap());
+    let settled: bool =
+        sqlx::query_scalar("SELECT write_settled FROM archive_output_cleanup WHERE attempt_id = ?")
+            .bind(attempt.to_string())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(!settled);
+}
+
+#[tokio::test]
+async fn repair_advances_past_a_full_batch_of_permanent_delete_failures() {
+    let mut fixture = Fixture::new(|dir| tools(dir, true)).await;
+    let Database::Sqlite(pool) = &fixture.archive.database else {
+        unreachable!()
+    };
+    let revision = Id::new_v4();
+    let mut blocked_deletes = HashSet::new();
+    let last = Id::from_u128(33);
+    for attempt in (1..=33).map(Id::from_u128) {
+        sqlx::query(
+            "INSERT INTO archive_output_cleanup
+            (attempt_id, document_id, revision_id, write_settled) VALUES (?, ?, ?, TRUE)",
+        )
+        .bind(attempt.to_string())
+        .bind(fixture.document.to_string())
+        .bind(revision.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+        if attempt != last {
+            blocked_deletes.insert(keys::revision_artifact(fixture.document, revision, attempt));
+        }
+    }
+    let key = keys::revision_artifact(fixture.document, revision, last);
+    let store = Arc::new(UnreliableStore {
+        inner: fixture.archive.store.clone(),
+        pending_write: Mutex::default(),
+        write_started: Notify::new(),
+        blocked_deletes,
+    });
+    store.put(&key, COPY.into()).await.unwrap();
+    fixture.archive.store = store.clone();
+    fixture.archive.repair().await.unwrap();
+    assert!(store.exists(&key).await.unwrap());
+    fixture.archive.repair().await.unwrap();
+    assert!(!store.exists(&key).await.unwrap());
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM archive_output_cleanup")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 32);
 }

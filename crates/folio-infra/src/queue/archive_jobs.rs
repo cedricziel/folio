@@ -9,12 +9,13 @@ use folio_core::models::{
 };
 use folio_core::ports::{keys, ArchivalRepository, DocumentStore};
 use folio_core::{Error, Result};
+use futures::{stream, StreamExt};
 use sha2::{Digest, Sha256};
 use tracing::warn;
 use uuid::Uuid;
 
 use crate::archival::{ArchiveConverter, SkipReason, MAX_FILE_BYTES};
-use crate::database::Database;
+use crate::database::{ArchiveOutputCleanup, Database};
 
 const STORAGE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -130,11 +131,13 @@ impl ArchiveService {
 
     pub(super) async fn repair(&self) -> Result<()> {
         self.database.retire_interrupted_archives().await?;
-        for (document, revision, attempt) in self.database.abandoned_archive_outputs().await? {
-            if let Err(error) = self.cleanup(document, revision, attempt).await {
-                warn!(%attempt, %error, "Archive cleanup will be retried");
-            }
-        }
+        stream::iter(self.database.take_archive_cleanup_batch().await?)
+            .for_each_concurrent(8, |entry| async move {
+                if let Err(error) = self.cleanup(&entry).await {
+                    warn!(attempt = %entry.attempt, %error, "Archive cleanup will be retried");
+                }
+            })
+            .await;
         Ok(())
     }
 
@@ -263,47 +266,41 @@ impl ArchiveService {
             self.store.put_if_absent(&key, output.bytes.into()),
         )
         .await;
-        let storage_settled = matches!(write, Ok(Ok(_)));
         let completion = match write {
-            Ok(Ok(true)) => ArchiveCompletion::Ready(metadata),
+            Ok(Ok(true)) => {
+                self.database.settle_archive_write(attempt).await?;
+                ArchiveCompletion::Ready(metadata)
+            }
             _ => ArchiveCompletion::Failed("Could not stage the archival copy".into()),
         };
-        let published = self
-            .repository
+        self.repository
             .complete_archive(source, attempt, &completion)
-            .await;
-        // A timed-out storage write may still finish remotely. Leave it for
-        // repair with the durable cleanup marker intact.
-        if storage_settled
-            && !matches!(
-                (&published, &completion),
-                (Ok(true), ArchiveCompletion::Ready(_))
-            )
-        {
-            // Only the reserved writer can publish Ready. Check retention even
-            // on rejection: a transport error may hide a successful commit.
-            // Leave the durable cleanup marker in place if anything is unclear.
-            if let Err(error) = self.cleanup(document, revision, attempt).await {
-                warn!(%attempt, %error, "Could not resolve staged archive cleanup");
-            }
-        }
-        published.map(|_| ())
+            .await
+            .map(|_| ())
     }
 
-    async fn cleanup(&self, document: Id, revision: Id, attempt: Id) -> Result<()> {
+    async fn cleanup(&self, entry: &ArchiveOutputCleanup) -> Result<()> {
         if !self
             .repository
-            .retains_archive(document, revision, attempt)
+            .retains_archive(entry.document, entry.revision, entry.attempt)
             .await?
         {
-            tokio::time::timeout(
-                STORAGE_TIMEOUT,
-                self.store
-                    .delete(&keys::revision_artifact(document, revision, attempt)),
-            )
+            let key = keys::revision_artifact(entry.document, entry.revision, entry.attempt);
+            tokio::time::timeout(STORAGE_TIMEOUT, async {
+                // A timed-out or interrupted create can commit after any delete.
+                // Keep checking its key and avoid deletes on absent objects.
+                if entry.write_settled || self.store.exists(&key).await? {
+                    self.store.delete(&key).await?;
+                }
+                Ok::<_, Error>(())
+            })
             .await
             .map_err(|_| Error::Storage("Archival cleanup timed out".into()))??;
-            self.database.acknowledge_archive_cleanup(attempt).await?;
+            if entry.write_settled {
+                self.database
+                    .acknowledge_archive_cleanup(entry.attempt)
+                    .await?;
+            }
         }
         Ok(())
     }
