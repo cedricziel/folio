@@ -595,6 +595,32 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .map_err(repo_err)?;
         rows.into_iter().map(WorkflowRun::try_from).collect()
     }
+
+    async fn list_active_document_runs(
+        &self,
+        vault: VaultId,
+        workflow_id: Id,
+        events: &[WorkflowTrigger],
+        limit: u32,
+    ) -> Result<Vec<WorkflowRun>> {
+        let events: Vec<_> = events.iter().map(|event| event.as_str()).collect();
+        let rows: Vec<RunRow> = sqlx::query_as(
+            "SELECT r.*, w.vault_id FROM workflow_runs r
+             JOIN workflows w ON w.id = r.workflow_id
+             JOIN documents d ON d.id = r.document_id AND d.vault_id = w.vault_id
+             WHERE r.workflow_id = $1 AND w.vault_id = $2 AND w.deleted_at IS NULL
+               AND d.deleted_at IS NULL AND r.event = ANY($3)
+             ORDER BY r.created_at DESC LIMIT $4",
+        )
+        .bind(workflow_id)
+        .bind(vault.0)
+        .bind(events)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        rows.into_iter().map(WorkflowRun::try_from).collect()
+    }
 }
 
 pub(crate) async fn fail_pending_workflow_run(

@@ -70,6 +70,15 @@ pub trait WorkflowRepository: Send + Sync {
         workflow_id: Id,
         limit: u32,
     ) -> Result<Vec<WorkflowRun>>;
+
+    /// Recent runs for the given vault-visible triggers whose document remains active in the vault.
+    async fn list_active_document_runs(
+        &self,
+        vault: VaultId,
+        workflow_id: Id,
+        events: &[WorkflowTrigger],
+        limit: u32,
+    ) -> Result<Vec<WorkflowRun>>;
 }
 
 /// Facts about stored files that the document model does not carry

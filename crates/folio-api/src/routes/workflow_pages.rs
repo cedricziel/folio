@@ -27,15 +27,45 @@ use folio_core::models::{
 
 use super::workflow_action_form::{action_fields, parse_headers, resolve_actions};
 use super::workflows::{
-    find, find_retained, history_error, send_test, WorkflowListQuery, SECRET_MASK,
+    find, find_retained, history_error, member_runs, send_test, WorkflowListQuery, SECRET_MASK,
 };
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use crate::vault::DefaultVault;
+use crate::vault::{DefaultVault, CURRENT_VAULT};
+use folio_core::models::VaultRole;
 
 use super::view::{Nav, Sidebar};
 
 const RUN_HISTORY: u32 = 20;
+
+fn can_manage_workflows() -> bool {
+    CURRENT_VAULT
+        .try_with(|context| context.role == VaultRole::Owner)
+        .unwrap_or(false)
+}
+
+async fn visible_runs(
+    state: &AppState,
+    vault: folio_core::models::VaultId,
+    id: Id,
+    can_manage: bool,
+    limit: u32,
+) -> ApiResult<Vec<RunView>> {
+    if can_manage {
+        let runs = state.workflow_repo.list_runs(vault, id, limit).await?;
+        Ok(runs.iter().map(RunView::from).collect())
+    } else {
+        let runs = member_runs(vault, &*state.workflow_repo, id, limit).await?;
+        Ok(runs
+            .iter()
+            .map(|run| RunView {
+                error: None,
+                response_status: None,
+                ..RunView::from(run)
+            })
+            .collect())
+    }
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -131,6 +161,7 @@ struct WorkflowRow {
 #[template(path = "workflows.html")]
 struct ListTemplate {
     deleted: bool,
+    can_manage: bool,
     sidebar: Sidebar,
     title: String,
     rows: Vec<WorkflowRow>,
@@ -141,6 +172,12 @@ async fn list_page(
     State(state): State<AppState>,
     Query(query): Query<WorkflowListQuery>,
 ) -> ApiResult<Html<String>> {
+    let can_manage = can_manage_workflows();
+    if query.deleted && !can_manage {
+        return Err(ApiError::forbidden(
+            "Only vault owners can view deleted workflows",
+        ));
+    }
     let mut rows = Vec::new();
     let workflows = if query.deleted {
         state.workflow_repo.list_deleted(vault).await?
@@ -148,12 +185,9 @@ async fn list_page(
         state.workflow_repo.list(vault).await?
     };
     for workflow in workflows {
-        let last_run = state
-            .workflow_repo
-            .list_runs(vault, workflow.id, 1)
+        let last_run = visible_runs(&state, vault, workflow.id, can_manage, 1)
             .await?
-            .first()
-            .map(RunView::from);
+            .pop();
         rows.push(WorkflowRow {
             lifecycle_summary: lifecycle_summary(&workflow),
             id: workflow.id.to_string(),
@@ -169,6 +203,7 @@ async fn list_page(
     }
     render(ListTemplate {
         deleted: query.deleted,
+        can_manage,
         sidebar: Sidebar::load(&state, vault, Nav::Workflows).await?,
         title: "Workflows - Folio".into(),
         rows,
@@ -205,7 +240,11 @@ struct HistoryTemplate {
     id: String,
     name: String,
     deleted: bool,
+    can_manage: bool,
     lifecycle_summary: String,
+    trigger: &'static str,
+    enabled: bool,
+    action_count: usize,
     runs: Vec<RunView>,
 }
 
@@ -214,19 +253,25 @@ async fn history(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
-    let workflow = find_retained(vault, &*state.workflow_repo, id).await?;
-    let runs = state
-        .workflow_repo
-        .list_runs(vault, id, RUN_HISTORY)
-        .await?;
+    let can_manage = can_manage_workflows();
+    let workflow = if can_manage {
+        find_retained(vault, &*state.workflow_repo, id).await?
+    } else {
+        find(vault, &*state.workflow_repo, id).await?
+    };
+    let runs = visible_runs(&state, vault, id, can_manage, RUN_HISTORY).await?;
     render(HistoryTemplate {
         sidebar: Sidebar::load(&state, vault, Nav::Workflows).await?,
         title: format!("{} history - Folio", workflow.name),
         id: id.to_string(),
         deleted: workflow.deleted_at.is_some(),
+        can_manage,
         lifecycle_summary: lifecycle_summary(&workflow),
+        trigger: workflow.trigger.label(),
+        enabled: workflow.enabled,
+        action_count: workflow.actions.len(),
         name: workflow.name,
-        runs: runs.iter().map(RunView::from).collect(),
+        runs,
     })
 }
 

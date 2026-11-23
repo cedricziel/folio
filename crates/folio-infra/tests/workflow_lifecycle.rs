@@ -547,6 +547,102 @@ async fn postgres_workflow_lifecycle() {
     contract(Database::connect(&url).await.unwrap()).await;
 }
 
+async fn member_history_contract(db: Database) {
+    use folio_core::models::CreateDocument;
+
+    db.migrate().await.unwrap();
+    let r = db.repositories().await;
+    let vault = r.vaults.instance_default().await.unwrap();
+    let destination = r.vaults.create("Other vault", None).await.unwrap().id;
+    let document = r
+        .documents
+        .create(vault, CreateDocument::default())
+        .await
+        .unwrap();
+    let workflow = r
+        .workflows
+        .create(vault, input("Read-only history"))
+        .await
+        .unwrap();
+    let run = WorkflowRun::new(
+        vault,
+        workflow.id,
+        workflow.trigger,
+        Some(document.id),
+        "{}".into(),
+    )
+    .with_definition(&workflow);
+    assert!(r.workflows.create_run(&run).await.unwrap());
+
+    let events = [WorkflowTrigger::DocumentUploaded];
+    let visible = r
+        .workflows
+        .list_active_document_runs(vault, workflow.id, &events, 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        visible.iter().map(|run| run.id).collect::<Vec<_>>(),
+        [run.id]
+    );
+    assert!(r
+        .workflows
+        .list_active_document_runs(destination, workflow.id, &events, 1)
+        .await
+        .unwrap()
+        .is_empty());
+
+    r.documents.delete(vault, document.id).await.unwrap();
+    assert!(r
+        .workflows
+        .list_active_document_runs(vault, workflow.id, &events, 1)
+        .await
+        .unwrap()
+        .is_empty());
+    r.documents.restore(vault, document.id).await.unwrap();
+    r.documents
+        .move_to(document.id, vault, destination, None)
+        .await
+        .unwrap();
+    assert!(r
+        .workflows
+        .list_active_document_runs(vault, workflow.id, &events, 1)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let owner_history = r.workflows.list_runs(vault, workflow.id, 1).await.unwrap();
+    assert_eq!(
+        owner_history.iter().map(|run| run.id).collect::<Vec<_>>(),
+        [run.id]
+    );
+}
+
+#[tokio::test]
+async fn sqlite_workflow_member_history_follows_active_document_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!(
+        "sqlite:{}",
+        dir.path().join("workflow-members.db").display()
+    );
+    member_history_contract(Database::connect(&url).await.unwrap()).await;
+}
+
+#[tokio::test]
+async fn postgres_workflow_member_history_follows_active_document_scope() {
+    let Some(container) = common::container_or_skip(
+        "PostgreSQL workflow member history",
+        Postgres::default().with_tag("17-alpine").start().await,
+    ) else {
+        return;
+    };
+    let url = format!(
+        "postgres://postgres:postgres@{}:{}/postgres",
+        container.get_host().await.unwrap(),
+        container.get_host_port_ipv4(5432).await.unwrap()
+    );
+    member_history_contract(Database::connect(&url).await.unwrap()).await;
+}
+
 async fn upgrade_contract(db: Database) {
     use sqlx::migrate::Migrator;
     use std::borrow::Cow;

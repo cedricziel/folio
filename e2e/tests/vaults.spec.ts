@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import AxeBuilder from "@axe-core/playwright";
 import type { BrowserContext, Page, TestInfo } from "@playwright/test";
 import { expect, samplePdf, test, uniqueTitle } from "./fixtures";
 
@@ -13,6 +14,7 @@ let database: string;
 let personalDocument: { id: string; title: string };
 let householdDocument: { id: string; title: string };
 let referenceDocument: { id: string; title: string };
+let referenceWorkflow: { id: string; name: string };
 
 function seedVaults(userId: string) {
   // Fixed fixture roles keep isolation tests independent of the management UI.
@@ -123,6 +125,24 @@ with sqlite3.connect(sys.argv[1]) as db:
       reference.id,
       "Reference handbook",
     );
+    const createWorkflow = await context.request.post(
+      `/vaults/${reference.id}/api/workflows`,
+      {
+        data: {
+          name: "Notify reference intake",
+          trigger: "document.uploaded",
+          enabled: false,
+          actions: [{
+            type: "webhook",
+            url: "https://reference-fixture.invalid/private",
+            method: "POST",
+            secret: "fixture-only-signature",
+          }],
+        },
+      },
+    );
+    expect(createWorkflow.status()).toBe(201);
+    referenceWorkflow = await createWorkflow.json();
     const personalTag = await context.request.post(
       `/vaults/${personal.id}/api/tags`,
       {
@@ -155,6 +175,32 @@ for (const viewport of [
   { name: "desktop", width: 1440, height: 1000, mobile: false },
   { name: "mobile", width: 390, height: 844, mobile: true },
 ]) {
+  test(`vault viewers can browse workflow summaries on ${viewport.name}`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    const workflows = `/vaults/${reference.id}/workflows`;
+    for (const theme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.goto(workflows);
+      await expect(page.getByRole("heading", { name: "Workflows", exact: true })).toBeVisible();
+      await expect(page.getByText(referenceWorkflow.name, { exact: true })).toBeVisible();
+      await expect(page.getByRole("link", { name: "New workflow" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Turn on" })).toHaveCount(0);
+      await capture(page, testInfo, `viewer-workflows-${viewport.name}-${theme}.png`);
+      await page.getByRole("link", { name: "Run history" }).click();
+      await expect(page).toHaveURL(`${process.env.FOLIO_BASE_URL}${workflows}/${referenceWorkflow.id}/history`);
+      await expect(page.getByRole("heading", { name: `${referenceWorkflow.name} history` })).toBeVisible();
+      await expect(page.getByText("No runs yet.", { exact: true })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Edit workflow" })).toHaveCount(0);
+      await expect(page.locator("main")).not.toContainText("reference-fixture.invalid");
+      const audit = await new AxeBuilder({ page }).include("main").analyze();
+      expect(audit.violations.filter((item) => ["serious", "critical"].includes(item.impact ?? ""))).toEqual([]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+      await capture(page, testInfo, `viewer-workflow-history-${viewport.name}-${theme}.png`);
+    }
+  });
+
   test(`native vault selector scopes the library on ${viewport.name}`, async ({
     page,
   }, testInfo) => {

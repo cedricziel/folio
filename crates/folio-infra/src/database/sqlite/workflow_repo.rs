@@ -581,6 +581,32 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .map_err(repo_err)?;
         rows.iter().map(run_from_row).collect()
     }
+
+    async fn list_active_document_runs(
+        &self,
+        vault: VaultId,
+        workflow_id: Id,
+        events: &[WorkflowTrigger],
+        limit: u32,
+    ) -> Result<Vec<WorkflowRun>> {
+        let events: Vec<_> = events.iter().map(|event| event.as_str()).collect();
+        let rows = sqlx::query(
+            "SELECT r.*, w.vault_id FROM workflow_runs r
+             JOIN workflows w ON w.id = r.workflow_id
+             JOIN documents d ON d.id = r.document_id AND d.vault_id = w.vault_id
+             WHERE r.workflow_id = ? AND w.vault_id = ? AND w.deleted_at IS NULL
+               AND d.deleted_at IS NULL AND r.event IN (SELECT value FROM json_each(?))
+             ORDER BY r.created_at DESC LIMIT ?",
+        )
+        .bind(workflow_id.to_string())
+        .bind(vault.to_string())
+        .bind(serde_json::to_string(&events).map_err(repo_err)?)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        rows.iter().map(run_from_row).collect()
+    }
 }
 
 fn not_found(id: Id) -> Error {

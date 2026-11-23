@@ -8,13 +8,14 @@ use axum::{
     routing::{get, patch, post, put},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use folio_core::models::VaultId;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use folio_core::models::{
-    redact_url, WebhookPayload, Workflow, WorkflowAction, WorkflowInput, WorkflowRun,
+    redact_url, RunStatus, WebhookPayload, Workflow, WorkflowAction, WorkflowInput, WorkflowRun,
     WorkflowTrigger, WorkflowTriggerDefinition, WorkflowTriggerRegistry,
 };
 use folio_core::ports::WorkflowRepository;
@@ -40,6 +41,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_workflows).post(create_workflow))
         .route("/triggers", get(list_triggers))
+        .route("/summaries", get(list_member_workflows))
+        .route("/{id}/run-summaries", get(list_member_runs))
         .route(
             "/{id}",
             get(get_workflow)
@@ -308,6 +311,56 @@ pub(crate) async fn list_workflows(
         state.workflow_repo.list(vault).await?
     };
     Ok(Json(workflows.into_iter().map(redact).collect()))
+}
+
+/// The part of an active definition visible to vault members.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct WorkflowSummary {
+    id: Uuid,
+    #[schema(value_type = Uuid)]
+    vault_id: VaultId,
+    name: String,
+    enabled: bool,
+    trigger: WorkflowTrigger,
+    action_count: u64,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<Workflow> for WorkflowSummary {
+    fn from(workflow: Workflow) -> Self {
+        Self {
+            id: workflow.id,
+            vault_id: workflow.vault_id,
+            name: workflow.name,
+            enabled: workflow.enabled,
+            trigger: workflow.trigger,
+            action_count: workflow.actions.len() as u64,
+            created_at: workflow.created_at,
+            updated_at: workflow.updated_at,
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/summaries",
+    operation_id = "listWorkflowSummaries",
+    tag = "workflows",
+    responses(
+        (status = 200, description = "Active workflow summaries visible to vault members", body = Vec<WorkflowSummary>),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn list_member_workflows(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<WorkflowSummary>>> {
+    let workflows = state.workflow_repo.list(vault).await?;
+    Ok(Json(
+        workflows.into_iter().map(WorkflowSummary::from).collect(),
+    ))
 }
 
 /// Get a workflow
@@ -707,6 +760,87 @@ pub(super) fn history_error(run: &WorkflowRun) -> Option<String> {
     }
 
     Some(message.clone())
+}
+
+/// Execution progress visible to members with access to the active document.
+#[derive(Serialize, ToSchema)]
+pub(crate) struct WorkflowRunSummary {
+    id: Uuid,
+    #[schema(value_type = Uuid)]
+    vault_id: VaultId,
+    workflow_id: Uuid,
+    event: WorkflowTrigger,
+    status: RunStatus,
+    attempts: u32,
+    completed_actions: u32,
+    created_at: DateTime<Utc>,
+    finished_at: Option<DateTime<Utc>>,
+}
+
+impl From<WorkflowRun> for WorkflowRunSummary {
+    fn from(run: WorkflowRun) -> Self {
+        Self {
+            id: run.id,
+            vault_id: run.vault_id,
+            workflow_id: run.workflow_id,
+            event: run.event,
+            status: run.status,
+            attempts: run.attempts,
+            completed_actions: run.completed_actions,
+            created_at: run.created_at,
+            finished_at: run.finished_at,
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/workflows/{id}/run-summaries",
+    operation_id = "listWorkflowRunSummaries",
+    tag = "workflows",
+    params(("id" = Uuid, Path, description = "Workflow ID"), ListRunsQuery),
+    responses(
+        (status = 200, description = "Recent visible runs for an active workflow", body = Vec<WorkflowRunSummary>),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn list_member_runs(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<ListRunsQuery>,
+) -> ApiResult<Json<Vec<WorkflowRunSummary>>> {
+    find(vault, &*state.workflow_repo, id).await?;
+    let limit = query.limit.unwrap_or(DEFAULT_RUN_LIMIT).min(MAX_RUN_LIMIT);
+    let runs = member_runs(vault, &*state.workflow_repo, id, limit).await?;
+    Ok(Json(
+        runs.into_iter().map(WorkflowRunSummary::from).collect(),
+    ))
+}
+
+pub(crate) async fn member_runs(
+    vault: VaultId,
+    repo: &dyn WorkflowRepository,
+    id: Uuid,
+    limit: u32,
+) -> ApiResult<Vec<WorkflowRun>> {
+    use WorkflowTrigger::*;
+    // Only producers whose events are known to be vault-visible for the document.
+    let events = [
+        DocumentUploaded,
+        DocumentProcessed,
+        DocumentUpdated,
+        DocumentTitleChanged,
+        DocumentTagsChanged,
+        DocumentCorrespondentChanged,
+        DocumentTypeChanged,
+        DocumentMetadataChanged,
+    ];
+    let runs = repo
+        .list_active_document_runs(vault, id, &events, limit)
+        .await?;
+    Ok(runs)
 }
 
 pub(crate) async fn find(
