@@ -556,6 +556,7 @@ async fn contract(db: &Database) {
 
     legacy_claim_is_fenced_by_replacement(db).await;
     revision_claims_preserve_identity(db).await;
+    replacement_rejects_inflight_ocr_and_embeddings(db).await;
 }
 
 async fn legacy_claim_is_fenced_by_replacement(db: &Database) {
@@ -909,6 +910,117 @@ async fn revision_claims_preserve_identity(db: &Database) {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].document_id, doc);
     assert_eq!(results[0].snippet.as_deref(), Some("Second original text"));
+}
+
+async fn replacement_rejects_inflight_ocr_and_embeddings(db: &Database) {
+    execute(db, "DELETE FROM jobs; DELETE FROM outbox_events;".into()).await;
+    let repos = db.repositories().await;
+    let vault = repos
+        .vaults
+        .create("Replacement races", None)
+        .await
+        .unwrap()
+        .id;
+    let document_id = repos
+        .documents
+        .create(
+            vault,
+            CreateDocument {
+                title: "Revised original".into(),
+                content: Some("Previous text".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    let first = uuid::Uuid::new_v4();
+    let current = uuid::Uuid::new_v4();
+    execute(db, format!(
+        "INSERT INTO document_files (id, document_id, vault_id, role, storage_key, mime_type, verification_state)
+         VALUES ('{first}', '{document_id}', '{vault}', 'original', 'first', 'application/pdf', 'pending'),
+                ('{current}', '{document_id}', '{vault}', 'original', 'current', 'application/pdf', 'pending');
+         INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at)
+         VALUES ('{first}', '{document_id}', '{vault}', 1, '{first}', '2026-11-22T00:00:00Z'),
+                ('{current}', '{document_id}', '{vault}', 2, '{current}', '2026-11-22T00:01:00Z');
+         UPDATE documents SET current_revision_id = '{first}' WHERE id = '{document_id}';"
+    )).await;
+
+    let ocr_id = seed_revision_run(
+        db,
+        vault,
+        JobType::ExtractRevisionText {
+            document_id,
+            revision_id: first,
+            force: true,
+        },
+        "ocr",
+    )
+    .await;
+    let ocr_job = repos.jobs.dequeue().await.unwrap().unwrap();
+    assert_eq!(ocr_job.id, ocr_id);
+    let ocr = repos.jobs.start_ocr(&ocr_job).await.unwrap().unwrap();
+
+    let embedding_id = seed_revision_run(
+        db,
+        vault,
+        JobType::GenerateRevisionEmbedding {
+            document_id,
+            revision_id: first,
+            origin: EventOrigin::User,
+        },
+        "embedding",
+    )
+    .await;
+    let embedding_job = repos.jobs.dequeue().await.unwrap().unwrap();
+    assert_eq!(embedding_job.id, embedding_id);
+    let embedding = repos
+        .jobs
+        .start_derived(&embedding_job, ProcessingEventStage::Embedding)
+        .await
+        .unwrap()
+        .unwrap();
+    execute(db, format!(
+        "UPDATE documents SET current_revision_id = '{current}', content = 'Current text' WHERE id = '{document_id}';"
+    )).await;
+    let before = events(db).await.len();
+    let chunks = [EmbeddedChunk {
+        index: 0,
+        text: "Previous text".into(),
+        embedding: vec![1.0, 0.0],
+    }];
+
+    assert!(!repos
+        .jobs
+        .complete_ocr(&ocr, "Late previous text", true)
+        .await
+        .unwrap());
+    assert!(!repos
+        .jobs
+        .complete_embedding(&embedding, "Previous text", "previous-model", &chunks)
+        .await
+        .unwrap());
+    execute(
+        db,
+        format!("UPDATE jobs SET lease_expires_at = 0 WHERE id IN ('{ocr_id}', '{embedding_id}');"),
+    )
+    .await;
+    assert_eq!(repos.jobs.reset_stuck().await.unwrap(), 2);
+    assert_eq!(events(db).await.len(), before);
+
+    let document = repos
+        .documents
+        .find_by_id(vault, document_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(document.content.as_deref(), Some("Current text"));
+    let visible = repos
+        .search
+        .search(vault, "previous-model", &[1.0, 0.0], 10)
+        .await
+        .unwrap();
+    assert!(visible.is_empty());
 }
 
 #[tokio::test]
