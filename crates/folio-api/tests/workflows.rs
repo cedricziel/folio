@@ -1832,3 +1832,64 @@ async fn clock_schedule_api_rejects_document_actions() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn web_editor_round_trips_a_tag_replacement_condition() {
+    let app = test_app().await;
+    let (status, old_tag) = json_request(
+        &app,
+        "POST",
+        "/api/tags",
+        Some(json!({"name": "Needs review"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let removed_id = old_tag["id"].as_str().unwrap();
+    let (status, new_tag) =
+        json_request(&app, "POST", "/api/tags", Some(json!({"name": "Reviewed"}))).await;
+    assert_eq!(status, StatusCode::OK);
+    let added_id = new_tag["id"].as_str().unwrap();
+    let (status, workflow) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Review tag replacement",
+            "trigger": "document.tags_changed",
+            "actions": [{"type": "webhook", "url": "https://example.com/hook"}],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = workflow["id"].as_str().unwrap();
+    let edit_url = format!("/workflows/{id}");
+    let form = format!(
+        "name=Review+tag+replacement&trigger=document.tags_changed&event_actor=&tag_change_state=replaced&added_tag_id={added_id}&removed_tag_id={removed_id}&webhook_url=https%3A%2F%2Fexample.com%2Fhook"
+    );
+
+    let (status, _) = post_form(&app, &edit_url, form).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        stored["conditions"]["event"]["document_change"],
+        json!({
+            "type": "tags",
+            "state": "replaced",
+            "added_id": added_id,
+            "removed_id": removed_id,
+        })
+    );
+    let (status, html) = send(&app, "GET", &edit_url, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains(&format!("value=\"{added_id}\" selected>Reviewed")));
+    assert!(html.contains(&format!("value=\"{removed_id}\" selected>Needs review")));
+
+    let (status, _) = send(&app, "DELETE", &format!("/api/tags/{removed_id}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, html) = send(&app, "GET", &edit_url, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains(&format!(
+        "value=\"{removed_id}\" selected>Unavailable choice ({removed_id})"
+    )));
+}

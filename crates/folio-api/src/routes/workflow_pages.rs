@@ -253,6 +253,16 @@ struct FormValues {
     metadata_after_enabled: Option<String>,
     metadata_after: String,
     metadata_after_currency: String,
+    title_before_enabled: Option<String>,
+    title_before: String,
+    title_after_enabled: Option<String>,
+    title_after: String,
+    added_tag_id: String,
+    removed_tag_id: String,
+    tag_change_state: String,
+    assignment_before_id: String,
+    assignment_after_id: String,
+    assignment_change_state: String,
     document_date_before: String,
     document_date_after: String,
     document_date_state: String,
@@ -514,8 +524,46 @@ impl FormValues {
         &self,
         trigger: WorkflowTrigger,
     ) -> Result<Option<WorkflowDocumentConditions>, String> {
-        use WorkflowDocumentConditions::{Date, Review, Revision};
+        use WorkflowDocumentConditions::{
+            Correspondent, Date, DocumentType, Review, Revision, Tags, Title,
+        };
         let condition = match trigger {
+            WorkflowTrigger::DocumentTitleChanged => Title {
+                before: self
+                    .title_before_enabled
+                    .as_ref()
+                    .map(|_| self.title_before.clone()),
+                after: self
+                    .title_after_enabled
+                    .as_ref()
+                    .map(|_| self.title_after.clone()),
+            },
+            WorkflowTrigger::DocumentTagsChanged => Tags {
+                added_id: condition_choice(&self.added_tag_id, "added tag")?,
+                removed_id: condition_choice(&self.removed_tag_id, "removed tag")?,
+                state: condition_choice(&self.tag_change_state, "tag change")?,
+            },
+            WorkflowTrigger::DocumentCorrespondentChanged
+            | WorkflowTrigger::DocumentTypeChanged => {
+                let before_id =
+                    condition_choice(&self.assignment_before_id, "previous classification")?;
+                let after_id = condition_choice(&self.assignment_after_id, "new classification")?;
+                let state =
+                    condition_choice(&self.assignment_change_state, "classification change")?;
+                if trigger == WorkflowTrigger::DocumentCorrespondentChanged {
+                    Correspondent {
+                        before_id,
+                        after_id,
+                        state,
+                    }
+                } else {
+                    DocumentType {
+                        before_id,
+                        after_id,
+                        state,
+                    }
+                }
+            }
             WorkflowTrigger::DocumentDateChanged => Date {
                 before: condition_choice(&self.document_date_before, "previous document date")?,
                 after: condition_choice(&self.document_date_after, "new document date")?,
@@ -550,7 +598,26 @@ impl FormValues {
             _ => return Ok(None),
         };
         match condition {
-            Date {
+            Title {
+                before: None,
+                after: None,
+            }
+            | Tags {
+                added_id: None,
+                removed_id: None,
+                state: None,
+            }
+            | Correspondent {
+                before_id: None,
+                after_id: None,
+                state: None,
+            }
+            | DocumentType {
+                before_id: None,
+                after_id: None,
+                state: None,
+            }
+            | Date {
                 before: None,
                 after: None,
                 state: None,
@@ -771,6 +838,37 @@ impl FormValues {
             .as_ref()
             .and_then(|event| event.document_change.as_ref())
         {
+            Some(WorkflowDocumentConditions::Title { before, after }) => {
+                values.title_before_enabled = before.as_ref().map(|_| "on".into());
+                values.title_before = before.clone().unwrap_or_default();
+                values.title_after_enabled = after.as_ref().map(|_| "on".into());
+                values.title_after = after.clone().unwrap_or_default();
+            }
+            Some(WorkflowDocumentConditions::Tags {
+                added_id,
+                removed_id,
+                state,
+            }) => {
+                values.added_tag_id = condition_value(*added_id);
+                values.removed_tag_id = condition_value(*removed_id);
+                values.tag_change_state = condition_value(*state);
+            }
+            Some(
+                WorkflowDocumentConditions::Correspondent {
+                    before_id,
+                    after_id,
+                    state,
+                }
+                | WorkflowDocumentConditions::DocumentType {
+                    before_id,
+                    after_id,
+                    state,
+                },
+            ) => {
+                values.assignment_before_id = condition_value(*before_id);
+                values.assignment_after_id = condition_value(*after_id);
+                values.assignment_change_state = condition_value(*state);
+            }
             Some(WorkflowDocumentConditions::Date {
                 before,
                 after,
@@ -1163,6 +1261,12 @@ struct FormTemplate {
     correspondents: Vec<Choice>,
     document_types: Vec<Choice>,
     source_kinds: Vec<Choice>,
+    added_tags: Vec<Choice>,
+    removed_tags: Vec<Choice>,
+    previous_correspondents: Vec<Choice>,
+    new_correspondents: Vec<Choice>,
+    previous_document_types: Vec<Choice>,
+    new_document_types: Vec<Choice>,
     action_tags: Vec<Choice>,
     action_correspondents: Vec<Choice>,
     action_document_types: Vec<Choice>,
@@ -1188,6 +1292,17 @@ async fn build_form(
                 label,
             })
             .collect::<Vec<_>>()
+    };
+    let delta_choices = |items, current: &str| {
+        let mut options = choices(items, current);
+        if !current.is_empty() && !options.iter().any(|option| option.selected) {
+            options.push(Choice {
+                value: current.into(),
+                label: format!("Unavailable choice ({current})"),
+                selected: true,
+            });
+        }
+        options
     };
     let chosen_tags = values.action_tag_ids();
     let pairs = |names: Vec<(Id, String)>| -> Vec<(String, String)> {
@@ -1333,6 +1448,50 @@ async fn build_form(
             .map(|(value, label)| (value.to_string(), label.to_string()))
             .to_vec(),
             &values.source_kind,
+        ),
+        added_tags: delta_choices(
+            pairs(tags.iter().map(|tag| (tag.id, tag.name.clone())).collect()),
+            &values.added_tag_id,
+        ),
+        removed_tags: delta_choices(
+            pairs(tags.iter().map(|tag| (tag.id, tag.name.clone())).collect()),
+            &values.removed_tag_id,
+        ),
+        previous_correspondents: delta_choices(
+            pairs(
+                correspondents
+                    .iter()
+                    .map(|item| (item.id, item.name.clone()))
+                    .collect(),
+            ),
+            &values.assignment_before_id,
+        ),
+        new_correspondents: delta_choices(
+            pairs(
+                correspondents
+                    .iter()
+                    .map(|item| (item.id, item.name.clone()))
+                    .collect(),
+            ),
+            &values.assignment_after_id,
+        ),
+        previous_document_types: delta_choices(
+            pairs(
+                document_types
+                    .iter()
+                    .map(|item| (item.id, item.name.clone()))
+                    .collect(),
+            ),
+            &values.assignment_before_id,
+        ),
+        new_document_types: delta_choices(
+            pairs(
+                document_types
+                    .iter()
+                    .map(|item| (item.id, item.name.clone()))
+                    .collect(),
+            ),
+            &values.assignment_after_id,
         ),
         action_tags: tags
             .iter()
