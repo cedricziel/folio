@@ -1,3 +1,4 @@
+import CoreGraphics
 import XCTest
 
 final class CustomMetadataWorkflowUITests: XCTestCase {
@@ -21,9 +22,13 @@ final class CustomMetadataWorkflowUITests: XCTestCase {
         app.buttons["metadata-workflow-field"].tap()
         app.buttons["Exact amount"].tap()
         let compare = app.switches["Match new value"]
-        XCTAssertTrue(compare.waitForExistence(timeout: 10))
-        compare.tap()
+        for _ in 0..<4 where !compare.isHittable { app.swipeUp() }
+        XCTAssertTrue(compare.isHittable)
+        compare.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(compare.value as? String, "1")
         let value = app.textFields["New value"]
+        for _ in 0..<4 where !value.isHittable { app.swipeUp() }
+        XCTAssertTrue(value.isHittable)
         value.tap()
         value.typeText("9007199254740993.01")
         let url = app.textFields["Destination URL"]
