@@ -431,7 +431,24 @@ pub(crate) async fn list_runs(
 ) -> ApiResult<Json<Vec<WorkflowRun>>> {
     find_retained(vault, &*state.workflow_repo, id).await?;
     let limit = query.limit.unwrap_or(DEFAULT_RUN_LIMIT).min(MAX_RUN_LIMIT);
-    Ok(Json(state.workflow_repo.list_runs(vault, id, limit).await?))
+    let mut runs = state.workflow_repo.list_runs(vault, id, limit).await?;
+    for run in &mut runs {
+        run.last_error = history_error(run);
+    }
+    Ok(Json(runs))
+}
+
+pub(super) fn history_error(run: &WorkflowRun) -> Option<String> {
+    let message = run.last_error.as_ref()?;
+    if let Some(status) = run.response_status {
+        let http_error = format!("HTTP {status}");
+        // Older runs may have a receiver-provided response body after the HTTP status.
+        if message.starts_with(&http_error) {
+            return Some(http_error);
+        }
+    }
+
+    Some(message.clone())
 }
 
 pub(crate) async fn find(

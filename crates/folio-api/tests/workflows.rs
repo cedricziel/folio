@@ -261,16 +261,19 @@ async fn web_editor_replaces_nested_groups_and_distinguishes_empty_any() {
     assert_eq!(unchanged, stored);
 }
 
-/// A receiver that records requests and answers with a fixed status
+/// A receiver that records requests and answers with a fixed status and diagnostic.
 async fn receiver(status: u16) -> (String, Arc<Mutex<Vec<(HeaderMap, String)>>>) {
     type Log = Arc<Mutex<Vec<(HeaderMap, String)>>>;
     async fn handle(
         State((log, status)): State<(Log, u16)>,
         headers: HeaderMap,
         body: String,
-    ) -> StatusCode {
+    ) -> (StatusCode, &'static str) {
         log.lock().unwrap().push((headers, body));
-        StatusCode::from_u16(status).unwrap()
+        (
+            StatusCode::from_u16(status).unwrap(),
+            "Receiver diagnostic (fixture only)",
+        )
     }
 
     let log: Log = Arc::default();
@@ -412,10 +415,7 @@ async fn test_endpoint_reports_a_failing_receiver() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["deliveries"][0]["success"], false);
     assert_eq!(result["deliveries"][0]["status"], 500);
-    assert!(result["deliveries"][0]["error"]
-        .as_str()
-        .unwrap()
-        .contains("500"));
+    assert_eq!(result["deliveries"][0]["error"], "HTTP 500");
 }
 
 #[tokio::test]
@@ -542,6 +542,54 @@ async fn lists_runs_newest_first() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn run_history_preserves_progress_without_receiver_diagnostics() {
+    let app = test_app().await;
+    let input = serde_json::from_value(workflow_body("http://127.0.0.1:1/unused")).unwrap();
+    let workflow = app
+        .state
+        .workflow_repo
+        .create(app.vault, input)
+        .await
+        .unwrap();
+    let id = workflow.id;
+    let mut run = WorkflowRun::new(
+        app.vault,
+        id,
+        workflow.trigger,
+        Some(Uuid::new_v4()),
+        r#"{"note":"Captured payload (fixture only)"}"#.into(),
+    )
+    .with_actions(workflow.actions);
+    run.attempts = 2;
+    run.completed_actions = 1;
+    run.response_status = Some(503);
+    run.last_error =
+        Some("HTTP 503 Service Unavailable: Receiver diagnostic (fixture only)".into());
+    assert!(app.state.workflow_repo.create_run(&run).await.unwrap());
+
+    let (status, runs) =
+        json_request(&app, "GET", &format!("/api/workflows/{id}/runs"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(runs[0]["last_error"], "HTTP 503");
+    assert_eq!(runs[0]["response_status"], 503);
+    assert_eq!(runs[0]["completed_actions"], 1);
+    assert!(runs[0].get("payload").is_none());
+    assert!(runs[0].get("actions").is_none());
+
+    for uri in [
+        format!("/workflows/{id}/history"),
+        format!("/workflows/{id}"),
+    ] {
+        let (status, html) = send(&app, "GET", &uri, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains("Retrying"));
+        assert!(html.contains("<dt>Completed actions</dt><dd>1</dd>"));
+        assert!(!html.contains("Receiver diagnostic (fixture only)"));
+        assert!(!html.contains("Captured payload (fixture only)"));
+    }
 }
 
 #[tokio::test]
@@ -898,7 +946,7 @@ async fn workflow_trash_restore_and_retained_history_are_usable_from_management_
         .await
         .unwrap()
         .unwrap();
-    let run = WorkflowRun::new(
+    let mut run = WorkflowRun::new(
         app.vault,
         stored.id,
         stored.trigger,
@@ -906,6 +954,7 @@ async fn workflow_trash_restore_and_retained_history_are_usable_from_management_
         r#"{"note":"frozen execution context"}"#.into(),
     )
     .with_actions(stored.actions.clone());
+    run.response_status = Some(503);
     app.state.workflow_repo.create_run(&run).await.unwrap();
     let (status, _) = send(&app, "POST", &format!("/workflows/{id}/delete"), None).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
@@ -922,11 +971,13 @@ async fn workflow_trash_restore_and_retained_history_are_usable_from_management_
     let (status, history) = send(&app, "GET", &format!("/workflows/{id}/history"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(history.contains("Workflow was deleted"));
+    assert!(history.contains("<dt>Finished</dt>"));
     assert!(!history.contains("hunter2"));
     let (status, runs) =
         json_request(&app, "GET", &format!("/api/workflows/{id}/runs"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(runs[0]["status"], "failed");
+    assert_eq!(runs[0]["last_error"], "Workflow was deleted");
     let (status, _) = send(&app, "POST", &format!("/workflows/{id}/restore"), None).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let (_, restored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
