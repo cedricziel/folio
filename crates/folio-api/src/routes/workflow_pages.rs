@@ -20,7 +20,9 @@ use folio_core::models::{
     WorkflowMetadataConditions, WorkflowRun, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 
-use super::workflows::{find, find_retained, send_test, WorkflowListQuery, SECRET_MASK};
+use super::workflows::{
+    find, find_retained, history_error, send_test, WorkflowListQuery, SECRET_MASK,
+};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::vault::DefaultVault;
@@ -58,19 +60,25 @@ struct RunView {
     status_class: &'static str,
     status_label: &'static str,
     attempts: u32,
+    completed_actions: u32,
     response_status: Option<u16>,
     error: Option<String>,
     created: String,
+    finished: Option<String>,
 }
 
 impl From<&WorkflowRun> for RunView {
     fn from(run: &WorkflowRun) -> Self {
         let (status_class, status_label) = match run.status {
-            RunStatus::Succeeded => ("f-status-done", "Delivered"),
+            RunStatus::Succeeded => ("f-status-done", "Succeeded"),
             RunStatus::Pending if run.attempts > 0 => ("f-status-pending", "Retrying"),
             RunStatus::Pending => ("f-status-pending", "Waiting"),
             RunStatus::Failed => ("f-status-failed", "Failed"),
         };
+        let error = history_error(run).filter(|error| {
+            run.response_status
+                .is_none_or(|status| *error != format!("HTTP {status}"))
+        });
         Self {
             event: run.event.label(),
             document: run
@@ -80,9 +88,13 @@ impl From<&WorkflowRun> for RunView {
             status_class,
             status_label,
             attempts: run.attempts,
+            completed_actions: run.completed_actions,
             response_status: run.response_status,
-            error: run.last_error.clone(),
+            error,
             created: run.created_at.format("%Y-%m-%d %H:%M").to_string(),
+            finished: run
+                .finished_at
+                .map(|at| at.format("%Y-%m-%d %H:%M").to_string()),
         }
     }
 }
