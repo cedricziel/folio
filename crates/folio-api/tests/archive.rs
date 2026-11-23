@@ -453,3 +453,44 @@ async fn signed_pdf_skip_explains_the_reason_and_keeps_the_original_action() {
     assert!(!html.contains("Retry archival copy"));
     assert!(!html.contains("Download PDF/A"));
 }
+
+#[tokio::test]
+async fn restored_document_offers_web_retry_for_interrupted_generation() {
+    let f = Fixture::new().await;
+    let first = json_body(f.post(&f.editor, json!({})).await).await;
+    f.app
+        .state
+        .document_repo
+        .delete(f.app.vault, f.source.document_id)
+        .await
+        .unwrap();
+    f.app
+        .state
+        .document_repo
+        .restore(f.app.vault, f.source.document_id)
+        .await
+        .unwrap();
+    let page = f.page_path();
+    let html = text(f.get(&page, &f.editor).await).await;
+    assert!(html.contains("Retry archival copy"));
+    assert!(html.contains("Generation was interrupted"));
+    let response = f
+        .send(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("{page}/archive"))
+                .header(header::COOKIE, &f.editor)
+                .header("sec-fetch-site", "same-origin")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "expected_attempt_id={}",
+                    first["attempt_id"].as_str().unwrap()
+                )))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let status = json_body(f.get(&f.archive_path(), &f.editor).await).await;
+    assert_eq!(status["status"], "queued");
+    assert_ne!(status["attempt_id"], first["attempt_id"]);
+}

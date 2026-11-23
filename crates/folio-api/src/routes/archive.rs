@@ -63,6 +63,8 @@ pub(crate) struct ArchiveStatusResponse {
     pub attempt_id: Option<Uuid>,
     pub reason: Option<&'static str>,
     pub details: Option<ArchiveDetails>,
+    #[serde(skip)]
+    interrupted: bool,
 }
 
 impl ArchiveStatusResponse {
@@ -89,7 +91,7 @@ impl ArchiveStatusResponse {
     }
 
     pub fn can_retry(&self) -> bool {
-        self.status == ArchiveStatus::Failed
+        self.status == ArchiveStatus::Failed || self.interrupted
     }
 }
 
@@ -100,6 +102,7 @@ impl From<Option<ArchiveAttempt>> for ArchiveStatusResponse {
             attempt_id: None,
             reason: None,
             details: None,
+            interrupted: false,
         };
         if let Some(attempt) = attempt {
             response.attempt_id = Some(attempt.id);
@@ -114,6 +117,10 @@ impl From<Option<ArchiveAttempt>> for ArchiveStatusResponse {
                     ArchiveStatus::Ready
                 }
                 ArchiveState::Completed(ArchiveCompletion::Skipped(reason)) => {
+                    response.interrupted = matches!(
+                        reason.as_str(),
+                        "Document moved" | "Document trashed" | "Vault deleted"
+                    );
                     response.reason = Some(skip_message(&reason));
                     ArchiveStatus::Skipped
                 }
@@ -129,6 +136,9 @@ impl From<Option<ArchiveAttempt>> for ArchiveStatusResponse {
 
 fn skip_message(reason: &str) -> &'static str {
     match reason {
+        "Document moved" | "Document trashed" | "Vault deleted" => {
+            "Generation was interrupted by a move or deletion. You can retry the archival copy."
+        }
         "unsupported source media type" => "This file type cannot be converted to PDF/A.",
         "document exceeds the conversion limits" => "This file exceeds the conversion limits.",
         "source PDF could not be inspected safely" => "Folio could not inspect this PDF safely.",
