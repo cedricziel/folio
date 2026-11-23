@@ -332,6 +332,67 @@ async fn read_tokens_can_request_document_thumbnails() {
 }
 
 #[tokio::test]
+async fn read_tokens_can_list_and_download_revisions_in_visible_vaults() {
+    let h = harness_requiring_login().await;
+    let cookie = account(&h, "history-alice").await;
+    let user = UserId::from("history-alice");
+    let vault = h.state.vaults.default_vault(Some(&user)).await.unwrap();
+    let document = h
+        .state
+        .document_repo
+        .create_for_upload(vault, Default::default())
+        .await
+        .unwrap();
+    let key = folio_core::ports::keys::original(document.id);
+    let bytes = b"immutable original";
+    h.state
+        .store
+        .put(&key, bytes.as_slice().into())
+        .await
+        .unwrap();
+    let identity = folio_core::models::FileIdentity::from_bytes(&key, "application/pdf", bytes);
+    h.state
+        .document_repo
+        .finalize_verified_upload(vault, document.id, &identity)
+        .await
+        .unwrap();
+    let revisions = h
+        .state
+        .document_repo
+        .list_revisions(vault, document.id, None, 1)
+        .await
+        .unwrap();
+    let revision = revisions[0].id;
+
+    let created = create(&h, &cookie, creation()).await;
+    let token = created["token"].as_str().unwrap();
+    let default_path = format!("/api/documents/{}/revisions", document.id);
+    let scoped_path = format!("/api/vaults/{vault}/documents/{}/revisions", document.id);
+    for path in [
+        default_path.clone(),
+        scoped_path.clone(),
+        format!("{default_path}/{revision}/download"),
+        format!("{scoped_path}/{revision}/download"),
+    ] {
+        let response = h
+            .app
+            .clone()
+            .oneshot(req("GET", &path, "", token, Value::Null))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+    }
+
+    let write = h
+        .app
+        .clone()
+        .oneshot(req("POST", &scoped_path, "", token, Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(write.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn portable_exports_require_a_personal_tokens_document_read_scope() {
     let h = harness_requiring_login().await;
     let cookie = account(&h, "portable-export-reader").await;

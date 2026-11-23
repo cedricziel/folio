@@ -9,6 +9,7 @@ mod document_date;
 mod document_entry;
 mod document_page;
 mod document_review;
+mod document_revision;
 mod document_type;
 mod file_identity;
 mod import_run;
@@ -49,6 +50,7 @@ pub use document_entry::{
 };
 pub use document_page::{DocumentCursor, DocumentPage, DocumentPageQuery, DocumentSort};
 pub use document_review::{DocumentReview, ReviewDecision, ReviewOrigin};
+pub use document_revision::{DocumentRevision, OriginalVerification, RevisionOriginal};
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
 pub use file_identity::{FileIdentity, UnverifiedOriginal};
 pub use import_run::{

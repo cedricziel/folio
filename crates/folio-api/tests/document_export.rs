@@ -248,6 +248,96 @@ async fn exports_verified_bytes_and_omits_missing_queued_failed_or_stale_archive
 }
 
 #[tokio::test]
+async fn portable_export_uses_the_current_file_and_history_download_keeps_the_earlier_original() {
+    let h = harness().await;
+    let earlier = fixture(&h).await;
+    let document_id = earlier.document_id;
+    let current = Id::new_v4();
+    let filename = "replacement.pdf";
+    let replacement = b"%PDF new original";
+    let file = FileIdentity::from_bytes(
+        keys::revision_original(document_id, current),
+        "application/pdf",
+        replacement,
+    );
+    h.state
+        .store
+        .put(&file.storage_key, Bytes::from_static(replacement))
+        .await
+        .unwrap();
+
+    let Database::Sqlite(pool) = &h.database else {
+        unreachable!()
+    };
+    sqlx::query(
+        "INSERT INTO document_files
+             (id, document_id, vault_id, role, storage_key, original_filename,
+              mime_type, verification_state, sha256, byte_size)
+         VALUES (?1, ?2, ?3, 'original', ?4, ?5, 'application/pdf', 'verified', ?6, ?7)",
+    )
+    .bind(current.to_string())
+    .bind(document_id.to_string())
+    .bind(h.vault.to_string())
+    .bind(&file.storage_key)
+    .bind(filename)
+    .bind(&file.sha256)
+    .bind(i64::try_from(file.byte_size).unwrap())
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO document_revisions
+             (id, document_id, vault_id, number, original_file_id, created_at)
+         VALUES (?1, ?2, ?3, 2, ?1, '2001-02-03T04:05:06Z')",
+    )
+    .bind(current.to_string())
+    .bind(document_id.to_string())
+    .bind(h.vault.to_string())
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE documents SET current_revision_id = ?1, original_filename = ?2, file_path = ?3
+         WHERE id = ?4",
+    )
+    .bind(current.to_string())
+    .bind(filename)
+    .bind(&file.storage_key)
+    .bind(document_id.to_string())
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let export = request(&h, document_id).await;
+    assert_eq!(export.status(), StatusCode::OK);
+    let bytes = to_bytes(export.into_body(), 32 * 1024).await.unwrap();
+    let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let manifest: Value = serde_json::from_slice(&read(&mut zip, "manifest.json")).unwrap();
+    assert_eq!(manifest["source_revision_id"], current.to_string());
+    assert_eq!(manifest["document"]["original_filename"], filename);
+    assert_eq!(read(&mut zip, "original"), replacement);
+
+    let download = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get(format!(
+                "/api/documents/{document_id}/revisions/{}/download",
+                earlier.revision_id
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(download.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(download.into_body(), 1024).await.unwrap().as_ref(),
+        ORIGINAL
+    );
+}
+
+#[tokio::test]
 async fn export_fails_before_download_if_a_verified_object_is_missing_or_corrupt() {
     let h = harness().await;
     let source = fixture(&h).await;

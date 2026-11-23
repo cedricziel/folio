@@ -614,7 +614,24 @@ fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
         ["", "api", "documents", "browse" | "trash" | "ids"] => read,
         ["", "api", "documents", document] if id(document) => read || *method == Method::DELETE,
         ["", "api", "documents", "upload"] => *method == Method::POST,
-        ["", "api", "documents", document, "download" | "export" | "thumbnail"] if id(document) => {
+        ["", "api", "documents", document, "download" | "export" | "thumbnail" | "revisions"]
+            if id(document) =>
+        {
+            read
+        }
+        ["", "api", "documents", document, "revisions", revision, "download"]
+            if id(document) && id(revision) =>
+        {
+            read
+        }
+        ["", "api", "vaults", vault, "documents", document, "revisions"]
+            if id(vault) && id(document) =>
+        {
+            read
+        }
+        ["", "api", "vaults", vault, "documents", document, "revisions", revision, "download"]
+            if id(vault) && id(document) && id(revision) =>
+        {
             read
         }
         ["", "api", "documents", document, "archive"] if id(document) => {
