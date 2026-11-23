@@ -835,12 +835,16 @@ pub struct WorkflowRun {
 
 impl WorkflowRun {
     pub fn source_identity(&self) -> Result<Option<WorkflowEventIdentity>> {
+        Self::source_identity_from_payload(&self.payload)
+    }
+
+    pub fn source_identity_from_payload(payload: &str) -> Result<Option<WorkflowEventIdentity>> {
         #[derive(Deserialize)]
         struct Context {
             #[serde(default)]
             source_event: Option<WorkflowEventIdentity>,
         }
-        serde_json::from_str::<Context>(&self.payload)
+        serde_json::from_str::<Context>(payload)
             .map(|context| context.source_event)
             .map_err(|error| {
                 Error::Repository(format!("Invalid captured workflow payload: {error}"))
