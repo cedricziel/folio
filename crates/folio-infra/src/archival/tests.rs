@@ -105,7 +105,11 @@ printf %s "$TMPDIR" > "$(dirname "$0")/scratch""#,
         verapdf: dir.path().join("missing"),
         ..ToolPaths::default()
     };
-    let source = b"\x89PNG\r\n\x1a\n";
+    let mut source = std::io::Cursor::new(Vec::new());
+    image::RgbImage::new(1, 1)
+        .write_to(&mut source, image::ImageFormat::Png)
+        .unwrap();
+    let source = source.get_ref();
     let converter = ArchiveConverter::with_tools("eng", paths.clone());
     assert_eq!(
         converter.convert(source, "image/png").await,
@@ -270,6 +274,25 @@ async fn real_archival_tools_keep_digital_text_and_ocr_a_scan() {
         let text = crate::ai::pdf::text_layer(&archive.bytes).await.unwrap();
         assert!(text[0].contains("Cobalt Orchard 9716"), "{mime}: {text:?}");
     }
+
+    let mut transparent = image::open(dir.path().join("scan.png"))
+        .unwrap()
+        .into_rgba8();
+    for pixel in transparent.pixels_mut() {
+        if *pixel == image::Rgba([255, 255, 255, 255]) {
+            *pixel = image::Rgba([0, 0, 0, 0]);
+        }
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    transparent
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let archive = converter
+        .convert(bytes.get_ref(), "image/png")
+        .await
+        .unwrap();
+    let text = crate::ai::pdf::text_layer(&archive.bytes).await.unwrap();
+    assert!(text[0].contains("Cobalt Orchard 9716"), "{text:?}");
 }
 
 #[tokio::test]

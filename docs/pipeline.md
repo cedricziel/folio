@@ -37,7 +37,8 @@ Settings: `ocr.provider`, `ocr.model` (empty = provider default),
 
 The document-level converter accepts PDF, JPEG, PNG and TIFF. It uses
 OCRmyPDF's skip-text mode to preserve digital pages and add text to scanned
-pages. Images are imported at 300 DPI. For PDFs, qpdf checks the object
+pages. Images are imported at 300 DPI. Transparent PNG pixels are composited
+over a white background. For PDFs, qpdf checks the object
 structure before conversion. Encrypted PDFs and PDFs containing signature or
 embedded attachment objects are skipped.
 

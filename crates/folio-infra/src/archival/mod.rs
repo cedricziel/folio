@@ -2,6 +2,7 @@
 //! Only veraPDF can authorize returning a copy for publication.
 
 mod pdf;
+mod png;
 mod validation;
 
 use std::ffi::OsStr;
@@ -136,6 +137,13 @@ impl ArchiveConverter {
         tokio::fs::write(&input, source)
             .await
             .map_err(|_| SkipReason::TemporaryStorage)?;
+
+        if input_name == "source.png" {
+            let png_path = input.clone();
+            tokio::task::spawn_blocking(move || png::flatten_alpha(&png_path))
+                .await
+                .map_err(|_| SkipReason::TemporaryStorage)??;
+        }
 
         let source_pages = if input_name == "source.pdf" {
             let pages = self.inspect_pdf(&work, &input).await?;
