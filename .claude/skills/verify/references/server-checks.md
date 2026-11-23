@@ -593,6 +593,12 @@ or new value constrain the same occurrence change. Run
 `npx playwright test metadata-workflows.spec.ts` in the disposable instance to
 check the trigger and condition controls, including webhook-only definition events.
 
+Run `npx playwright test workflow-condition-groups.spec.ts` in the disposable
+instance to check nested group authoring, the distinction between an empty and
+omitted alternative group, and exact typed values after reopening an edit.
+The API workflow suite checks that invalid nested filters leave the saved
+definition intact.
+
 ## Verify SQLite trash contention
 
 Run `cargo test -p folio-infra --test trash_lock` with an isolated target.
