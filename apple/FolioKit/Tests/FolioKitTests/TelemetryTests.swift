@@ -63,7 +63,7 @@ private final class TelemetryCapture: @unchecked Sendable {
             #expect((response as? HTTPURLResponse)?.statusCode == 200)
             return traceID
         }
-        await Task.detached { runtime.flush() }.value
+        await runtime.flush()
         let resource = runtime.traces.getActiveResource().attributes
         print(
             "FOLIO_SWIFT_SMOKE trace_id=\(traceID) installation_id=\(resource["folio.installation.id"]!) instance_id=\(resource["service.instance.id"]!)"
@@ -170,7 +170,7 @@ private final class TelemetryCapture: @unchecked Sendable {
         }
         #expect(value == 42)
         let runtime = try #require(telemetry.current)
-        await Task.detached { runtime.flush() }.value
+        await runtime.flush()
         telemetry.stop()
         let exports = capture.requests.filter { $0.0.url?.path.hasPrefix("/api/telemetry/v1/") == true }
         #expect(Set(exports.compactMap { $0.0.url?.lastPathComponent }) == ["traces", "logs", "metrics"])
@@ -233,7 +233,7 @@ private final class TelemetryCapture: @unchecked Sendable {
             try await telemetry.operation("documents.thumbnail") { throw CancellationError() }
         }
         let runtime = try #require(telemetry.current)
-        await Task.detached { runtime.flush() }.value
+        await runtime.flush()
         telemetry.stop()
         let spans = try capture.requests.filter { $0.0.url?.path == "/api/telemetry/v1/traces" }.flatMap {
             try Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest(serializedBytes: $0.1)
@@ -443,7 +443,7 @@ private final class TelemetryCapture: @unchecked Sendable {
             try await network.data(from: baseURL.appending(path: "api/documents"))
         }
         let runtime = try #require(fileProvider.current)
-        await Task.detached { runtime.flush() }.value
+        await runtime.flush()
 
         let span = try #require(exportedSpans(capture).first { $0.name == "fileprovider.enumerate" })
         let request = try #require(capture.requests.first { $0.0.url?.path == "/api/documents" })
@@ -535,7 +535,7 @@ private final class TelemetryCapture: @unchecked Sendable {
         telemetry.action(.documentOpen)
         await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
         let runtime = try #require(telemetry.current)
-        await Task.detached { runtime.flush() }.value
+        await runtime.flush()
 
         let logs = try exportedLogs(capture)
         let events = logs.map(\.eventName).filter { $0 != "folio.operation.completed" }
@@ -558,7 +558,7 @@ private final class TelemetryCapture: @unchecked Sendable {
         let query = DocumentBrowseQuery(scope: .inbox)
         _ = await telemetry.operation("documents.browse", attributes: query.telemetryAttributes(cursor: nil)) { 1 }
         let runtime = try #require(telemetry.current)
-        await Task.detached { runtime.flush() }.value
+        await runtime.flush()
 
         let span = try #require(exportedSpans(capture).first { $0.name == "documents.browse" })
         let spanAttributes = strings(span.attributes)
