@@ -1,4 +1,9 @@
-use axum::{extract::State, response::Response, Json};
+use askama::Template;
+use axum::{
+    extract::State,
+    response::{Html, Response},
+    Json,
+};
 use chrono::{DateTime, Utc};
 use folio_core::models::{Access, DocumentRevision, OriginalVerification, VaultAction, VaultId};
 use serde::{Deserialize, Serialize};
@@ -10,7 +15,7 @@ use crate::{
     error::{ApiError, ApiResult},
     extract::{ApiPath, ApiQuery},
     state::AppState,
-    vault::{DefaultVault, Uploader},
+    vault::{filters, DefaultVault, Uploader},
 };
 
 #[derive(Serialize, ToSchema)]
@@ -154,6 +159,47 @@ async fn list_in_vault(
     id: Uuid,
     query: RevisionQuery,
 ) -> ApiResult<Json<RevisionPageView>> {
+    let (revisions, next_before) = revision_page(state, vault, id, query).await?;
+    Ok(Json(RevisionPageView {
+        revisions: revisions.into_iter().map(RevisionView::from).collect(),
+        next_before,
+    }))
+}
+
+#[derive(Template)]
+#[template(path = "partials/document_file_history.html")]
+struct FileHistoryTemplate {
+    document_id: Uuid,
+    revisions: Vec<DocumentRevision>,
+    next_before: Option<i64>,
+    show_latest: bool,
+}
+
+pub(super) async fn panel(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<RevisionQuery>,
+) -> ApiResult<Html<String>> {
+    let show_latest = query.before.is_some();
+    let (revisions, next_before) = revision_page(&state, vault, id, query).await?;
+    FileHistoryTemplate {
+        document_id: id,
+        revisions,
+        next_before,
+        show_latest,
+    }
+    .render()
+    .map(Html)
+    .map_err(|_| ApiError::internal("Could not render file history"))
+}
+
+async fn revision_page(
+    state: &AppState,
+    vault: VaultId,
+    id: Uuid,
+    query: RevisionQuery,
+) -> ApiResult<(Vec<DocumentRevision>, Option<i64>)> {
     let limit = query.limit.unwrap_or(25);
     if !(1..=100).contains(&limit) || query.before.is_some_and(|before| before <= 0) {
         return Err(ApiError::bad_request("Invalid revision page"));
@@ -172,10 +218,7 @@ async fn list_in_vault(
         .last()
         .filter(|_| has_more)
         .map(|revision| revision.number);
-    Ok(Json(RevisionPageView {
-        revisions: revisions.into_iter().map(RevisionView::from).collect(),
-        next_before,
-    }))
+    Ok((revisions, next_before))
 }
 
 #[utoipa::path(
