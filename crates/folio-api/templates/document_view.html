@@ -15,7 +15,7 @@
             </div>
             <div class="doc-actions">
                 {% if document.file_path.is_some() %}
-                <a data-folio-action="document.download" href="{{ "/api/documents"|vault_url }}/{{ document.id }}/download" class="f-btn" download>{{ icons::download() }} Download</a>
+                <a data-folio-action="document.download" href="{{ "/api/documents"|vault_url }}/{{ document.id }}/download" class="f-btn" download>{{ icons::download() }} Download original</a>
                 {% if document|can_edit_document %}
                 <form data-folio-action="document.reprocess" action="{{ "/documents"|vault_url }}/{{ document.id }}/reprocess" method="post" data-turbo="false">{% if !return_to.is_empty() %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
                     <button type="submit" class="f-btn {% if failed %}f-btn-primary{% else %}f-btn-quiet{% endif %}">{{ icons::refresh() }} Read again</button>
@@ -39,6 +39,11 @@
         {% include "partials/document_pages.html" %}
 
         <aside class="doc-aside">
+            {% match archive %}
+            {% when Some with (archive) %}
+            {% include "partials/document_archive.html" %}
+            {% when None %}
+            {% endmatch %}
             <section class="panel">
                 <h2 class="heading">Details</h2>
                 <dl class="f-meta-list">

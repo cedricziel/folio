@@ -51,6 +51,45 @@ impl ArchiveService {
         self.repository.current_attempt(vault, document).await
     }
 
+    /// Read the exact validated bytes for the current original revision.
+    pub async fn download(&self, vault: VaultId, document: Id) -> Result<Option<Vec<u8>>> {
+        let Some(attempt) = self.status(vault, document).await? else {
+            return Ok(None);
+        };
+        let ArchiveState::Completed(ArchiveCompletion::Ready(output)) = &attempt.state else {
+            return Ok(None);
+        };
+        let file = &output.file;
+        if output
+            .validate_metadata(&attempt.source, attempt.id)
+            .is_err()
+            || file.byte_size > MAX_FILE_BYTES
+        {
+            return Ok(None);
+        }
+        let bytes = tokio::time::timeout(STORAGE_TIMEOUT, async {
+            self.store
+                .get(&file.storage_key)
+                .await?
+                .into_bytes_limited(file.byte_size as usize)
+                .await
+        })
+        .await
+        .map_err(|_| Error::Storage("Archival copy read timed out".into()))?;
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(Error::NotFound { .. } | Error::Validation(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if bytes.len() as u64 != file.byte_size
+            || hex::encode(Sha256::digest(&bytes)) != file.sha256
+            || self.status(vault, document).await?.as_ref() != Some(&attempt)
+        {
+            return Ok(None);
+        }
+        Ok(Some(bytes))
+    }
+
     /// Enqueue a first attempt, or return the existing attempt ID.
     pub async fn enqueue(&self, vault: VaultId, document: Id) -> Result<Id> {
         self.admit(vault, document, None).await
