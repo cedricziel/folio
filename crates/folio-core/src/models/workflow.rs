@@ -44,6 +44,12 @@ pub enum WorkflowTrigger {
     DocumentCommentUpdated,
     #[serde(rename = "document_comment.deleted")]
     DocumentCommentDeleted,
+    #[serde(rename = "saved_view.created")]
+    SavedViewCreated,
+    #[serde(rename = "saved_view.updated")]
+    SavedViewUpdated,
+    #[serde(rename = "saved_view.deleted")]
+    SavedViewDeleted,
     #[serde(rename = "metadata_field.created")]
     MetadataFieldCreated,
     #[serde(rename = "metadata_field.updated")]
@@ -128,7 +134,7 @@ pub enum WorkflowTrigger {
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 52] = [
+    pub const ALL: [WorkflowTrigger; 55] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -142,6 +148,9 @@ impl WorkflowTrigger {
         Self::DocumentCommentCreated,
         Self::DocumentCommentUpdated,
         Self::DocumentCommentDeleted,
+        Self::SavedViewCreated,
+        Self::SavedViewUpdated,
+        Self::SavedViewDeleted,
         Self::MetadataFieldCreated,
         Self::MetadataFieldUpdated,
         Self::MetadataFieldDeleted,
@@ -199,6 +208,9 @@ impl WorkflowTrigger {
             Self::DocumentCommentCreated => "document_comment.created",
             Self::DocumentCommentUpdated => "document_comment.updated",
             Self::DocumentCommentDeleted => "document_comment.deleted",
+            Self::SavedViewCreated => "saved_view.created",
+            Self::SavedViewUpdated => "saved_view.updated",
+            Self::SavedViewDeleted => "saved_view.deleted",
             Self::MetadataFieldCreated => "metadata_field.created",
             Self::MetadataFieldUpdated => "metadata_field.updated",
             Self::MetadataFieldDeleted => "metadata_field.deleted",
@@ -261,6 +273,9 @@ impl WorkflowTrigger {
             Self::DocumentCommentCreated => "When a comment is created",
             Self::DocumentCommentUpdated => "When a comment is updated",
             Self::DocumentCommentDeleted => "When a comment is deleted",
+            Self::SavedViewCreated => "When a shared saved view is created",
+            Self::SavedViewUpdated => "When a shared saved view is updated",
+            Self::SavedViewDeleted => "When a shared saved view is deleted",
             Self::MetadataFieldCreated => "When a custom field is created",
             Self::MetadataFieldUpdated => "When a custom field is updated",
             Self::MetadataFieldDeleted => "When a custom field is retired",
@@ -336,7 +351,10 @@ impl WorkflowTrigger {
             | Self::DocumentThumbnailFailed
             | Self::DocumentThumbnailSkipped
             | Self::DocumentThumbnailRetryScheduled => WorkflowTarget::Document,
-            Self::MetadataFieldCreated
+            Self::SavedViewCreated
+            | Self::SavedViewUpdated
+            | Self::SavedViewDeleted
+            | Self::MetadataFieldCreated
             | Self::MetadataFieldUpdated
             | Self::MetadataFieldDeleted
             | Self::MetadataFieldRestored
@@ -388,6 +406,13 @@ impl WorkflowTrigger {
                 | Self::MetadataOptionDeleted
                 | Self::MetadataOptionRestored
                 | Self::DocumentMetadataChanged
+        )
+    }
+
+    pub fn is_saved_view(self) -> bool {
+        matches!(
+            self,
+            Self::SavedViewCreated | Self::SavedViewUpdated | Self::SavedViewDeleted
         )
     }
 
@@ -556,14 +581,7 @@ impl WorkflowConditions {
                     snapshot.correspondent_id,
                     snapshot.document_type_id,
                 ),
-                None => {
-                    self.mime_type.is_none()
-                        && self.filename_glob.is_none()
-                        && self.tag_id.is_none()
-                        && self.correspondent_id.is_none()
-                        && self.document_type_id.is_none()
-                        && self.source.is_empty()
-                }
+                None => !self.has_snapshot_filters(),
             }
             && self.matches_groups(|child| child.matches_occurrence_parts(snapshot, event, tag_ids))
     }
@@ -617,7 +635,21 @@ impl WorkflowConditions {
                 .is_none_or(|id| document_type_id == Some(id))
     }
 
+    fn has_snapshot_filters(&self) -> bool {
+        self.mime_type.is_some()
+            || self.filename_glob.is_some()
+            || self.tag_id.is_some()
+            || self.correspondent_id.is_some()
+            || self.document_type_id.is_some()
+            || !self.source.is_empty()
+    }
+
     fn validate_event_conditions(&self, trigger: WorkflowTrigger) -> Result<()> {
+        if trigger.is_saved_view() && self.has_snapshot_filters() {
+            return Err(Error::Validation(
+                "Saved view workflows do not have document filters".into(),
+            ));
+        }
         if let Some(event) = &self.event {
             if let Some(ingest) = &event.ingest {
                 ingest.validate_trigger(trigger)?;
@@ -893,6 +925,8 @@ impl WorkflowInput {
                     && self.trigger.target() == WorkflowTarget::Event
                 {
                     "Custom field and option workflows take only webhook actions"
+                } else if self.trigger.is_saved_view() {
+                    "Saved view workflows take only webhook actions"
                 } else if self.trigger.target() == WorkflowTarget::Event {
                     "Only webhook actions can run for this document lifecycle event"
                 } else {

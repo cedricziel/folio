@@ -7,11 +7,11 @@ use tracing::{info, warn};
 
 use folio_core::error::Error;
 use folio_core::models::{
-    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WebhookPayload, Workflow,
-    WorkflowAction, WorkflowRun, WorkflowTarget,
+    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, ViewVisibility, WebhookPayload,
+    Workflow, WorkflowAction, WorkflowRun, WorkflowTarget, WorkflowTrigger,
 };
 use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
-use folio_core::ports::{DocumentRepository, WorkflowRepository};
+use folio_core::ports::{DocumentRepository, SavedViewRepository, WorkflowRepository};
 use folio_core::services::IngestWorkflowAccess;
 
 use super::webhook::{WebhookClient, WebhookRequest};
@@ -49,6 +49,7 @@ pub struct WorkflowRunner {
     documents: Arc<dyn DocumentRepository>,
     client: WebhookClient,
     ingest_access: Option<Arc<IngestWorkflowAccess>>,
+    saved_views: Option<Arc<dyn SavedViewRepository>>,
 }
 
 impl WorkflowRunner {
@@ -62,11 +63,17 @@ impl WorkflowRunner {
             documents,
             client,
             ingest_access: None,
+            saved_views: None,
         }
     }
 
     pub fn with_ingest_access(mut self, access: Arc<IngestWorkflowAccess>) -> Self {
         self.ingest_access = Some(access);
+        self
+    }
+
+    pub fn with_saved_views(mut self, repo: Arc<dyn SavedViewRepository>) -> Self {
+        self.saved_views = Some(repo);
         self
     }
 
@@ -108,6 +115,30 @@ impl WorkflowRunner {
                 return Ok(RunOutcome::Failed);
             };
             Some(ingest)
+        } else {
+            None
+        };
+        let saved_view = if run.event.is_saved_view() {
+            let payload: WebhookPayload = serde_json::from_str(&run.payload).map_err(|error| {
+                Error::Repository(format!("Invalid saved view workflow payload: {error}"))
+            })?;
+            let Some(view) = payload.saved_view.filter(|view| {
+                payload.event == run.event
+                    && view.vault_id == vault
+                    && view.visibility == ViewVisibility::Shared
+                    && payload.source_event.is_some()
+                    && payload.document.is_none()
+                    && run.document_id.is_none()
+            }) else {
+                self.finish(
+                    &mut run,
+                    RunStatus::Failed,
+                    Some("Missing saved view workflow context".into()),
+                )
+                .await?;
+                return Ok(RunOutcome::Failed);
+            };
+            Some(view)
         } else {
             None
         };
@@ -167,6 +198,29 @@ impl WorkflowRunner {
                         &mut run,
                         RunStatus::Failed,
                         Some("Source or workflow is no longer authorized".into()),
+                    )
+                    .await?;
+                    return Ok(RunOutcome::Failed);
+                }
+            }
+            if let Some(view) = &saved_view {
+                let allowed = if let Some(repo) = &self.saved_views {
+                    run.event.target().accepts(action)
+                        && repo
+                            .is_shared_for_workflow(
+                                vault,
+                                view.saved_view_id,
+                                run.event == WorkflowTrigger::SavedViewDeleted,
+                            )
+                            .await?
+                } else {
+                    false
+                };
+                if !allowed {
+                    self.finish(
+                        &mut run,
+                        RunStatus::Failed,
+                        Some("Saved view is no longer shared in the workflow's vault".into()),
                     )
                     .await?;
                     return Ok(RunOutcome::Failed);

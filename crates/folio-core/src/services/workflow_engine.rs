@@ -11,12 +11,13 @@ use super::IngestWorkflowAccess;
 use crate::error::{Error, Result};
 use crate::events::{DocumentEvent, EventOrigin, EventSnapshot, OutboxEvent};
 use crate::models::{
-    WebhookDocument, WebhookEntry, WebhookIngest, WebhookMetadata, WebhookPayload,
-    WebhookProcessing, WorkflowRun, WorkflowTarget, WorkflowTrigger, WorkflowTriggerRegistry,
+    ViewPresentation, ViewVisibility, WebhookDocument, WebhookEntry, WebhookIngest,
+    WebhookMetadata, WebhookPayload, WebhookProcessing, WebhookSavedView, WorkflowRun,
+    WorkflowTarget, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 use crate::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, FileMetadata,
-    WorkflowRepository,
+    SavedViewRepository, WorkflowRepository,
 };
 use crate::{DomainEventEnvelope, EventAudience};
 
@@ -36,6 +37,7 @@ pub struct WorkflowEngine {
     files: Arc<dyn FileMetadata>,
     public_url: String,
     ingest_access: Option<Arc<IngestWorkflowAccess>>,
+    saved_views: Option<Arc<dyn SavedViewRepository>>,
 }
 
 impl WorkflowEngine {
@@ -55,11 +57,17 @@ impl WorkflowEngine {
             files,
             public_url: public_url.into(),
             ingest_access: None,
+            saved_views: None,
         }
     }
 
     pub fn with_ingest_access(mut self, access: Arc<IngestWorkflowAccess>) -> Self {
         self.ingest_access = Some(access);
+        self
+    }
+
+    pub fn with_saved_views(mut self, repo: Arc<dyn SavedViewRepository>) -> Self {
+        self.saved_views = Some(repo);
         self
     }
 
@@ -211,6 +219,7 @@ impl WorkflowEngine {
                 Some(DocumentEvent::Deleted { .. })
             )
         );
+        let mut saved_view = None;
         let (document_id, vault, snapshot, occurred_at) = if use_projection || purge_with_snapshot {
             let event = outbox_event
                 .event
@@ -234,6 +243,25 @@ impl WorkflowEngine {
                     None,
                     envelope.occurred_at(),
                 )
+            } else if trigger.is_saved_view() {
+                let Some(occurrence) = Self::saved_view_occurrence(envelope) else {
+                    return Ok(Vec::new());
+                };
+                let Some(repo) = &self.saved_views else {
+                    return Ok(Vec::new());
+                };
+                if !repo
+                    .is_shared_for_workflow(
+                        occurrence.vault_id,
+                        occurrence.saved_view_id,
+                        trigger == WorkflowTrigger::SavedViewDeleted,
+                    )
+                    .await?
+                {
+                    return Ok(Vec::new());
+                }
+                saved_view = Some(occurrence);
+                (None, envelope.vault_id(), None, envelope.occurred_at())
             } else if trigger.is_custom_metadata() {
                 if !Self::valid_metadata_subject(trigger, envelope) {
                     return Ok(Vec::new());
@@ -316,6 +344,16 @@ impl WorkflowEngine {
                         let body = if let Some(ctx) = &snapshot {
                             self.build_payload(trigger, ctx, occurred_at, envelope)
                                 .await?
+                        } else if let Some(occurrence) = &saved_view {
+                            let payload = WebhookPayload::for_saved_view(
+                                trigger,
+                                occurred_at,
+                                occurrence.clone(),
+                                envelope.map(Into::into),
+                            );
+                            serde_json::to_string(&payload).map_err(|e| {
+                                Error::Repository(format!("Failed to encode payload: {e}"))
+                            })?
                         } else if trigger.is_custom_metadata() {
                             let source =
                                 envelope.expect("metadata occurrence has a domain envelope");
@@ -376,6 +414,35 @@ impl WorkflowEngine {
             Some(e) => Err(e),
             None => Ok(runs),
         }
+    }
+
+    fn saved_view_occurrence(event: &DomainEventEnvelope) -> Option<WebhookSavedView> {
+        #[derive(Deserialize)]
+        struct ViewData {
+            name: String,
+            visibility: ViewVisibility,
+            presentation: ViewPresentation,
+        }
+
+        if event.audience() != &EventAudience::Vault
+            || event.subject().subject_type != "saved_view"
+            || event.document_id().is_some()
+        {
+            return None;
+        }
+        let view = ViewData::deserialize(event.data()).ok()?;
+        if view.visibility != ViewVisibility::Shared {
+            return None;
+        }
+        Some(WebhookSavedView {
+            vault_id: event.vault_id(),
+            saved_view_id: event.subject().id,
+            name: view.name,
+            visibility: view.visibility,
+            presentation: view.presentation,
+            actor_id: event.actor_id().cloned(),
+            causation_id: event.causation_id(),
+        })
     }
 
     fn valid_metadata_subject(trigger: WorkflowTrigger, event: &DomainEventEnvelope) -> bool {

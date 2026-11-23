@@ -84,3 +84,84 @@ test("edits a nested exact money condition without changing its previous value",
     event: { metadata: { ...metadata, after: { ...after, value: { amount: "9007199254740993.02", currency: "EUR" } } } },
   }]);
 });
+
+test("edits a shared saved-view trigger with only occurrence filters", async ({ page }) => {
+  test.skip(
+    Boolean(process.env.E2E_BASE_URL) || !process.env.FOLIO_VERIFY_ENV,
+    "Workflow editing requires the disposable global-setup instance",
+  );
+
+  await page.goto("/workflows/new");
+  await page.getByRole("textbox", { name: "Name", exact: true }).fill(uniqueTitle("Saved-view delivery"));
+  const trigger = page.getByRole("combobox", { name: "When", exact: true });
+  await trigger.selectOption({ label: "When a shared saved view is updated" });
+  await expect(page.getByRole("group", { name: "Only if the document matches" })).toBeHidden();
+  await expect(page.locator('[data-workflow-form-target="documentAction"]').first()).toBeHidden();
+  await expect(page.getByRole("group", { name: "Only if the event matches" })).toBeVisible();
+
+  const subject = "b40ef794-c012-438f-9398-6626c2f30c01";
+  const subjectID = page.getByRole("textbox", { name: "Subject ID", exact: true });
+  await subjectID.fill(subject);
+  await page.getByRole("combobox", { name: "Who made the change" }).selectOption("user");
+  await page.getByRole("textbox", { name: "User ID", exact: true }).fill("owner");
+  await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
+  await page.getByRole("button", { name: "Save workflow", exact: true }).click();
+  await expect(page).toHaveURL(/\/workflows\/[0-9a-f-]{36}$/);
+  await expect(trigger).toHaveValue("saved_view.updated");
+  await expect(subjectID).toHaveValue(subject);
+  const id = new URL(page.url()).pathname.split("/").pop();
+  const saved = await page.request.get(`/api/workflows/${id}`);
+  expect(saved.ok()).toBeTruthy();
+  expect(await saved.json()).toMatchObject({
+    trigger: "saved_view.updated",
+    conditions: { event: { subject_id: subject, actor: { type: "user", user_id: "owner" } } },
+    actions: [{ type: "webhook", url: "http://127.0.0.1:9/unused" }],
+  });
+});
+
+test("keeps a document action visible when switching to a saved-view trigger", async ({ page }) => {
+  test.skip(
+    Boolean(process.env.E2E_BASE_URL) || !process.env.FOLIO_VERIFY_ENV,
+    "Workflow editing requires the disposable global-setup instance",
+  );
+
+  const correspondent = await page.request.post("/api/correspondents", {
+    data: { name: uniqueTitle("Saved-view edit guard") },
+  });
+  expect(correspondent.ok()).toBeTruthy();
+  const { id: correspondentID } = await correspondent.json();
+  const created = await page.request.post("/api/workflows", {
+    data: {
+      name: uniqueTitle("Saved-view delivery"), trigger: "document.uploaded", conditions: {},
+      actions: [
+        { type: "set_correspondent", correspondent_id: correspondentID },
+        { type: "webhook", url: "http://127.0.0.1:9/unused" },
+      ],
+    },
+  });
+  expect(created.status()).toBe(201);
+  const { id } = await created.json();
+
+  await page.goto(`/workflows/${id}`);
+  const trigger = page.getByRole("combobox", { name: "When", exact: true });
+  await trigger.selectOption("saved_view.deleted");
+  const action = page.getByRole("combobox", { name: "Set who it is from" });
+  await expect(action).toHaveValue(correspondentID);
+  await expect(page.getByText("Remove the document actions to use this saved view trigger.")).toBeVisible();
+
+  const save = page.getByRole("button", { name: "Save workflow", exact: true });
+  await save.click();
+  await expect(page.getByText("Saved view workflows take only webhook actions")).toBeVisible();
+  const rejected = await page.request.get(`/api/workflows/${id}`);
+  expect((await rejected.json()).trigger).toBe("document.uploaded");
+
+  await action.selectOption("");
+  await save.click();
+  await expect(trigger).toHaveValue("saved_view.deleted");
+  await expect(action).toBeHidden();
+  const saved = await page.request.get(`/api/workflows/${id}`);
+  expect(await saved.json()).toMatchObject({
+    trigger: "saved_view.deleted",
+    actions: [{ type: "webhook", url: "http://127.0.0.1:9/unused" }],
+  });
+});
