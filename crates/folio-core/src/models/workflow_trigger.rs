@@ -106,7 +106,11 @@ fn snapshot_condition_fields(
     const FILE: &[Field] = &[
         ("mime_type", "File type", Text),
         ("filename_glob", "Filename pattern", Text),
+        ("source.kind", "Source", Text),
         ("source.folder_path_glob", "Folder path pattern", Text),
+        ("source.email_from", "Email sender", Text),
+        ("source.email_to", "Email recipient", Text),
+        ("source.email_subject", "Email subject", Text),
         (
             "source.email_attachment_glob",
             "Attachment name pattern",

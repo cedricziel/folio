@@ -1094,6 +1094,11 @@ async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
             .and_then(|field| field["value_type"].as_str())
     };
 
+    let email_fields = [
+        "source.email_from",
+        "source.email_to",
+        "source.email_subject",
+    ];
     for trigger in [
         "document.uploaded",
         "document.title_changed",
@@ -1101,6 +1106,10 @@ async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
     ] {
         assert_eq!(field_type(trigger, "mime_type"), Some("text"));
         assert_eq!(field_type(trigger, "filename_glob"), Some("text"));
+        assert_eq!(field_type(trigger, "source.kind"), Some("text"));
+        for field in email_fields {
+            assert_eq!(field_type(trigger, field), Some("text"));
+        }
         assert_eq!(field_type(trigger, "source.folder_path_glob"), Some("text"));
         assert_eq!(
             field_type(trigger, "source.email_attachment_glob"),
@@ -1115,6 +1124,10 @@ async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
         assert_eq!(field_type(trigger, "document_type_id"), Some("identifier"));
     }
     assert_eq!(field_type("ingest.received", "filename_glob"), Some("text"));
+    assert_eq!(field_type("ingest.received", "source.kind"), Some("text"));
+    for field in email_fields {
+        assert_eq!(field_type("ingest.received", field), Some("text"));
+    }
     assert_eq!(field_type("ingest.received", "tag_id"), None);
     assert_eq!(field_type("ingest.received", "event.subject_id"), None);
 
@@ -1128,6 +1141,10 @@ async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
         assert_eq!(field_type(trigger, "mime_type"), None);
         assert_eq!(field_type(trigger, "tag_id"), None);
         assert_eq!(field_type(trigger, "source.folder_path_glob"), None);
+        assert_eq!(field_type(trigger, "source.kind"), None);
+        for field in email_fields {
+            assert_eq!(field_type(trigger, field), None);
+        }
     }
     assert_eq!(
         field_type("document_note.created", "event.subject_id"),
