@@ -3,6 +3,7 @@
 //! One adapter over the `object_store` crate serves every backend: the local
 //! filesystem, S3-compatible services, and an in-memory store for tests.
 
+mod local_create_cleanup;
 mod object_store_adapter;
 
 use std::sync::Arc;

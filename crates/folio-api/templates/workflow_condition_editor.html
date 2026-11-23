@@ -1,0 +1,40 @@
+<fieldset class="field" data-workflow-form-target="conditionEditor" hidden>
+    <legend class="legend">Nested conditions</legend>
+    <input type="hidden" name="condition_groups" value="{{ condition_groups }}" data-condition-payload{% if values.condition_groups.is_some() %} data-condition-draft{% endif %} disabled>
+    <div data-condition-groups></div>
+    <template data-condition-template="add">
+        <div class="form-actions condition-add" data-condition-add>
+            <select class="select" aria-label="Group operator" data-condition-operator>
+                <option value="all">All of these</option>
+                <option value="any">Any of these</option>
+                <option value="none">None of these</option>
+            </select>
+            <button class="f-btn" type="button" data-condition-command="add-group">Add group</button>
+        </div>
+    </template>
+
+    <template data-condition-template="group">
+        <fieldset class="condition-group" data-condition-group>
+            <legend class="heading"></legend>
+            <div data-condition-branches></div>
+            <p class="hint" data-condition-empty></p>
+            <div class="form-actions condition-controls">
+                <button class="f-btn" type="button" data-condition-command="add-branch">Add branch</button>
+                <button class="f-btn f-btn-quiet f-btn-danger" type="button" data-condition-command="remove-group">Remove group</button>
+            </div>
+        </fieldset>
+    </template>
+
+    <template data-condition-template="branch">
+        <fieldset class="condition-branch" data-condition-branch>
+            <legend class="heading">Branch</legend>
+            <details class="condition-fields" data-condition-fields open>
+                <summary>Branch filters</summary>
+            </details>
+            <div data-condition-groups></div>
+            <div class="form-actions condition-controls">
+                <button class="f-btn f-btn-quiet f-btn-danger" type="button" data-condition-command="remove-branch">Remove branch</button>
+            </div>
+        </fieldset>
+    </template>
+</fieldset>

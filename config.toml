@@ -35,3 +35,9 @@ allowed_hosts = []
 allowed_roots = []
 # Largest original file an import accepts, in bytes (512 MB).
 max_file_bytes = 536870912
+
+# Searchable PDF/A copies, produced by local tools on a separate worker lane.
+[archival]
+automatic = false
+languages = "eng"
+verapdf = "verapdf"

@@ -10,6 +10,8 @@
 //! - Import sources and their path checks
 
 pub mod ai;
+#[cfg(unix)]
+pub mod archival;
 pub mod caller;
 pub mod config;
 pub mod database;

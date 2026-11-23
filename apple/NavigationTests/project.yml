@@ -24,6 +24,8 @@ targets:
       - "../Folio/Sources/InboxView.swift"
       - "../Folio/Sources/SystemContinuedWork.swift"
       - "../Folio/Sources/DocumentDetailView.swift"
+      - "../Folio/Sources/CustomMetadataView.swift"
+      - "../Folio/Sources/CustomFieldsManager.swift"
       - "../Folio/Sources/DocumentClassificationView.swift"
       - "../Folio/Sources/DocumentActivity.swift"
       - "../Folio/Sources/DocumentProcessingView.swift"

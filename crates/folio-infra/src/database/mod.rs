@@ -10,6 +10,7 @@
 //! an offline cache per backend.
 
 mod archival;
+pub(crate) use archival::ArchiveOutputCleanup;
 mod document_revisions;
 mod health;
 mod ingest_outcomes;
