@@ -29,10 +29,10 @@ test("edits processing predicates at the root and in a nested branch", async ({ 
   await save.click();
   await expect(page).toHaveURL(/\/workflows\/[0-9a-f-]{36}$/);
 
-  const apiPath = "/api" + new URL(page.url()).pathname;
+  const id = new URL(page.url()).pathname.split("/").pop();
   const load = async () => {
-    const response = await page.request.get(apiPath);
-    expect(response.ok()).toBeTruthy();
+    const response = await page.request.get(`/api/workflows/${id}`);
+    await expect(response).toBeOK();
     return response.json();
   };
   const saved = await load();
