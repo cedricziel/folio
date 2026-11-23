@@ -9,7 +9,9 @@ use axum::{
 };
 use folio_core::models::{ArchiveAttempt, ArchiveCompletion, ArchiveState, ArchiveTool};
 use folio_infra::queue::ArchiveService;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tokio::sync::{Semaphore, SemaphorePermit};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -22,6 +24,8 @@ use crate::{
 };
 
 use super::documents::{content_disposition, FileContent};
+
+static DOWNLOAD_SLOTS: Semaphore = Semaphore::const_new(4);
 
 const NO_STORE: [(header::HeaderName, &str); 1] = [(header::CACHE_CONTROL, "private, no-store")];
 
@@ -268,6 +272,7 @@ pub(crate) async fn download(
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Response> {
+    let permit = acquire_download(&DOWNLOAD_SLOTS)?;
     let bytes = service(&state)?
         .download(vault, id)
         .await?
@@ -285,8 +290,58 @@ pub(crate) async fn download(
             header::CONTENT_DISPOSITION,
             content_disposition(&format!("document-{id}-archive.pdf")),
         )
-        .body(Body::from(bytes))
+        .body(download_body(bytes, permit))
         .map_err(|_| ApiError::internal("Failed to build response"))?;
     super::file_response::harden(&mut response);
     Ok(response)
+}
+
+fn acquire_download(slots: &Semaphore) -> ApiResult<SemaphorePermit<'_>> {
+    slots.try_acquire().map_err(|_| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Archival downloads are busy",
+        )
+        .with_retry_after(5)
+    })
+}
+
+fn download_body(bytes: Vec<u8>, permit: SemaphorePermit<'static>) -> Body {
+    // Slow clients retain the allocation, so keep their slot with the body.
+    let stream = futures::stream::once(async move {
+        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(bytes))
+    })
+    .map(move |chunk| {
+        let _lease = &permit;
+        chunk
+    });
+    Body::from_stream(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn download_capacity_is_held_until_response_drop() {
+        static SLOTS: Semaphore = Semaphore::const_new(1);
+        let body = download_body(vec![1, 2, 3], acquire_download(&SLOTS).unwrap());
+        let busy = acquire_download(&SLOTS).unwrap_err().into_response();
+        assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(busy.headers()[header::RETRY_AFTER], "5");
+        drop(body);
+        assert!(acquire_download(&SLOTS).is_ok());
+    }
+
+    #[tokio::test]
+    async fn consuming_download_releases_capacity_and_preserves_bytes() {
+        static SLOTS: Semaphore = Semaphore::const_new(1);
+        let body = download_body(vec![1, 2, 3], acquire_download(&SLOTS).unwrap());
+        assert!(acquire_download(&SLOTS).is_err());
+        assert_eq!(
+            axum::body::to_bytes(body, 10).await.unwrap().as_ref(),
+            &[1, 2, 3]
+        );
+        assert!(acquire_download(&SLOTS).is_ok());
+    }
 }
