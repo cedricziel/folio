@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
+use super::processing_scope::ProcessingRequest;
+
 use super::{
     damaged_row_message, payload_problem, FailOutcome, Job, JobClass, JobStatus, JobType,
     DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS, MAX_UNREADABLE_PER_DEQUEUE,
@@ -211,18 +213,18 @@ fn active_job_from_row(row: ActiveRow) -> std::result::Result<Job, MalformedFiel
 }
 
 /// SQLite-backed job queue
-async fn current_processing_job(
+async fn requested_processing_job(
     conn: &mut SqliteConnection,
     vault: folio_core::models::VaultId,
     document_id: Uuid,
-    force: bool,
+    request: ProcessingRequest,
 ) -> Result<JobType> {
     let document = super::processing_scope::sqlite::document(conn, document_id).await?;
     super::processing_scope::bind_requested_processing(
         document.as_ref(),
         vault,
         document_id,
-        force,
+        request,
         super::REVISION_DISPATCH_ENABLED,
     )
 }
@@ -234,7 +236,13 @@ pub(crate) async fn insert_current_processing(
     force: bool,
     trace: Option<&super::JobTraceContext>,
 ) -> Result<Uuid> {
-    let job = current_processing_job(conn, vault, document_id, force).await?;
+    let job = requested_processing_job(
+        conn,
+        vault,
+        document_id,
+        ProcessingRequest::Current { force },
+    )
+    .await?;
     insert_job(conn, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, trace).await
 }
 
@@ -244,7 +252,13 @@ pub(crate) async fn insert_current_thumbnail(
     document_id: Uuid,
     trace: Option<&super::JobTraceContext>,
 ) -> Result<Uuid> {
-    let current = current_processing_job(conn, vault, document_id, false).await?;
+    let current = requested_processing_job(
+        conn,
+        vault,
+        document_id,
+        ProcessingRequest::Current { force: false },
+    )
+    .await?;
     let job = match current.revision_id() {
         Some(revision_id) => JobType::GenerateRevisionThumbnail {
             document_id,
@@ -292,11 +306,77 @@ impl SqliteJobQueue {
             .await
     }
 
-    pub(super) async fn enqueue_current_processing(
+    pub(super) async fn repair_current_processing(
         &self,
         vault: folio_core::models::VaultId,
         document_id: Uuid,
-        force: bool,
+        stage: folio_core::models::ProcessingStage,
+    ) -> Result<bool> {
+        use folio_core::models::ProcessingStage;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        let document = super::processing_scope::sqlite::document(&mut tx, document_id).await?;
+        let request = match super::processing_scope::bind_requested_processing(
+            document.as_ref(),
+            vault,
+            document_id,
+            ProcessingRequest::Current { force: false },
+            super::REVISION_DISPATCH_ENABLED,
+        ) {
+            Ok(job) => job,
+            Err(Error::NotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let ready: bool = sqlx::query_scalar(
+            "SELECT (CASE WHEN ?2 THEN d.ocr_status = 'pending' AND d.file_path IS NOT NULL
+                      ELSE d.embed_status = 'pending' AND d.content IS NOT NULL AND d.content <> ''
+                           AND d.ocr_status NOT IN ('pending', 'running')
+                     END)
+                AND NOT EXISTS (
+                    SELECT 1 FROM jobs j
+                    WHERE j.status IN ('pending', 'processing')
+                      AND json_extract(j.payload, '$.data.document_id') = d.id
+                      AND (j.origin_vault_id IS NULL OR j.origin_vault_id = d.vault_id)
+                )
+             FROM documents d WHERE d.id = ?1",
+        )
+        .bind(document_id.to_string())
+        .bind(stage == ProcessingStage::Ocr)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| Error::Repository(error.to_string()))?;
+        if !ready {
+            return Ok(false);
+        }
+
+        let job = match stage {
+            ProcessingStage::Ocr => request,
+            ProcessingStage::Embed => {
+                JobType::embedding_for_revision(document_id, request.revision_id())
+            }
+        };
+        insert_job(
+            &mut tx,
+            job,
+            Utc::now(),
+            DEFAULT_MAX_ATTEMPTS,
+            super::JobTraceContext::current().as_ref(),
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        Ok(true)
+    }
+
+    pub(super) async fn enqueue_requested_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        request: ProcessingRequest,
         trace: Option<super::JobTraceContext>,
     ) -> Result<Uuid> {
         let mut tx = self
@@ -304,8 +384,15 @@ impl SqliteJobQueue {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|error| Error::Repository(error.to_string()))?;
-        let id =
-            insert_current_processing(&mut tx, vault, document_id, force, trace.as_ref()).await?;
+        let job = requested_processing_job(&mut tx, vault, document_id, request).await?;
+        let id = insert_job(
+            &mut tx,
+            job,
+            Utc::now(),
+            DEFAULT_MAX_ATTEMPTS,
+            trace.as_ref(),
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(|error| Error::Repository(error.to_string()))?;
@@ -387,7 +474,7 @@ impl SqliteJobQueue {
             scope.as_ref(),
             vault,
             document_id,
-            false,
+            ProcessingRequest::Current { force: false },
             super::REVISION_DISPATCH_ENABLED,
         ) {
             Ok(job) => job,

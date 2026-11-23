@@ -94,7 +94,20 @@ async fn revision_upgrade_contract(db: Database) {
     );
     assert_eq!(count!("SELECT COUNT(*) FROM outbox_events".to_owned()), 0);
 
+    assert_eq!(
+        count!("SELECT COUNT(*) FROM archival_attempts".to_owned()),
+        0
+    );
+    let stored = STORED.parse().unwrap();
+    let source_vault = VaultId(SOURCE.parse().unwrap());
     let repositories = db.repositories().await;
+    assert!(repositories
+        .archival
+        .current_source(source_vault, stored)
+        .await
+        .unwrap()
+        .is_none());
+
     let selected = repositories
         .documents
         .list_unverified_originals(None, 1)
@@ -144,6 +157,19 @@ async fn revision_upgrade_contract(db: Database) {
         )),
         1
     );
+    let archive_source = repositories
+        .archival
+        .current_source(source_vault, stored)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(archive_source.original, identity);
+    assert!(repositories
+        .archival
+        .current_attempt(source_vault, stored)
+        .await
+        .unwrap()
+        .is_none());
     assert_eq!(backfill().await.unwrap(), 0, "verified files are skipped");
     assert_eq!(count!("SELECT COUNT(*) FROM outbox_events".to_owned()), 0);
 

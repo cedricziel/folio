@@ -624,6 +624,12 @@ impl DocumentRepository for PostgresDocumentRepository {
         if target.is_none() {
             return Err(not_found("Vault", to.0));
         }
+        sqlx::query(crate::database::archival::CANCEL_QUEUED)
+            .bind("Document moved")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
         super::prepare_move(&mut tx, from, id).await?;
 
         let resume_thumbnail: bool = sqlx::query_scalar(
@@ -1352,6 +1358,12 @@ impl DocumentRepository for PostgresDocumentRepository {
         sqlx::query("UPDATE documents SET deleted_at = $3, updated_at = $3, updated_by = $4 WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL")
             .bind(id).bind(vault.0).bind(now).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .execute(&mut *tx).await.map_err(repo_err)?;
+        sqlx::query(crate::database::archival::CANCEL_QUEUED)
+            .bind("Document trashed")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
         self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
             .await?;
         self.commit(tx).await
