@@ -188,7 +188,11 @@ fn api_router() -> Router<AppState> {
         .route("/vaults/{vault_id}/documents", get(browse::browse_vault))
         .route(
             "/vaults/{vault_id}/documents/{id}/revisions",
-            get(document_revisions::list_scoped),
+            get(document_revisions::list_scoped).post(document_revisions::replace_scoped),
+        )
+        .route(
+            "/vaults/{vault_id}/documents/{id}/revisions/{revision_id}/restore",
+            axum::routing::post(document_revisions::restore_scoped),
         )
         .route(
             "/vaults/{vault_id}/documents/{id}/revisions/{revision_id}/download",

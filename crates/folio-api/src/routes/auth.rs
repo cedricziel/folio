@@ -614,10 +614,16 @@ fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
         ["", "api", "documents", "browse" | "trash" | "ids"] => read,
         ["", "api", "documents", document] if id(document) => read || *method == Method::DELETE,
         ["", "api", "documents", "upload"] => *method == Method::POST,
-        ["", "api", "documents", document, "download" | "export" | "thumbnail" | "revisions"]
-            if id(document) =>
-        {
+        ["", "api", "documents", document, "download" | "export" | "thumbnail"] if id(document) => {
             read
+        }
+        ["", "api", "documents", document, "revisions"] if id(document) => {
+            read || *method == Method::POST
+        }
+        ["", "api", "documents", document, "revisions", revision, "restore"]
+            if id(document) && id(revision) =>
+        {
+            *method == Method::POST
         }
         ["", "api", "documents", document, "revisions", revision, "download"]
             if id(document) && id(revision) =>
@@ -627,7 +633,12 @@ fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
         ["", "api", "vaults", vault, "documents", document, "revisions"]
             if id(vault) && id(document) =>
         {
-            read
+            read || *method == Method::POST
+        }
+        ["", "api", "vaults", vault, "documents", document, "revisions", revision, "restore"]
+            if id(vault) && id(document) && id(revision) =>
+        {
+            *method == Method::POST
         }
         ["", "api", "vaults", vault, "documents", document, "revisions", revision, "download"]
             if id(vault) && id(document) && id(revision) =>
