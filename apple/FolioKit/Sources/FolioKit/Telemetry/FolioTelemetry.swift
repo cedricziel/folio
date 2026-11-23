@@ -121,7 +121,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                 let previous = runtime
                 runtime = nil
                 provisional = nil
-                if let previous { Task.detached { previous.shutdown() } }
+                previous?.shutdown()
             }
             configuredURL = baseURL
             configuredProvider = tokenProvider
@@ -149,7 +149,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                     }
                     return runtime
                 }
-                if let disabled { Task.detached { disabled.shutdown() } }
+                disabled?.shutdown()
                 return
             }
             let confirmed = lock.withLock { () -> TelemetryRuntime? in
@@ -178,7 +178,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                 provisional = nil
                 return true
             }
-            if let retired { Task.detached { retired.retire() } }
+            retired?.retire()
             guard accepted else {
                 next.shutdown()
                 return
@@ -207,7 +207,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                 }
                 return runtime
             }
-            if let stale { Task.detached { stale.shutdown() } }
+            stale?.shutdown()
         }
     }
 
@@ -245,7 +245,7 @@ public final class FolioTelemetry: @unchecked Sendable {
             runtime = nil
             return previous
         }
-        if let previous { Task.detached { previous.shutdown() } }
+        previous?.shutdown()
     }
 
     /// Ends the session and sends its `session.end` while credentials still work. Call before signing out.
@@ -405,7 +405,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                 flushPending = false
                 lastFlush = .now
             }
-            target.flush()
+            await target.flush()
         }
     }
 
@@ -416,7 +416,7 @@ public final class FolioTelemetry: @unchecked Sendable {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let once = ResumeOnce(continuation)
             Task.detached {
-                runtime.flush()
+                await runtime.flush()
                 once.resume()
             }
             Task.detached {
@@ -723,6 +723,9 @@ final class TelemetryHTTPClient: HTTPClient, @unchecked Sendable {
 }
 
 final class TelemetryRuntime: @unchecked Sendable {
+    // SDK operations block while the HTTP exporter needs the Swift cooperative executor to finish.
+    private static let worker = DispatchQueue(label: "folio.telemetry.sdk", qos: .utility, attributes: .concurrent)
+
     let baseURL: URL
     let transport: TelemetryHTTPClient
     let tracer: Tracer
@@ -828,7 +831,16 @@ final class TelemetryRuntime: @unchecked Sendable {
         span.end()
     }
 
-    func flush() {
+    func flush() async {
+        await withCheckedContinuation { continuation in
+            Self.worker.async {
+                self.flushSignals()
+                continuation.resume()
+            }
+        }
+    }
+
+    private func flushSignals() {
         traces.forceFlush(timeout: 5)
         logProcessor.forceFlush(timeout: 5)
         _ = metrics.forceFlush()
@@ -836,12 +848,19 @@ final class TelemetryRuntime: @unchecked Sendable {
 
     /// Sends what is still queued, then stops; for a runtime replaced while its server stays the same.
     func retire() {
-        flush()
-        shutdown()
+        Self.worker.async {
+            self.flushSignals()
+            self.transport.disable()
+            self.shutdownProviders()
+        }
     }
 
     func shutdown() {
         transport.disable()
+        Self.worker.async { self.shutdownProviders() }
+    }
+
+    private func shutdownProviders() {
         traces.shutdown()
         _ = logProcessor.shutdown(explicitTimeout: 1)
         _ = metrics.shutdown()
