@@ -257,7 +257,12 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
-        insert_domain_event(&mut tx, &workflow_event(&workflow, "updated")?).await?;
+        for event in crate::database::workflow_lifecycle::workflow_update_events(
+            &workflow,
+            existing.enabled,
+        )? {
+            insert_domain_event(&mut tx, &event).await?;
+        }
         tx.commit().await.map_err(repo_err)?;
         Ok(workflow)
     }
