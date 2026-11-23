@@ -18,7 +18,7 @@ use tokio::process::Command;
 use crate::ai::process;
 
 pub const PROFILE: &str = "PDF/A-2b";
-const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
+pub(crate) const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SCRATCH_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SCRATCH_ENTRIES: u64 = 10_000;
 const MAX_TOOL_OUTPUT: u64 = 8 * 1024 * 1024;

@@ -8,6 +8,7 @@ use folio_core::ports::ArchivalRepository;
 use folio_core::{Error, Result};
 
 use super::Database;
+use crate::queue::{self, Job, JobType};
 
 macro_rules! live_original {
     () => {
@@ -154,16 +155,20 @@ impl AttemptRow {
 
 // Both databases accept numbered parameters in order. SQLite stores IDs as text.
 macro_rules! on_backend {
-    ($db:expr, |$pool:ident, $id:ident, $sqlite:ident| $body:block) => {
+    ($db:expr, |$pool:ident, $id:ident, $sqlite:ident, $insert:ident| $body:block) => {
         match $db {
             Database::Sqlite($pool) => {
                 let $id = |id: Id| id.to_string();
                 let $sqlite = true;
+                #[allow(unused_imports)]
+                use queue::insert_job_sqlite as $insert;
                 $body
             }
             Database::Postgres($pool) => {
                 let $id = |id: Id| id;
                 let $sqlite = false;
+                #[allow(unused_imports)]
+                use queue::insert_job_postgres as $insert;
                 $body
             }
         }
@@ -173,9 +178,9 @@ macro_rules! on_backend {
 // Match revision publication, trash and move locking. PostgreSQL reads the source
 // in a separate statement after taking the locks, so it sees the committed winner.
 macro_rules! write_archive {
-    ($db:expr, $source:expr, |$tx:ident, $id:ident| $body:block) => {
-        on_backend!($db, |pool, $id, sqlite| {
-            let mut $tx = if sqlite {
+    ($db:expr, $source:expr, |$tx:ident, $id:ident, $insert:ident, $sqlite:ident| $body:block) => {
+        on_backend!($db, |pool, $id, $sqlite, $insert| {
+            let mut $tx = if $sqlite {
                 pool.begin_with("BEGIN IMMEDIATE").await
             } else {
                 pool.begin().await
@@ -183,7 +188,7 @@ macro_rules! write_archive {
             .map_err(repo_error)?;
             let vault = $source.vault_id;
             let document = $source.document_id;
-            if !sqlite
+            if !$sqlite
                 && sqlx::query_scalar::<_, i32>(LOCK_DOCUMENT)
                     .bind($id(document))
                     .bind($id(vault.0))
@@ -196,7 +201,7 @@ macro_rules! write_archive {
             }
             // Serialize admission/publication with vault delete and restore too.
             // Read the source again after the lock to observe their committed state.
-            if !sqlite {
+            if !$sqlite {
                 sqlx::query("SELECT id FROM vaults WHERE id = $1 FOR SHARE")
                     .bind($id(vault.0))
                     .execute(&mut *$tx)
@@ -222,7 +227,7 @@ macro_rules! write_archive {
 #[async_trait]
 impl ArchivalRepository for Database {
     async fn current_source(&self, vault: VaultId, document: Id) -> Result<Option<ArchiveSource>> {
-        on_backend!(self, |pool, id, _sqlite| {
+        on_backend!(self, |pool, id, _sqlite, _insert| {
             sqlx::query_as::<_, SourceRow>(SOURCE)
                 .bind(id(document))
                 .bind(id(vault.0))
@@ -239,7 +244,7 @@ impl ArchivalRepository for Database {
         vault: VaultId,
         document: Id,
     ) -> Result<Option<ArchiveAttempt>> {
-        on_backend!(self, |pool, id, _sqlite| {
+        on_backend!(self, |pool, id, _sqlite, _insert| {
             sqlx::query_as::<_, AttemptRow>(ATTEMPT)
                 .bind(id(document))
                 .bind(id(vault.0))
@@ -257,7 +262,7 @@ impl ArchivalRepository for Database {
         attempt: Id,
         expected_attempt: Option<Id>,
     ) -> Result<bool> {
-        write_archive!(self, source, |tx, id| {
+        write_archive!(self, source, |tx, id, insert_job, _sqlite| {
             let current = sqlx::query_scalar::<_, String>(
                 "SELECT CAST(id AS TEXT) FROM archival_attempts WHERE revision_id = $1 AND is_current",
             ).bind(id(source.revision_id)).fetch_optional(&mut *tx).await.map_err(repo_error)?
@@ -284,6 +289,19 @@ impl ArchivalRepository for Database {
             .rows_affected()
                 == 1;
             if inserted {
+                insert_job(
+                    &mut tx,
+                    JobType::GenerateArchive {
+                        vault_id: source.vault_id,
+                        document_id: source.document_id,
+                        source_revision_id: source.revision_id,
+                        attempt_id: attempt,
+                    },
+                    chrono::Utc::now(),
+                    queue::DEFAULT_MAX_ATTEMPTS,
+                    None,
+                )
+                .await?;
                 tx.commit().await.map_err(repo_error)?;
             }
             Ok(inserted)
@@ -308,7 +326,7 @@ impl ArchivalRepository for Database {
             return Err(Error::Validation("An archival reason is required".into()));
         }
 
-        write_archive!(self, source, |tx, id| {
+        write_archive!(self, source, |tx, id, insert_job, _sqlite| {
             let current = sqlx::query_as::<_, AttemptRow>(ATTEMPT)
                 .bind(id(source.document_id))
                 .bind(id(source.vault_id.0))
@@ -326,7 +344,7 @@ impl ArchivalRepository for Database {
 
             sqlx::query(
                 "UPDATE archival_attempts
-                SET state = $1, reason = $2, output_storage_key = $3, output_sha256 = $4, output_size = $5,
+                SET cleanup_pending = cleanup_pending AND $1 <> 'ready', state = $1, reason = $2, output_storage_key = $3, output_sha256 = $4, output_size = $5,
                     profile = $6, converter_name = $7, converter_version = $8,
                     validator_name = $9, validator_version = $10 WHERE id = $11",
             )
@@ -350,7 +368,7 @@ impl ArchivalRepository for Database {
     }
 
     async fn retains_archive(&self, document: Id, revision: Id, attempt: Id) -> Result<bool> {
-        on_backend!(self, |pool, id, sqlite| {
+        on_backend!(self, |pool, id, sqlite, _insert| {
             let mut tx = if sqlite {
                 pool.begin_with("BEGIN IMMEDIATE").await
             } else {
@@ -377,6 +395,150 @@ impl ArchivalRepository for Database {
             .map_err(repo_error)?;
             tx.commit().await.map_err(repo_error)?;
             Ok(retained)
+        })
+    }
+}
+
+impl Database {
+    /// Discover verified originals without an attempt. A batch is safe to
+    /// replay because admission compares the source and current attempt.
+    pub(crate) async fn archive_candidates(
+        &self,
+        vault: Option<VaultId>,
+        limit: u32,
+    ) -> Result<Vec<(VaultId, Id)>> {
+        const QUERY: &str = concat!(
+            "SELECT CAST(d.vault_id AS TEXT), CAST(d.id AS TEXT)",
+            live_original!(),
+            " WHERE (d.vault_id = $1 OR $1 IS NULL)
+              AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL AND NOT d.upload_pending
+              AND (LOWER(TRIM(f.mime_type)) IN ('application/pdf', 'image/jpeg', 'image/png', 'image/tiff')
+                   OR LOWER(TRIM(f.mime_type)) LIKE 'application/pdf;%' OR LOWER(TRIM(f.mime_type)) LIKE 'application/pdf %;%'
+                   OR LOWER(TRIM(f.mime_type)) LIKE 'image/jpeg;%' OR LOWER(TRIM(f.mime_type)) LIKE 'image/jpeg %;%'
+                   OR LOWER(TRIM(f.mime_type)) LIKE 'image/png;%' OR LOWER(TRIM(f.mime_type)) LIKE 'image/png %;%'
+                   OR LOWER(TRIM(f.mime_type)) LIKE 'image/tiff;%' OR LOWER(TRIM(f.mime_type)) LIKE 'image/tiff %;%')
+              AND NOT EXISTS (SELECT 1 FROM archival_attempts a
+                  WHERE a.revision_id = r.id AND a.is_current)
+              ORDER BY d.created_at, d.id LIMIT $2",
+        );
+        on_backend!(self, |pool, id, _sqlite, _insert| {
+            let rows: Vec<(String, String)> = sqlx::query_as(QUERY)
+                .bind(vault.map(|vault| id(vault.0)))
+                .bind(i64::from(limit))
+                .fetch_all(pool)
+                .await
+                .map_err(repo_error)?;
+            rows.into_iter()
+                .map(|(vault, document)| {
+                    Ok((
+                        VaultId(vault.parse().map_err(repo_error)?),
+                        document.parse().map_err(repo_error)?,
+                    ))
+                })
+                .collect()
+        })
+    }
+
+    pub(crate) async fn reserve_archive_output(
+        &self,
+        source: &ArchiveSource,
+        job: &Job,
+    ) -> Result<bool> {
+        let attempt = job.id;
+        write_archive!(self, source, |tx, id, _insert, sqlite| {
+            // Keep the claim live through staging. PostgreSQL recovery locks
+            // the document before the job, the same order as this transaction.
+            macro_rules! renew_claim {
+                ($clock:literal) => {
+                    concat!("UPDATE jobs SET lease_expires_at = ", $clock, " + $1
+                         WHERE id = $2 AND claim_id = $3 AND job_type = 'generate_archive'
+                         AND status = 'processing' AND lease_expires_at > ", $clock)
+                };
+            }
+            let query = if sqlite {
+                renew_claim!("unixepoch()")
+            } else {
+                renew_claim!("floor(extract(epoch FROM clock_timestamp()))::bigint")
+            };
+            let owns_claim = sqlx::query(query)
+                .bind(queue::LEASE_SECONDS)
+                .bind(id(attempt))
+                .bind(job.claim_id.map(id))
+                .execute(&mut *tx)
+                .await
+                .map_err(repo_error)?
+                .rows_affected()
+                == 1;
+            if !owns_claim {
+                return Ok(false);
+            }
+            let reserved = sqlx::query(
+                "UPDATE archival_attempts SET cleanup_pending = TRUE
+                 WHERE id = $1 AND document_id = $2 AND revision_id = $3 AND is_current
+                 AND state = 'queued' AND NOT cleanup_pending",
+            )
+            .bind(id(attempt))
+            .bind(id(source.document_id))
+            .bind(id(source.revision_id))
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_error)?
+            .rows_affected()
+                == 1;
+            tx.commit().await.map_err(repo_error)?;
+            Ok(reserved)
+        })
+    }
+
+    /// Retire attempts whose queue delivery exhausted its retries, was
+    /// quarantined, or was removed. A terminal attempt cannot publish.
+    pub(crate) async fn retire_interrupted_archives(&self) -> Result<()> {
+        on_backend!(self, |pool, _id, _sqlite, _insert| {
+            sqlx::query(
+                "UPDATE archival_attempts SET state = 'failed', reason = 'Archival job interrupted'
+                 WHERE state = 'queued' AND NOT EXISTS (
+                     SELECT 1 FROM jobs j WHERE j.id = archival_attempts.id
+                     AND j.job_type = 'generate_archive' AND j.status IN ('pending', 'processing')
+                 )",
+            )
+            .execute(pool)
+            .await
+            .map_err(repo_error)?;
+            Ok(())
+        })
+    }
+
+    pub(crate) async fn abandoned_archive_outputs(&self) -> Result<Vec<(Id, Id, Id)>> {
+        on_backend!(self, |pool, _id, _sqlite, _insert| {
+            let rows: Vec<(String, String, String)> = sqlx::query_as(
+                "SELECT CAST(document_id AS TEXT), CAST(revision_id AS TEXT), CAST(id AS TEXT)
+                 FROM archival_attempts a WHERE cleanup_pending AND state IN ('skipped', 'failed')
+                  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = a.id AND j.status = 'processing')
+                 ORDER BY id LIMIT 32",
+            )
+            .fetch_all(pool)
+            .await
+            .map_err(repo_error)?;
+            rows.into_iter()
+                .map(|(doc, rev, attempt)| {
+                    Ok((
+                        doc.parse().map_err(repo_error)?,
+                        rev.parse().map_err(repo_error)?,
+                        attempt.parse().map_err(repo_error)?,
+                    ))
+                })
+                .collect()
+        })
+    }
+
+    pub(crate) async fn acknowledge_archive_cleanup(&self, attempt: Id) -> Result<()> {
+        on_backend!(self, |pool, id, _sqlite, _insert| {
+            sqlx::query("UPDATE archival_attempts SET cleanup_pending = FALSE WHERE id = $1 AND state IN ('skipped', 'failed')")
+                .bind(id(attempt))
+                .execute(pool)
+                .await
+                .map_err(repo_error)?;
+            Ok(())
         })
     }
 }

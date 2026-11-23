@@ -27,8 +27,12 @@ pub(crate) async fn insert_job(
     trace: Option<&super::JobTraceContext>,
 ) -> Result<Uuid> {
     job_type.ensure_dispatchable()?;
-    let plan =
-        super::processing_scope::postgres::prepare_enqueue(conn, &job_type, Uuid::new_v4()).await?;
+    let plan = super::processing_scope::postgres::prepare_enqueue(
+        conn,
+        &job_type,
+        job_type.new_queue_id(),
+    )
+    .await?;
     if plan.existing {
         return Ok(plan.id);
     }

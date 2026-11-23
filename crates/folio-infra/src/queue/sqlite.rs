@@ -24,7 +24,8 @@ pub(crate) async fn insert_job(
 ) -> Result<Uuid> {
     job_type.ensure_dispatchable()?;
     let plan =
-        super::processing_scope::sqlite::prepare_enqueue(conn, &job_type, Uuid::new_v4()).await?;
+        super::processing_scope::sqlite::prepare_enqueue(conn, &job_type, job_type.new_queue_id())
+            .await?;
     if plan.existing {
         return Ok(plan.id);
     }
