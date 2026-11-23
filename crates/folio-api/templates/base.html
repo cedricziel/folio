@@ -897,6 +897,28 @@ Stimulus.register("revision-publication", class extends Controller {
     return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
   }
 
+  async refreshConflict() {
+    const message = "The file changed while you were editing. Review the current revision before trying again.";
+    this.statusTarget.textContent = message;
+    try {
+      const frame = this.element.closest("turbo-frame");
+      const latest = new URL(frame.src, window.location.href);
+      latest.searchParams.delete("before");
+      const response = await fetch(latest, { headers: { "Turbo-Frame": frame.id } });
+      if (!response.ok) throw new Error("Could not load file history");
+      const page = new DOMParser().parseFromString(await response.text(), "text/html");
+      const replacement = page.getElementById(frame.id)?.firstElementChild;
+      const status = replacement?.querySelector("[data-revision-publication-target='status']");
+      if (!status) throw new Error("File history response is incomplete");
+      status.textContent = message;
+      this.element.replaceWith(replacement);
+      status.scrollIntoView({ block: "nearest" });
+    } catch {
+      this.statusTarget.textContent = "The file changed while you were editing. Reload to see the latest file.";
+      this.statusTarget.scrollIntoView({ block: "nearest" });
+    }
+  }
+
   async submit(event) {
     event.preventDefault();
     if (this.publishing) return;
@@ -904,6 +926,7 @@ Stimulus.register("revision-publication", class extends Controller {
     const data = new FormData(form);
     const headers = { "Idempotency-Key": form.dataset.publicationKey ??= this.newKey() };
     const controls = this.element.querySelectorAll('button[type="submit"], input[type="file"]');
+    let conflicted = false;
     this.publishing = true;
     for (const control of controls) control.disabled = true;
     this.statusTarget.textContent = "Publishing the file…";
@@ -918,16 +941,19 @@ Stimulus.register("revision-publication", class extends Controller {
         window.location.reload();
         return;
       }
-      this.statusTarget.textContent = response.status === 409
-        ? "The file could not be changed. Reload to see the latest file before trying again."
-        : "Couldn’t publish the file. Try again.";
+      if (response.status === 409) {
+        conflicted = true;
+        await this.refreshConflict();
+        return;
+      }
+      this.statusTarget.textContent = "Couldn’t publish the file. Try again.";
       this.statusTarget.scrollIntoView({ block: "nearest" });
     } catch (error) {
       this.statusTarget.textContent = "Couldn’t publish the file. Try again.";
       this.statusTarget.scrollIntoView({ block: "nearest" });
     } finally {
       this.publishing = false;
-      for (const control of controls) control.disabled = false;
+      if (!conflicted) for (const control of controls) control.disabled = false;
     }
   }
 });

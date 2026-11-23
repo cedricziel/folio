@@ -275,7 +275,9 @@ test("the file history publishes a replacement and restores an earlier original"
       publication(409),
       history.getByRole("button", { name: "Restore revision 2", exact: true }).click(),
     ]);
-    await expect(history.getByRole("status")).toContainText("Reload to see the latest file");
+    await expect(history.getByRole("status")).toContainText("The file changed while you were editing");
+    await expect(history.getByText("newer.pdf", { exact: true })).toBeVisible();
+    await expect(history.getByText("Revision 4", { exact: true })).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`/documents/${id}`));
   } finally {
     await request.delete(document);
