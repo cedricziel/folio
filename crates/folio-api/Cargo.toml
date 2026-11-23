@@ -68,7 +68,7 @@ sqlx = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tracing-subscriber = { workspace = true }
 base64 = "0.23"
-zip = { version = "3", default-features = false }
+zip = { version = "9", default-features = false }
 http-body-util = "0.1"
 tower = { workspace = true, features = ["util"] }
 tokio = { workspace = true, features = ["test-util"] }
