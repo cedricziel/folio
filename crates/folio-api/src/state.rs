@@ -6,10 +6,10 @@ use folio_core::error::Result;
 use folio_core::models::IngestionSourceDef;
 use folio_core::models::{Caller, UserId, VaultId};
 use folio_core::ports::{
-    CallerResolver, CorrespondentRepository, DocumentEntryRepository, DocumentImporter,
-    DocumentRepository, DocumentStore, DocumentTypeRepository, EmbeddingService, HealthCheck,
-    IngestLedger, IngestOutcomeReader, IngestionSourceFactory, OcrService, OutboxStore,
-    SearchResult, SearchService, SettingsRepository, SourceRepository, TagRepository,
+    ArchivalRepository, CallerResolver, CorrespondentRepository, DocumentEntryRepository,
+    DocumentImporter, DocumentRepository, DocumentStore, DocumentTypeRepository, EmbeddingService,
+    HealthCheck, IngestLedger, IngestOutcomeReader, IngestionSourceFactory, OcrService,
+    OutboxStore, SearchResult, SearchService, SettingsRepository, SourceRepository, TagRepository,
     UploadReceiptRepository, WorkflowRepository,
 };
 use folio_core::services::{IdempotentUploads, Importer, SearchServiceFacade, VaultService};
@@ -37,6 +37,7 @@ pub struct AppState {
     pub metadata_options: Arc<dyn folio_core::ports::MetadataOptionRepository>,
     pub metadata_values: Arc<dyn folio_core::ports::MetadataValueRepository>,
     pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
+    pub archival: Arc<dyn ArchivalRepository>,
     pub document_repo: Arc<dyn DocumentRepository>,
     pub entry_repo: Arc<dyn DocumentEntryRepository>,
     /// Uploads sent with an `Idempotency-Key`, safe to retry
@@ -107,6 +108,7 @@ impl IngestionState {
 impl AppState {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        archival: Arc<dyn ArchivalRepository>,
         metadata_fields: Arc<dyn folio_core::ports::MetadataFieldRepository>,
         metadata_options: Arc<dyn folio_core::ports::MetadataOptionRepository>,
         metadata_values: Arc<dyn folio_core::ports::MetadataValueRepository>,
@@ -145,6 +147,7 @@ impl AppState {
             document_repo.clone(),
         ));
         Self {
+            archival,
             metadata_fields,
             metadata_options,
             metadata_values,

@@ -614,7 +614,7 @@ fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
         ["", "api", "documents", "browse" | "trash" | "ids"] => read,
         ["", "api", "documents", document] if id(document) => read || *method == Method::DELETE,
         ["", "api", "documents", "upload"] => *method == Method::POST,
-        ["", "api", "documents", document, "download" | "thumbnail" | "revisions"]
+        ["", "api", "documents", document, "download" | "export" | "thumbnail" | "revisions"]
             if id(document) =>
         {
             read

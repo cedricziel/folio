@@ -604,6 +604,40 @@ pub(super) fn push_filter(
     Ok(())
 }
 
+impl SqliteDocumentRepository {
+    pub(in crate::database) async fn export_document(
+        &self,
+        source: &folio_core::models::ArchiveSource,
+        text_limit: i64,
+        metadata_limit: i64,
+    ) -> Result<Option<Document>> {
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL
+               AND current_revision_id = ? AND file_path = ?
+               AND COALESCE(length(CAST(content AS BLOB)), 0) <= ?
+               AND COALESCE(length(CAST(title AS BLOB)), 0)
+                   + COALESCE(length(CAST(original_filename AS BLOB)), 0)
+                   + COALESCE(length(CAST(source_meta AS BLOB)), 0)
+                   + COALESCE(length(CAST(mime_type AS BLOB)), 0)
+                   + COALESCE(length(CAST(uploaded_by AS BLOB)), 0)
+                   + COALESCE(length(CAST(created_by AS BLOB)), 0)
+                   + COALESCE(length(CAST(updated_by AS BLOB)), 0)
+                   + COALESCE(length(CAST(reviewed_by AS BLOB)), 0) <= ?"
+        )))
+        .bind(source.document_id.to_string())
+        .bind(source.vault_id.to_string())
+        .bind(source.revision_id.to_string())
+        .bind(&source.original.storage_key)
+        .bind(text_limit)
+        .bind(metadata_limit)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+}
+
 #[async_trait]
 impl DocumentRepository for SqliteDocumentRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {

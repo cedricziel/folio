@@ -7,6 +7,7 @@ pub(crate) mod browse;
 pub(crate) mod correspondents;
 pub mod devices;
 pub(crate) mod document_entries;
+pub(crate) mod document_export;
 pub(crate) mod document_revisions;
 pub(crate) mod document_types;
 pub(crate) mod documents;

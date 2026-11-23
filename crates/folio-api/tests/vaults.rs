@@ -2332,3 +2332,53 @@ async fn background_requests_and_api_calls_do_not_touch_the_vault_cookie() {
     let listing = text(h.app.clone().oneshot(req).await.unwrap()).await;
     assert!(!listing.contains(&document.id.to_string()));
 }
+
+#[tokio::test]
+async fn portable_export_requires_read_access_to_the_selected_vault() {
+    let h = harness_requiring_login().await;
+    let owner = sign_in(&h, "export-owner").await;
+    let viewer = sign_in(&h, "export-viewer").await;
+    let mut upload = multipart(&[("file", Some("scan.png"), "original fixture")]);
+    *upload.uri_mut() = "/api/documents/upload".parse().unwrap();
+    upload
+        .headers_mut()
+        .insert(header::COOKIE, owner.cookie.parse().unwrap());
+    upload
+        .headers_mut()
+        .insert(header::ORIGIN, "http://localhost".parse().unwrap());
+    upload
+        .headers_mut()
+        .insert(header::HOST, "localhost".parse().unwrap());
+    let response = h.app.clone().oneshot(upload).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let document: Document = serde_json::from_str(&text(response).await).unwrap();
+    let path = format!("/api/documents/{}/export", document.id);
+
+    let anonymous = h
+        .app
+        .clone()
+        .oneshot(Request::get(&path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+    let export = |explicit| {
+        let mut request = request("GET", &path, &viewer, Body::empty());
+        if explicit {
+            request
+                .headers_mut()
+                .insert("x-folio-vault", owner.vault.to_string().parse().unwrap());
+        }
+        h.app.clone().oneshot(request)
+    };
+    assert_eq!(export(false).await.unwrap().status(), StatusCode::NOT_FOUND);
+    assert_eq!(export(true).await.unwrap().status(), StatusCode::NOT_FOUND);
+    let principal = Principal::User(viewer.user.clone());
+    h.members
+        .grant(owner.vault, &principal, VaultRole::Viewer, None)
+        .await
+        .unwrap();
+    assert_eq!(export(false).await.unwrap().status(), StatusCode::NOT_FOUND);
+    assert_eq!(export(true).await.unwrap().status(), StatusCode::OK);
+    h.members.revoke(owner.vault, &principal).await.unwrap();
+    assert_eq!(export(true).await.unwrap().status(), StatusCode::NOT_FOUND);
+}

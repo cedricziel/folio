@@ -85,6 +85,7 @@ use crate::routes::{
         crate::routes::trash::purge,
         documents::upload_document,
         documents::download_document,
+        crate::routes::document_export::export_document,
         crate::routes::document_revisions::list,
         crate::routes::document_revisions::download,
         crate::routes::document_revisions::list_scoped,
