@@ -8,7 +8,7 @@ const emptyGroupText = {
   any: "An empty group never matches.",
   none: "An empty group always matches.",
 };
-const fieldTargets = ["documentFilter", "eventFilter", "ingestFilter", "metadataFilter"];
+const fieldTargets = ["documentFilter", "eventFilter", "ingestFilter", "metadataFilter", "processingFilter"];
 const scalarFields = {
   mime_type: "mime_type",
   filename_glob: "filename_glob",
@@ -27,6 +27,14 @@ const scalarFields = {
   metadata_field_id: "event.metadata.field_id",
   metadata_kind: "event.metadata.kind",
   metadata_state: "event.metadata.state",
+  processing_stage: "event.processing.stage",
+  processing_outcome: "event.processing.outcome",
+  processing_run_id: "event.processing.run_id",
+  processing_revision_id: "event.processing.revision_id",
+  processing_attempt: "event.processing.attempt",
+  processing_reason_code: "event.processing.reason_code",
+  processing_retry_at: "event.processing.retry_at",
+  processing_has_text: "event.processing.has_text",
 };
 const emailFields = ["email_from", "email_to", "email_subject"];
 const metadataSides = ["before", "after"];
@@ -108,7 +116,13 @@ function branchConditions(draft, initial, fields) {
   for (const [name, path] of Object.entries(scalarFields)) {
     if (!changed(name)) continue;
     const raw = value(name).trim();
-    write(conditions, path, raw && name === "ingest_retryable" ? raw === "true" : clearEmpty(raw));
+    let parsed = clearEmpty(raw);
+    if (raw && (name === "ingest_retryable" || name === "processing_has_text")) {
+      parsed = raw === "true";
+    } else if (name === "processing_attempt" && /^[+]?\d+$/.test(raw) && Number(raw) <= 4294967295) {
+      parsed = Number(raw);
+    }
+    write(conditions, path, parsed);
   }
   for (const name of emailFields) {
     if (!changed(name, name + "_mode")) continue;
@@ -131,6 +145,16 @@ function branchConditions(draft, initial, fields) {
     write(conditions, path, predicate);
   }
   return conditions;
+}
+
+export function syncProcessingFields(fieldset, supported) {
+  for (const row of fieldset.querySelectorAll("[data-processing-key]")) {
+    const control = row.querySelector("input, select");
+    row.hidden = !supported.includes(row.dataset.processingKey) && control.value === "";
+    control.disabled = row.hidden;
+  }
+  fieldset.hidden = !fieldset.querySelector("[data-processing-key]:not([hidden])");
+  fieldset.disabled = fieldset.hidden;
 }
 
 export class WorkflowConditionEditor {
@@ -283,7 +307,7 @@ export class WorkflowConditionEditor {
 
   sync(visibility) {
     this.visibility = visibility;
-    const { trigger, ingest, outcome, health, metadata, metadataValues, documentFilters } = visibility;
+    const { trigger, ingest, outcome, health, metadata, metadataValues, documentFilters, processingKeys = [] } = visibility;
     for (const branch of this.root.querySelectorAll("[data-condition-branch]")) {
       const { source, fields, initial } = this.branchState.get(branch);
       const target = branch.querySelector(":scope > [data-condition-fields]");
@@ -304,6 +328,7 @@ export class WorkflowConditionEditor {
       show("ingestRetryLabel", outcome || draft.event?.ingest?.retryable != null);
       show("ingestRetry", outcome || draft.event?.ingest?.retryable != null);
       show("metadataFilter", metadata || Boolean(draft.event?.metadata));
+      syncProcessingFields(target.querySelector('[data-branch-target="processingFilter"]'), processingKeys);
       show("metadataValues", metadataValues || Boolean(draft.event?.metadata?.before || draft.event?.metadata?.after || draft.event?.metadata?.state));
       show("metadataCurrency", value("metadata_kind") === "money" || draft.event?.metadata?.before?.kind === "money" || draft.event?.metadata?.after?.kind === "money");
       show("actorUser", value("event_actor") === "user");

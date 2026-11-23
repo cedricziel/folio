@@ -1,7 +1,7 @@
 //! Server-rendered workflow pages: list, create/edit form, test, and run history
 
 use crate::vault::filters;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use askama::Template;
 use axum::{
@@ -16,8 +16,9 @@ use uuid::Uuid;
 use folio_core::models::{
     Id, MetadataChangeState, MetadataKind, MetadataValue, RunStatus, SourceConditions, SourceKind,
     TextMatch, UserId, WebhookMethod, Workflow, WorkflowAction, WorkflowActorCondition,
-    WorkflowConditions, WorkflowEventConditions, WorkflowIngestConditions, WorkflowInput,
-    WorkflowMetadataConditions, WorkflowRun, WorkflowTrigger, WorkflowTriggerRegistry,
+    WorkflowConditionField, WorkflowConditionType, WorkflowConditions, WorkflowEventConditions,
+    WorkflowIngestConditions, WorkflowInput, WorkflowMetadataConditions,
+    WorkflowProcessingConditions, WorkflowRun, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 
 use super::workflows::{
@@ -261,9 +262,73 @@ struct FormValues {
     webhook_headers: String,
     action_correspondent_id: String,
     action_document_type_id: String,
-    /// `action_tag_<id>` checkboxes: the urlencoded form cannot repeat a key
+    /// Tag selections and named processing predicates use distinct form keys.
     #[serde(flatten)]
-    checkboxes: HashMap<String, String>,
+    extra_fields: HashMap<String, String>,
+}
+
+fn processing_fields() -> impl Iterator<Item = &'static WorkflowConditionField> {
+    let mut seen = BTreeSet::new();
+    WorkflowTriggerRegistry::built_in()
+        .definitions()
+        .iter()
+        .filter(|definition| definition.event_type.starts_with("document.processing."))
+        .flat_map(|definition| &definition.condition_fields)
+        .filter(move |field| seen.insert(field.key.as_str()))
+}
+
+fn processing_key(field: &WorkflowConditionField) -> &str {
+    field.key.strip_prefix("data.").unwrap_or(&field.key)
+}
+
+fn processing_condition(
+    form: &FormValues,
+    existing: Option<&Workflow>,
+    trigger: WorkflowTrigger,
+) -> Result<Option<WorkflowProcessingConditions>, String> {
+    if !form.extra_fields.contains_key("processing_form") {
+        return Ok(existing
+            .filter(|_| trigger.is_processing_outcome())
+            .and_then(|workflow| workflow.conditions.event.as_ref())
+            .and_then(|event| event.processing.clone()));
+    }
+    let mut filters = serde_json::Map::new();
+    for field in processing_fields() {
+        let key = processing_key(field);
+        let Some(raw) = form
+            .extra_fields
+            .get(&format!("processing_{key}"))
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let value = match field.value_type {
+            WorkflowConditionType::Integer => serde_json::Value::from(
+                raw.parse::<u32>()
+                    .map_err(|_| "Enter a valid processing attempt.")?,
+            ),
+            WorkflowConditionType::Boolean => serde_json::Value::Bool(
+                raw.parse::<bool>()
+                    .map_err(|_| "Choose whether text was found.")?,
+            ),
+            _ => serde_json::Value::String(raw.into()),
+        };
+        filters.insert(key.into(), value);
+    }
+    if filters.is_empty() {
+        return Ok(None);
+    }
+    let processing: WorkflowProcessingConditions =
+        serde_json::from_value(serde_json::Value::Object(filters))
+            .map_err(|_| "Check the values in the processing filters.")?;
+    processing
+        .validate_trigger(trigger)
+        .map_err(|error| match error {
+            folio_core::Error::Validation(message) => message,
+            other => other.to_string(),
+        })?;
+    Ok(Some(processing))
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -425,7 +490,7 @@ impl FormValues {
     }
 
     fn action_tag_ids(&self) -> Vec<Id> {
-        self.checkboxes
+        self.extra_fields
             .keys()
             .filter_map(|k| k.strip_prefix(TAG_FIELD))
             .filter_map(|id| Uuid::parse_str(id).ok())
@@ -464,11 +529,11 @@ impl FormValues {
             ),
             _ => Default::default(),
         };
-        let mut checkboxes = HashMap::new();
+        let mut extra_fields = HashMap::new();
         let (mut action_correspondent_id, mut action_document_type_id) = Default::default();
         for action in &workflow.actions {
             match action {
-                WorkflowAction::AddTags { tag_ids } => checkboxes.extend(
+                WorkflowAction::AddTags { tag_ids } => extra_fields.extend(
                     tag_ids
                         .iter()
                         .map(|id| (format!("{TAG_FIELD}{id}"), "on".to_string())),
@@ -482,13 +547,24 @@ impl FormValues {
                 WorkflowAction::Webhook { .. } | WorkflowAction::SkipImport => {}
             }
         }
+        if let Some(processing) = c.event.as_ref().and_then(|event| event.processing.as_ref()) {
+            if let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(processing) {
+                extra_fields.extend(fields.into_iter().map(|(name, value)| {
+                    let text = match value {
+                        serde_json::Value::String(text) => text,
+                        other => other.to_string(),
+                    };
+                    (format!("processing_{name}"), text)
+                }));
+            }
+        }
         let metadata = c.event.as_ref().and_then(|event| event.metadata.as_ref());
         let before = metadata.and_then(|metadata| metadata.before.as_ref());
         let after = metadata.and_then(|metadata| metadata.after.as_ref());
         let (metadata_before, metadata_before_currency) = metadata_value_text(before);
         let (metadata_after, metadata_after_currency) = metadata_value_text(after);
         Self {
-            checkboxes,
+            extra_fields,
             action_correspondent_id,
             action_document_type_id,
             name: workflow.name.clone(),
@@ -587,7 +663,8 @@ impl FormValues {
                 .map(|v| Uuid::parse_str(&v).map_err(|_| format!("The {what} is not valid.")))
                 .transpose()
         };
-        let event = match self.event_actor.as_deref() {
+        let processing = processing_condition(&self, existing, trigger)?;
+        let mut event = match self.event_actor.as_deref() {
             None if trigger == WorkflowTrigger::IngestReceived => None,
             None => existing.and_then(|workflow| workflow.conditions.event.clone()),
             Some(mode) => {
@@ -634,24 +711,26 @@ impl FormValues {
                     previous_ingest.cloned()
                 };
                 let metadata = metadata_condition(&self, trigger)?;
-                let processing = existing
-                    .filter(|_| trigger.is_processing_outcome())
-                    .and_then(|workflow| workflow.conditions.event.as_ref())
-                    .and_then(|event| event.processing.clone());
-                (subject_id.is_some()
-                    || actor.is_some()
-                    || ingest.is_some()
-                    || metadata.is_some()
-                    || processing.is_some())
-                .then_some(WorkflowEventConditions {
-                    subject_id,
-                    actor,
-                    ingest,
-                    metadata,
-                    processing,
-                })
+                (subject_id.is_some() || actor.is_some() || ingest.is_some() || metadata.is_some())
+                    .then_some(WorkflowEventConditions {
+                        subject_id,
+                        actor,
+                        ingest,
+                        metadata,
+                        processing: None,
+                    })
             }
         };
+        if processing.is_some() || self.extra_fields.contains_key("processing_form") {
+            if processing.is_some() || event.is_some() {
+                event
+                    .get_or_insert_with(WorkflowEventConditions::default)
+                    .processing = processing;
+            }
+            if event == Some(WorkflowEventConditions::default()) {
+                event = None;
+            }
+        }
         let mut conditions = existing
             .map(|workflow| workflow.conditions.clone())
             .unwrap_or_default();
@@ -843,6 +922,22 @@ fn first_webhook(actions: &[WorkflowAction]) -> Option<(usize, &WorkflowAction)>
     actions.iter().enumerate().find(|(_, a)| a.is_webhook())
 }
 
+struct TriggerChoice {
+    value: String,
+    label: String,
+    selected: bool,
+    processing_keys: String,
+}
+
+struct ProcessingControl {
+    key: String,
+    label: String,
+    value: String,
+    boolean: bool,
+    integer: bool,
+    timestamp: bool,
+}
+
 #[derive(Template)]
 #[template(path = "workflow_form.html")]
 struct FormTemplate {
@@ -852,7 +947,8 @@ struct FormTemplate {
     values: FormValues,
     has_secret: bool,
     secret_mask: &'static str,
-    triggers: Vec<Choice>,
+    triggers: Vec<TriggerChoice>,
+    processing_fields: Vec<ProcessingControl>,
     condition_groups: String,
     metadata_fields: Vec<Choice>,
     metadata_kinds: Vec<Choice>,
@@ -944,14 +1040,42 @@ async fn build_form(
             }
         ),
         workflow_id: workflow.map(|w| w.id.to_string()),
-        triggers: choices(
-            WorkflowTriggerRegistry::built_in()
-                .definitions()
-                .iter()
-                .map(|trigger| (trigger.event_type.clone(), trigger.label.clone()))
-                .collect(),
-            &values.trigger,
-        ),
+        triggers: WorkflowTriggerRegistry::built_in()
+            .definitions()
+            .iter()
+            .map(|trigger| TriggerChoice {
+                value: trigger.event_type.clone(),
+                label: trigger.label.clone(),
+                selected: trigger.event_type == values.trigger,
+                processing_keys: if trigger.event_type.starts_with("document.processing.") {
+                    trigger
+                        .condition_fields
+                        .iter()
+                        .map(processing_key)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    String::new()
+                },
+            })
+            .collect(),
+        processing_fields: processing_fields()
+            .map(|field| {
+                let key = processing_key(field);
+                ProcessingControl {
+                    key: key.into(),
+                    label: field.label.clone(),
+                    value: values
+                        .extra_fields
+                        .get(&format!("processing_{key}"))
+                        .cloned()
+                        .unwrap_or_default(),
+                    boolean: field.value_type == WorkflowConditionType::Boolean,
+                    integer: field.value_type == WorkflowConditionType::Integer,
+                    timestamp: field.value_type == WorkflowConditionType::Timestamp,
+                }
+            })
+            .collect(),
         metadata_fields: choices(
             metadata_fields
                 .into_iter()

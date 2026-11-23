@@ -44,7 +44,7 @@ counts %}
     <script type="module">
       import * as Turbo from "@hotwired/turbo";
 import { Application, Controller } from "@hotwired/stimulus";
-import { WorkflowConditionEditor } from "/static/workflow-conditions.js";
+import { WorkflowConditionEditor, syncProcessingFields } from "/static/workflow-conditions.js";
 
 window.Stimulus = Application.start();
 
@@ -918,6 +918,7 @@ Stimulus.register(
       "ingestRetry",
       "documentAction",
       "metadataFilter",
+      "processingFilter",
       "metadataKind",
       "metadataValues",
       "metadataHint",
@@ -943,6 +944,8 @@ Stimulus.register(
       const metadataValues = trigger === "document.metadata.changed";
       const metadataDefinition = trigger.startsWith("metadata_field.") || trigger.startsWith("metadata_option.");
       const metadata = metadataValues || metadataDefinition;
+      const processingKeys = this.triggerTarget.selectedOptions[0]?.dataset.processingKeys?.split(" ") ?? [];
+      syncProcessingFields(this.processingFilterTarget, processingKeys);
       this.conditionEditor.sync({
         trigger,
         ingest,
@@ -950,6 +953,7 @@ Stimulus.register(
         health,
         metadata,
         metadataValues,
+        processingKeys,
         documentFilters: !(entry || ingestEvent || metadata),
       });
       this.metadataFilterTarget.hidden = !metadata;

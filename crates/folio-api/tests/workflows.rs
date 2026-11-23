@@ -1315,3 +1315,66 @@ async fn web_editor_configures_exact_custom_metadata_conditions() {
         })
     );
 }
+
+#[tokio::test]
+async fn web_form_authors_and_validates_typed_processing_filters() {
+    let app = test_app().await;
+    let (status, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Retry capture",
+            "trigger": "document.processing.ocr.retry_scheduled",
+            "actions": [{"type": "webhook", "url": "https://example.test/ocr"}],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = created["id"].as_str().unwrap();
+    let uri = format!("/workflows/{id}");
+    let run = Uuid::new_v4();
+    let revision = Uuid::new_v4();
+    let retry_at = "2040-01-03T09:00:00.123456789Z";
+    let form = |trigger: &str, attempt: &str| {
+        url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("name", "Retry capture")
+            .append_pair("trigger", trigger)
+            .append_pair("event_actor", "")
+            .append_pair("processing_form", "1")
+            .append_pair("processing_stage", "ocr")
+            .append_pair("processing_outcome", "retry_scheduled")
+            .append_pair("processing_run_id", &run.to_string())
+            .append_pair("processing_revision_id", &revision.to_string())
+            .append_pair("processing_attempt", attempt)
+            .append_pair("processing_reason_code", "provider_failed")
+            .append_pair("processing_retry_at", retry_at)
+            .append_pair("webhook_url", "https://example.test/ocr")
+            .finish()
+    };
+    let trigger = "document.processing.ocr.retry_scheduled";
+    let (saved, _) = post_form(&app, &uri, form(trigger, "3")).await;
+    assert_eq!(saved, StatusCode::SEE_OTHER);
+    let (_, stored) = json_request(&app, "GET", &format!("/api{uri}"), None).await;
+    assert_eq!(
+        stored["conditions"]["event"]["processing"],
+        json!({
+            "stage": "ocr", "outcome": "retry_scheduled", "run_id": run, "revision_id": revision,
+            "attempt": 3, "reason_code": "provider_failed", "retry_at": retry_at,
+        })
+    );
+    let (_, html) = send(&app, "GET", &uri, None).await;
+    assert!(html.contains(r#"name="processing_attempt" value="3""#));
+    assert!(html.contains(retry_at));
+
+    let (invalid, html) = post_form(&app, &uri, form(trigger, "4294967296")).await;
+    assert_eq!(invalid, StatusCode::OK);
+    assert!(html.contains("processing attempt"));
+    let (invalid, html) =
+        post_form(&app, &uri, form("document.processing.ocr.completed", "3")).await;
+    assert_eq!(invalid, StatusCode::OK);
+    assert!(html.contains("These processing conditions are unavailable for the selected trigger"));
+    let (_, unchanged) = json_request(&app, "GET", &format!("/api{uri}"), None).await;
+    assert_eq!(unchanged["conditions"], stored["conditions"]);
+    assert_eq!(unchanged["trigger"], stored["trigger"]);
+}
