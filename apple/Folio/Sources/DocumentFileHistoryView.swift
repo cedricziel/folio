@@ -231,7 +231,15 @@ struct DocumentFileHistoryView: View {
         } catch FolioError.server(status: 409, message: _) {
             pendingPublication = nil
             needsRefresh = true
-            publicationFailure = "The file could not be changed. Refresh file history before trying again."
+            await load(before: nil)
+            if needsRefresh {
+                publicationFailure =
+                    "The file changed while you were editing. Refresh file history before trying again."
+            } else {
+                publicationFailure =
+                    "The file changed while you were editing. Review the current revision before trying again."
+                await onPublication()
+            }
         } catch {
             publicationFailure = error.localizedDescription
         }
