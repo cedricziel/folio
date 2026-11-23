@@ -3,7 +3,7 @@
 use crate::vault::filters;
 use askama::Template;
 use axum::{
-    extract::{Multipart, Path, Query, State},
+    extract::{Form, Multipart, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -27,6 +27,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::vault::{DefaultVault, Uploader};
 
+use super::archive::{self, ArchiveRequest, ArchiveStatusResponse};
 use super::file_response::{harden, harden_inline};
 use super::view::{self, Counts, DocumentRow, Nav, Sidebar, TagView};
 
@@ -39,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .route("/documents/search", get(search_documents))
         // Parameterized routes come last
         .route("/documents/{id}", get(document_detail))
+        .route("/documents/{id}/archive", post(request_archive))
         .route("/documents/{id}/thumbnail", get(document_thumbnail))
         .route(
             "/documents/{id}/page/{page}/thumbnail",
@@ -300,6 +302,8 @@ async fn documents_list(
 #[derive(Template)]
 #[template(path = "document_view.html")]
 struct DocumentViewTemplate {
+    archive: Option<ArchiveStatusResponse>,
+    archive_refresh_href: String,
     sidebar: Sidebar,
     document: Document,
     processing: Vec<crate::vault_context::ProcessingSummary>,
@@ -410,7 +414,16 @@ async fn document_detail(
     let processing = crate::vault_context::processing_summaries(&document, &stages);
     let live = DetailLive::of(&document, &stages);
 
+    let archive = match &state.archive {
+        Some(service) if document.file_path.is_some() => Some(ArchiveStatusResponse::from(
+            service.status(vault, id).await?,
+        )),
+        _ => None,
+    };
+    let archive_refresh_href = back.carried_by(crate::vault::url(&format!("/documents/{id}")));
     let template = DocumentViewTemplate {
+        archive,
+        archive_refresh_href,
         sidebar: Sidebar::load(&state, vault, Nav::None).await?,
         processing,
         facts: live.facts,
@@ -436,6 +449,25 @@ async fn document_detail(
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering document view: {}", e)
     })))
+}
+
+#[derive(serde::Deserialize)]
+struct ArchiveForm {
+    expected_attempt_id: Option<Uuid>,
+    return_to: Option<String>,
+}
+
+async fn request_archive(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Form(form): Form<ArchiveForm>,
+) -> ApiResult<Response> {
+    let request = ArchiveRequest {
+        expected_attempt_id: form.expected_attempt_id,
+    };
+    archive::admit(&state, vault, id, request).await?;
+    Ok(back_to_document(id, form.return_to.as_deref()))
 }
 
 /// The parts of the detail page that change while Folio processes the file

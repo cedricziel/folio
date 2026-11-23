@@ -59,6 +59,11 @@ pub fn router() -> Router<AppState> {
             "/{id}/revisions/{revision_id}/download",
             get(super::document_revisions::download),
         )
+        .route(
+            "/{id}/archive",
+            get(super::archive::status).post(super::archive::request),
+        )
+        .route("/{id}/archive/download", get(super::archive::download))
         .route("/{id}/thumbnail", get(document_thumbnail))
         .route("/{id}/correspondent", post(set_correspondent))
         .route("/{id}/document_type", post(set_document_type))

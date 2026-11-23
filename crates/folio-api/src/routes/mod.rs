@@ -1,6 +1,7 @@
 //! API routes
 
 mod apple;
+pub(crate) mod archive;
 mod assets;
 pub mod auth;
 pub(crate) mod browse;

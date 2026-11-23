@@ -242,7 +242,7 @@ async fn main() -> Result<()> {
         outbox.clone(),
     )
     .with_workflow_runner(workflow_runner)
-    .with_archive_service(archive_service);
+    .with_archive_service(archive_service.clone());
 
     background.spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
 
@@ -408,6 +408,7 @@ async fn main() -> Result<()> {
     .with_health_checks(health_checks)
     .with_mcp_default(mcp_default)
     .with_apple_app_ids_default(config.apple.parsed().map_err(anyhow::Error::msg)?);
+    state.archive = Some(archive_service);
 
     state.client_telemetry =
         folio_api::client_telemetry::ClientTelemetry::from_lookup(|key| std::env::var(key).ok())

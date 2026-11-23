@@ -144,7 +144,7 @@ async fn assert_bundle(h: &Harness, source: &ArchiveSource, attempt: Option<Id>)
     let bytes = to_bytes(response.into_body(), 32 * 1024).await.unwrap();
     assert_eq!(bytes.len(), length);
     let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
-    let mut names: Vec<_> = zip.file_names().collect();
+    let mut names: Vec<_> = zip.file_names().collect::<Result<_, _>>().unwrap();
     names.sort_unstable();
     assert_eq!(
         names,

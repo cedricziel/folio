@@ -26,6 +26,18 @@ and API form entry points and malformed-ID preservation. Run
 `cargo test -p folio-mcp --test tools update_document_changes_fields` for MCP
 metadata edits and the persisted title delta. Both use isolated fixtures.
 
+## Verify lifecycle workflow delivery
+
+Run `cargo test -p folio-infra --test workflows document_lifecycle::` against
+its temporary SQLite database and loopback receivers. Confirm a single purge
+occurrence delivers both `document.purged` and the legacy `document.deleted`
+with the same event identity and no duplicate on replay. The move tests check
+that the outgoing webhook uses source classifications and that a queued arrival
+action cannot cross vaults after the document departs.
+
+Run `cargo test -p folio-api --test workflows --test openapi` for lifecycle
+trigger selection, the editor's action compatibility error, and schema parity.
+
 ## Verify explicit review persistence
 
 Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_reviews --test document_review_upgrade`
