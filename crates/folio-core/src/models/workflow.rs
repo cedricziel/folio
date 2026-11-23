@@ -676,6 +676,18 @@ pub enum WorkflowAction {
 }
 
 impl WorkflowAction {
+    pub fn validate_document_title(title: &str) -> Result<()> {
+        if title.trim().is_empty() {
+            return Err(Error::Validation("Enter a document title".into()));
+        }
+        if title.contains('\0') {
+            return Err(Error::Validation(
+                "Document title cannot contain a NUL character".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Whether the action sends the event payload rather than changing the document
     pub fn is_webhook(&self) -> bool {
         matches!(self, Self::Webhook { .. })
@@ -756,8 +768,8 @@ impl WorkflowInput {
                 WorkflowAction::RemoveTags { tag_ids } if tag_ids.is_empty() => {
                     return invalid("remove_tags needs at least one tag");
                 }
-                WorkflowAction::RenameDocument { title } if title.trim().is_empty() => {
-                    return invalid("Enter a document title");
+                WorkflowAction::RenameDocument { title } => {
+                    WorkflowAction::validate_document_title(title)?;
                 }
                 WorkflowAction::TrashDocument if index + 1 != self.actions.len() => {
                     return invalid("Move to Trash must be the final action");

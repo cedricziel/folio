@@ -32,6 +32,11 @@ pub enum RunOutcome {
     Failed,
 }
 
+enum ActionProgress {
+    Webhook(Option<u16>),
+    Document { run_finished: bool },
+}
+
 struct ActionFailure {
     message: String,
     retryable: bool,
@@ -180,24 +185,39 @@ impl WorkflowRunner {
             )
             .await
             {
-                Ok(response_status) => {
+                Ok(ActionProgress::Webhook(response_status)) => {
                     run.completed_actions = index as u32 + 1;
                     run.response_status = response_status.or(run.response_status);
-                    if action.is_webhook() && !self.save(&run).await? {
+                    if !self.save(&run).await? {
                         return Ok(RunOutcome::Failed);
                     }
                 }
+                Ok(ActionProgress::Document { run_finished }) => {
+                    run.completed_actions = index as u32 + 1;
+                    if run_finished {
+                        info!(
+                            "Workflow run {} succeeded after {} attempt(s)",
+                            run.id, run.attempts
+                        );
+                        return Ok(RunOutcome::Succeeded);
+                    }
+                }
                 Err(failure) => {
-                    if !action.is_webhook()
-                        && self
-                            .workflows
-                            .find_run(run.id)
-                            .await?
-                            .is_some_and(|stored| {
-                                advance_to_persisted_progress(&mut run, &stored, index)
-                            })
-                    {
-                        continue;
+                    let stored = if action.is_webhook() {
+                        None
+                    } else {
+                        self.workflows.find_run(run.id).await?
+                    };
+                    if let Some(stored) = stored {
+                        if stored.status.is_terminal() {
+                            return Ok(match stored.status {
+                                RunStatus::Succeeded => RunOutcome::Succeeded,
+                                _ => RunOutcome::Failed,
+                            });
+                        }
+                        if advance_to_persisted_progress(&mut run, &stored, index) {
+                            continue;
+                        }
                     }
                     run.response_status = failure.response_status;
                     let give_up = !failure.retryable || run.attempts >= MAX_ATTEMPTS;
@@ -274,13 +294,12 @@ impl WorkflowRunner {
         }
     }
 
-    /// Returns the webhook's HTTP status when the action was a webhook
     async fn perform(
         &self,
         action_index: usize,
         action: &WorkflowAction,
         run: &WorkflowRun,
-    ) -> Result<Option<u16>, ActionFailure> {
+    ) -> Result<ActionProgress, ActionFailure> {
         match action {
             WorkflowAction::Webhook {
                 url,
@@ -306,7 +325,7 @@ impl WorkflowRunner {
                     })
                     .await;
                 match result.error {
-                    None => Ok(result.status),
+                    None => Ok(ActionProgress::Webhook(result.status)),
                     Some(message) => Err(ActionFailure {
                         message,
                         retryable: result.retryable,
@@ -318,7 +337,7 @@ impl WorkflowRunner {
                 .documents
                 .apply_workflow_document_action(run, action_index as u32)
                 .await
-                .map(|()| None)
+                .map(|run_finished| ActionProgress::Document { run_finished })
                 .map_err(|error| ActionFailure {
                     retryable: !matches!(
                         error,

@@ -138,8 +138,9 @@ pub trait DocumentRepository: Send + Sync {
     /// Update an existing document
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document>;
 
-    /// Commit a run's local mutation and progress together. A completed step is a no-op.
-    async fn apply_workflow_document_action(&self, run: &WorkflowRun, index: u32) -> Result<()>;
+    /// Commit a local action and its progress. Returns true if this call committed run success.
+    /// A completed step is a no-op for a pending, current run. Stopped or stale runs return a conflict.
+    async fn apply_workflow_document_action(&self, run: &WorkflowRun, index: u32) -> Result<bool>;
 
     /// Move a document to trash without deleting stored objects. Repeats succeed.
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()>;

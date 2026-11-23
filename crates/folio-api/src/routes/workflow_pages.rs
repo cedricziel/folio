@@ -797,7 +797,13 @@ fn set_action(
         (Some(i), None) => {
             actions.remove(i);
         }
-        (None, Some(action)) => actions.push(action),
+        (None, Some(action)) => {
+            let index = actions
+                .iter()
+                .position(|existing| matches!(existing, WorkflowAction::TrashDocument))
+                .unwrap_or(actions.len());
+            actions.insert(index, action);
+        }
         (None, None) => {}
     }
 }

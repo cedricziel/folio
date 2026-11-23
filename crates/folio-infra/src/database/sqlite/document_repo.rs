@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 use crate::database::document_revisions::{RevisionRow, READ_REVISIONS};
 use crate::database::workflow_actions::{pending_action, run_stopped, DocumentAction};
-use folio_core::models::{WorkflowRun, WorkflowTarget};
+use crate::database::workflow_lifecycle::workflow_run_outcome;
+use folio_core::models::{RunStatus, WorkflowRun, WorkflowTarget};
 
 use super::outbox::{
     capture_document, insert_domain_event_with_origin, insert_event, insert_event_with_envelope,
@@ -1360,7 +1361,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         Ok(document)
     }
 
-    async fn apply_workflow_document_action(&self, run: &WorkflowRun, index: u32) -> Result<()> {
+    async fn apply_workflow_document_action(&self, run: &WorkflowRun, index: u32) -> Result<bool> {
         if self.origin != EventOrigin::Workflow || run.event.target() != WorkflowTarget::Document {
             return Err(Error::Validation("Expected a document workflow run".into()));
         }
@@ -1387,8 +1388,8 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(vault.to_string())
         .bind(run.event.as_str())
         .fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?.ok_or_else(run_stopped)?;
-        let Some(action) = pending_action(completed, index, &actions)? else {
-            return Ok(());
+        let Some((action, is_final)) = pending_action(completed, index, &actions)? else {
+            return Ok(false);
         };
         match DocumentAction::try_from(&action)? {
             DocumentAction::Update(params) => {
@@ -1419,10 +1420,34 @@ impl DocumentRepository for SqliteDocumentRepository {
                     .await?;
             }
         }
-        sqlx::query("UPDATE workflow_runs SET completed_actions = ?, attempts = MAX(attempts, ?) WHERE id = ?")
-            .bind(index + 1).bind(run.attempts).bind(run.id.to_string())
-            .execute(&mut *tx).await.map_err(map_sqlx_error)?;
-        self.commit(tx).await
+        let payload: Option<String> = sqlx::query_scalar(
+            "UPDATE workflow_runs SET
+                 completed_actions = ?1, attempts = MAX(attempts, ?2),
+                 status = CASE WHEN ?4 IS NULL THEN status ELSE 'succeeded' END,
+                 last_error = CASE WHEN ?4 IS NULL THEN last_error ELSE NULL END,
+                 finished_at = COALESCE(?4, finished_at)
+             WHERE id = ?3
+             RETURNING CASE WHEN ?4 IS NOT NULL THEN payload END",
+        )
+        .bind(index + 1)
+        .bind(run.attempts)
+        .bind(run.id.to_string())
+        .bind(is_final.then(|| Utc::now().to_rfc3339()))
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        if let Some(payload) = payload {
+            let event = workflow_run_outcome(
+                vault,
+                run.id,
+                run.workflow_id,
+                RunStatus::Succeeded,
+                &payload,
+            )?;
+            insert_domain_event_with_origin(&mut tx, &event, EventOrigin::Workflow).await?;
+        }
+        self.commit(tx).await?;
+        Ok(is_final)
     }
 
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {

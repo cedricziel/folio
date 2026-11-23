@@ -7,7 +7,10 @@ use folio_core::models::{
     RunStatus, UpdateDocument, VaultId, WorkflowAction, WorkflowConditions, WorkflowInput,
     WorkflowRun, WorkflowTrigger,
 };
-use folio_infra::{workflow::RunOutcome, Database, WebhookClient, WorkflowRunner};
+use folio_infra::{
+    workflow::{RunOutcome, MAX_ATTEMPTS},
+    Database, WebhookClient, WorkflowRunner,
+};
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
 
@@ -214,8 +217,8 @@ async fn contract(db: Database) {
             .workflow_documents
             .apply_workflow_document_action(&ordered, 0),
     );
-    first.unwrap();
-    second.unwrap();
+    assert!(!first.unwrap());
+    assert!(!second.unwrap());
     let committed = repos.workflows.find_run(ordered.id).await.unwrap().unwrap();
     assert_eq!(committed.completed_actions, 1);
     assert_eq!(committed.status, RunStatus::Pending);
@@ -314,6 +317,143 @@ async fn contract(db: Database) {
         .await
         .unwrap()
         .is_empty());
+
+    let mut final_step = queue(
+        repos.workflows.as_ref(),
+        vault,
+        document.id,
+        vec![WorkflowAction::RenameDocument {
+            title: "Final title".into(),
+        }],
+    )
+    .await;
+    final_step.attempts = MAX_ATTEMPTS;
+    final_step.last_error = Some("Previous attempt failed".into());
+    repos.workflows.update_run(&final_step).await.unwrap();
+    assert!(repos
+        .workflow_documents
+        .apply_workflow_document_action(&final_step, 0)
+        .await
+        .unwrap());
+
+    let persisted = repos
+        .workflows
+        .find_run(final_step.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.completed_actions, 1);
+    assert_eq!(persisted.attempts, final_step.attempts);
+    assert_eq!(persisted.status, RunStatus::Succeeded);
+    assert!(persisted.finished_at.is_some());
+    assert_eq!(persisted.last_error, None);
+    let renamed = repos
+        .documents
+        .find_by_id(vault, document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renamed.title, "Final title");
+    assert_eq!(
+        runner.execute(final_step.id).await.unwrap(),
+        RunOutcome::Succeeded
+    );
+    assert!(matches!(
+        repos
+            .workflow_documents
+            .apply_workflow_document_action(&final_step, 0)
+            .await,
+        Err(folio_core::Error::Conflict(_))
+    ));
+    let events = repos.outbox.replay(0, since, 100).await.unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.origin == folio_core::EventOrigin::Workflow
+                && event
+                    .envelope
+                    .as_ref()
+                    .is_some_and(|envelope| envelope.event_type() == "workflow_run.succeeded"
+                        && envelope.subject().id == final_step.id
+                        && envelope.audience() == &EventAudience::Owners))
+            .count(),
+        1
+    );
+
+    let mut progressed = queue(
+        repos.workflows.as_ref(),
+        vault,
+        document.id,
+        vec![WorkflowAction::RenameDocument {
+            title: "Already superseded".into(),
+        }],
+    )
+    .await;
+    progressed.completed_actions = 1;
+    repos.workflows.update_run(&progressed).await.unwrap();
+    assert!(!repos
+        .workflow_documents
+        .apply_workflow_document_action(&progressed, 0)
+        .await
+        .unwrap());
+    assert_eq!(
+        runner.execute(progressed.id).await.unwrap(),
+        RunOutcome::Succeeded
+    );
+
+    let queued_rename = queue(
+        repos.workflows.as_ref(),
+        vault,
+        document.id,
+        vec![WorkflowAction::RenameDocument {
+            title: "Queued title".into(),
+        }],
+    )
+    .await;
+    let invalid_actions = serde_json::to_string(&[WorkflowAction::RenameDocument {
+        title: "Invoice\0copy".into(),
+    }])
+    .unwrap();
+    match &db {
+        Database::Sqlite(pool) => {
+            sqlx::query("UPDATE workflow_runs SET actions = ? WHERE id = ?")
+                .bind(&invalid_actions)
+                .bind(queued_rename.id.to_string())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        Database::Postgres(pool) => {
+            sqlx::query("UPDATE workflow_runs SET actions = $1 WHERE id = $2")
+                .bind(&invalid_actions)
+                .bind(queued_rename.id)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+    assert_eq!(
+        runner.execute(queued_rename.id).await.unwrap(),
+        RunOutcome::Failed
+    );
+    let rejected = repos
+        .workflows
+        .find_run(queued_rename.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rejected.last_error.as_deref(),
+        Some("Validation error: Document title cannot contain a NUL character")
+    );
+    assert_eq!(rejected.completed_actions, 0);
+    let unchanged = repos
+        .documents
+        .find_by_id(vault, document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.title, "Final title");
 
     let foreign_vault = repos.vaults.create("Other vault", None).await.unwrap();
     let foreign_tag = repos

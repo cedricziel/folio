@@ -13,10 +13,13 @@ impl<'a> TryFrom<&'a WorkflowAction> for DocumentAction<'a> {
 
     fn try_from(action: &'a WorkflowAction) -> Result<Self> {
         Ok(match action {
-            WorkflowAction::RenameDocument { title } => Self::Update(UpdateDocument {
-                title: Some(title.clone()),
-                ..Default::default()
-            }),
+            WorkflowAction::RenameDocument { title } => {
+                WorkflowAction::validate_document_title(title)?;
+                Self::Update(UpdateDocument {
+                    title: Some(title.clone()),
+                    ..Default::default()
+                })
+            }
             WorkflowAction::AddTags { tag_ids } => Self::Tags {
                 ids: tag_ids,
                 add: true,
@@ -68,18 +71,19 @@ pub(super) fn pending_action(
     completed: i64,
     index: u32,
     actions: &str,
-) -> Result<Option<WorkflowAction>> {
+) -> Result<Option<(WorkflowAction, bool)>> {
     match completed.cmp(&i64::from(index)) {
         std::cmp::Ordering::Greater => Ok(None),
         std::cmp::Ordering::Less => Err(run_stopped()),
         std::cmp::Ordering::Equal => {
             let actions: Vec<WorkflowAction> = serde_json::from_str(actions)
                 .map_err(|error| Error::Repository(format!("Invalid workflow actions: {error}")))?;
+            let is_final = actions.len() == index as usize + 1;
             let action = actions
                 .into_iter()
                 .nth(index as usize)
                 .ok_or_else(run_stopped)?;
-            Ok(Some(action))
+            Ok(Some((action, is_final)))
         }
     }
 }
