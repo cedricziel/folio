@@ -1077,6 +1077,73 @@ async fn trigger_catalog_matches_workflow_choices_and_describes_entry_filters() 
 }
 
 #[tokio::test]
+async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
+    let app = test_app().await;
+    let (status, json) = json_request(&app, "GET", "/api/workflows/triggers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let catalog = json.as_array().unwrap();
+    let field_type = |trigger: &str, key: &str| {
+        catalog
+            .iter()
+            .find(|choice| choice["event_type"] == trigger)
+            .unwrap()["condition_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["key"] == key)
+            .and_then(|field| field["value_type"].as_str())
+    };
+
+    for trigger in [
+        "document.uploaded",
+        "document.title_changed",
+        "document.deleted",
+    ] {
+        assert_eq!(field_type(trigger, "mime_type"), Some("text"));
+        assert_eq!(field_type(trigger, "filename_glob"), Some("text"));
+        assert_eq!(field_type(trigger, "source.folder_path_glob"), Some("text"));
+        assert_eq!(
+            field_type(trigger, "source.email_attachment_glob"),
+            Some("text")
+        );
+        assert_eq!(
+            field_type(trigger, "source.email_mailbox_glob"),
+            Some("text")
+        );
+        assert_eq!(field_type(trigger, "tag_id"), Some("identifier"));
+        assert_eq!(field_type(trigger, "correspondent_id"), Some("identifier"));
+        assert_eq!(field_type(trigger, "document_type_id"), Some("identifier"));
+    }
+    assert_eq!(field_type("ingest.received", "filename_glob"), Some("text"));
+    assert_eq!(field_type("ingest.received", "tag_id"), None);
+    assert_eq!(field_type("ingest.received", "event.subject_id"), None);
+
+    for trigger in [
+        "document_note.created",
+        "document_comment.updated",
+        "document.metadata.changed",
+        "ingest.failed",
+        "source.recovered",
+    ] {
+        assert_eq!(field_type(trigger, "mime_type"), None);
+        assert_eq!(field_type(trigger, "tag_id"), None);
+        assert_eq!(field_type(trigger, "source.folder_path_glob"), None);
+    }
+    assert_eq!(
+        field_type("document_note.created", "event.subject_id"),
+        Some("identifier")
+    );
+    assert_eq!(
+        field_type("document.metadata.changed", "event.metadata.after"),
+        Some("metadata_value")
+    );
+    assert_eq!(
+        field_type("ingest.failed", "data.retryable"),
+        Some("boolean")
+    );
+}
+
+#[tokio::test]
 async fn web_editor_configures_typed_ingestion_outcome_filters() {
     let app = test_app().await;
     let source = Uuid::new_v4();

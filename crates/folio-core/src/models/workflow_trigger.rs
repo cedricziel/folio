@@ -96,6 +96,51 @@ impl WorkflowTriggerDefinition {
     }
 }
 
+fn snapshot_condition_fields(
+    trigger: WorkflowTrigger,
+) -> impl Iterator<Item = WorkflowConditionField> {
+    use WorkflowConditionType::{Identifier, Text};
+    use WorkflowTrigger::*;
+
+    type Field = (&'static str, &'static str, WorkflowConditionType);
+    const FILE: &[Field] = &[
+        ("mime_type", "File type", Text),
+        ("filename_glob", "Filename pattern", Text),
+        ("source.folder_path_glob", "Folder path pattern", Text),
+        (
+            "source.email_attachment_glob",
+            "Attachment name pattern",
+            Text,
+        ),
+        ("source.email_mailbox_glob", "Mailbox pattern", Text),
+    ];
+    const CLASSIFICATION: &[Field] = &[
+        ("tag_id", "Tag", Identifier),
+        ("correspondent_id", "Correspondent", Identifier),
+        ("document_type_id", "Document type", Identifier),
+    ];
+
+    let (file, classification) = match trigger {
+        DocumentUploaded
+        | DocumentProcessed
+        | DocumentUpdated
+        | DocumentDeleted
+        | DocumentTitleChanged
+        | DocumentTagsChanged
+        | DocumentCorrespondentChanged
+        | DocumentTypeChanged => (FILE, CLASSIFICATION),
+        IngestReceived => (FILE, &[][..]),
+        _ => (&[][..], &[][..]),
+    };
+    file.iter()
+        .chain(classification)
+        .map(|&(key, label, value_type)| WorkflowConditionField {
+            key: key.into(),
+            label: label.into(),
+            value_type,
+        })
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct WorkflowTriggerRegistry {
     definitions: Vec<WorkflowTriggerDefinition>,
@@ -141,6 +186,9 @@ impl WorkflowTriggerRegistry {
                             ]
                         },
                     };
+                    definition
+                        .condition_fields
+                        .extend(snapshot_condition_fields(trigger));
                     if trigger.is_custom_metadata() {
                         use WorkflowConditionType::{Identifier, MetadataValue, Text};
                         let mut fields = vec![
