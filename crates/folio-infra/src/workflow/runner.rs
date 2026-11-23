@@ -361,11 +361,36 @@ fn advance_to_persisted_progress(
     stored: &WorkflowRun,
     index: usize,
 ) -> bool {
+    run.attempts = run.attempts.max(stored.attempts);
     if stored.completed_actions as usize <= index {
         return false;
     }
     run.completed_actions = stored.completed_actions;
-    run.attempts = run.attempts.max(stored.attempts);
     run.response_status = stored.response_status;
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use folio_core::models::{VaultId, WorkflowTrigger};
+
+    #[test]
+    fn keeps_the_persisted_attempt_count_at_equal_action_progress() {
+        let mut run = WorkflowRun::new(
+            VaultId(Id::new_v4()),
+            Id::new_v4(),
+            WorkflowTrigger::DocumentUploaded,
+            None,
+            "{}".into(),
+        );
+        run.completed_actions = 1;
+        run.attempts = 2;
+        let mut stored = run.clone();
+        stored.attempts = 3;
+
+        assert!(!advance_to_persisted_progress(&mut run, &stored, 1));
+        assert_eq!(run.attempts, 3);
+        assert_eq!(run.completed_actions, 1);
+    }
 }
