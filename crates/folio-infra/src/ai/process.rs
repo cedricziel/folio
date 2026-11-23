@@ -105,7 +105,10 @@ async fn capture(
 
 async fn read_limited(reader: impl AsyncRead + Unpin, max_bytes: u64) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    reader.take(max_bytes + 1).read_to_end(&mut bytes).await?;
+    reader
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .await?;
     if bytes.len() as u64 > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::FileTooLarge,
@@ -176,6 +179,16 @@ mod tests {
             gone(read(&grandchild_pid)).await,
             "grandchild survived the timeout"
         );
+    }
+
+    #[tokio::test]
+    async fn largest_capture_limit_preserves_output() {
+        let mut command = Command::new("printf");
+        command.arg("ok");
+        let output = bounded_output(&mut command, INFO_TIMEOUT, u64::MAX)
+            .await
+            .unwrap();
+        assert_eq!(output.stdout, b"ok");
     }
 
     #[tokio::test]

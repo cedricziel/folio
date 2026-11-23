@@ -250,14 +250,20 @@ impl ArchiveConverter {
                 format!("-Xmx512m -Djava.io.tmpdir=\"{}\"", work.display()),
             );
         }
-        // SAFETY: only the async-signal-safe setrlimit syscall runs after fork.
-        // The limit is inherited by Ghostscript, Tesseract and other children.
+        // SAFETY: the closure uses only async-signal-safe resource-limit calls.
+        // Ghostscript, Tesseract and other descendants inherit the capped limits.
         unsafe {
             command.pre_exec(|| {
-                let bounds = libc::rlimit {
-                    rlim_cur: MAX_FILE_BYTES as libc::rlim_t,
-                    rlim_max: MAX_FILE_BYTES as libc::rlim_t,
+                let mut bounds = libc::rlimit {
+                    rlim_cur: 0,
+                    rlim_max: 0,
                 };
+                if libc::getrlimit(libc::RLIMIT_FSIZE, &mut bounds) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let cap = MAX_FILE_BYTES as libc::rlim_t;
+                bounds.rlim_cur = bounds.rlim_cur.min(cap);
+                bounds.rlim_max = bounds.rlim_max.min(cap);
                 if libc::setrlimit(libc::RLIMIT_FSIZE, &bounds) != 0 {
                     return Err(io::Error::last_os_error());
                 }

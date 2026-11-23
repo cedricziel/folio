@@ -54,7 +54,8 @@ the veraPDF CLI with Java on the service's PATH.
 
 The converter uses a private temporary directory and caps input and
 individual scratch files at 128 MiB. During OCR it stops the process group if
-periodic checks find more than 512 MiB or 10,000 entries in that directory.
+periodic checks observe more than 512 MiB or 10,000 entries in that directory.
+Scratch usage can exceed the threshold between checks.
 It checks PDFs against a 500-page limit and stops conversion and validation
 tool invocations after five minutes each.
 
