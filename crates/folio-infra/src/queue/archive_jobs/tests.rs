@@ -4,7 +4,7 @@ use crate::database::{test_pool, test_vault};
 use crate::queue::{JobClass, JobQueue};
 use crate::storage::ObjectStoreDocumentStore;
 use bytes::Bytes;
-use folio_core::models::CreateDocument;
+use folio_core::models::{CreateDocument, Document};
 use folio_core::ports::{purge_document, DocumentRepository, StoredObject};
 use std::collections::HashSet;
 use std::os::unix::fs::PermissionsExt;
@@ -304,6 +304,17 @@ struct UncertainRepository {
 impl ArchivalRepository for UncertainRepository {
     async fn current_source(&self, vault: VaultId, document: Id) -> Result<Option<ArchiveSource>> {
         self.inner.current_source(vault, document).await
+    }
+
+    async fn export_document(
+        &self,
+        source: &ArchiveSource,
+        text_limit: i64,
+        metadata_limit: i64,
+    ) -> Result<Option<Document>> {
+        self.inner
+            .export_document(source, text_limit, metadata_limit)
+            .await
     }
 
     async fn current_attempt(
