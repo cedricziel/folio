@@ -2,12 +2,13 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use tracing::instrument;
 
 use super::insert_domain_event;
 use crate::database::workflow_lifecycle::workflow_event;
 use folio_core::error::{Error, Result};
+use folio_core::events::EventOrigin;
 use folio_core::models::{
     Id, RunStatus, UserId, VaultId, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
@@ -275,15 +276,16 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .await
         .map_err(repo_err)?;
         let workflow = Workflow::try_from(row)?;
-        sqlx::query(
+        let cancelled = sqlx::query_as(
             "UPDATE workflow_runs SET status = 'failed', last_error = 'Workflow definition changed',
-             finished_at = $1 WHERE workflow_id = $2 AND status = 'pending'",
+             finished_at = $1 WHERE workflow_id = $2 AND status = 'pending' RETURNING id, workflow_id, payload",
         )
         .bind(workflow.updated_at)
         .bind(id)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
         .map_err(repo_err)?;
+        publish_cancelled_runs(&mut tx, vault, cancelled).await?;
         for event in crate::database::workflow_lifecycle::workflow_update_events(
             &workflow,
             existing.enabled,
@@ -323,14 +325,15 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .await
         .map_err(repo_err)?;
         let workflow = Workflow::try_from(row)?;
-        sqlx::query(
-            "UPDATE workflow_runs SET status = 'failed', last_error = 'Workflow was deleted', finished_at = $1 WHERE workflow_id = $2 AND status = 'pending'",
+        let cancelled = sqlx::query_as(
+            "UPDATE workflow_runs SET status = 'failed', last_error = 'Workflow was deleted', finished_at = $1 WHERE workflow_id = $2 AND status = 'pending' RETURNING id, workflow_id, payload",
         )
         .bind(now)
         .bind(id)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
         .map_err(repo_err)?;
+        publish_cancelled_runs(&mut tx, vault, cancelled).await?;
         insert_domain_event(&mut tx, &workflow_event(&workflow, "deleted")?).await?;
         tx.commit().await.map_err(repo_err)?;
         Ok(())
@@ -452,6 +455,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn update_run(&self, run: &WorkflowRun) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let updated = sqlx::query(
             "UPDATE workflow_runs SET status = $1, attempts = $2, completed_actions = $3,
                                       last_error = $4, response_status = $5, finished_at = $6
@@ -464,7 +468,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .bind(run.response_status.map(i32::from))
         .bind(run.finished_at)
         .bind(run.id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
         if updated.rows_affected() == 0 {
@@ -472,6 +476,25 @@ impl WorkflowRepository for PostgresWorkflowRepository {
                 "Workflow run is already terminal or missing".into(),
             ));
         }
+        if run.status.is_terminal() {
+            let (vault_id, workflow_id, payload): (Id, Id, String) = sqlx::query_as(
+                "SELECT w.vault_id, r.workflow_id, r.payload FROM workflow_runs r
+                 JOIN workflows w ON w.id = r.workflow_id WHERE r.id = $1",
+            )
+            .bind(run.id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+            let event = crate::database::workflow_lifecycle::workflow_run_outcome(
+                VaultId(vault_id),
+                run.id,
+                workflow_id,
+                run.status,
+                &payload,
+            )?;
+            super::insert_domain_event_with_origin(&mut tx, &event, EventOrigin::Workflow).await?;
+        }
+        tx.commit().await.map_err(repo_err)?;
         Ok(())
     }
 
@@ -494,4 +517,22 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .map_err(repo_err)?;
         rows.into_iter().map(WorkflowRun::try_from).collect()
     }
+}
+
+pub(super) async fn publish_cancelled_runs(
+    conn: &mut PgConnection,
+    vault: VaultId,
+    runs: Vec<(Id, Id, String)>,
+) -> Result<()> {
+    for (id, workflow_id, payload) in runs {
+        let event = crate::database::workflow_lifecycle::workflow_run_outcome(
+            vault,
+            id,
+            workflow_id,
+            RunStatus::Failed,
+            &payload,
+        )?;
+        super::insert_domain_event_with_origin(conn, &event, EventOrigin::Workflow).await?;
+    }
+    Ok(())
 }

@@ -2,12 +2,13 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use sqlx::{sqlite::SqliteRow, Row, SqliteConnection, SqlitePool};
 use tracing::instrument;
 
 use super::insert_domain_event;
 use crate::database::workflow_lifecycle::workflow_event;
 use folio_core::error::{Error, Result};
+use folio_core::events::EventOrigin;
 use folio_core::models::{
     Id, RunStatus, UserId, VaultId, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
@@ -248,15 +249,16 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .await
         .map_err(repo_err)?;
         let workflow = workflow_from_row(&row)?;
-        sqlx::query(
+        let cancelled = sqlx::query_as(
             "UPDATE workflow_runs SET status = 'failed', last_error = 'Workflow definition changed',
-             finished_at = ? WHERE workflow_id = ? AND status = 'pending'",
+             finished_at = ? WHERE workflow_id = ? AND status = 'pending' RETURNING id, workflow_id, payload",
         )
         .bind(workflow.updated_at.to_rfc3339())
         .bind(id.to_string())
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
         .map_err(repo_err)?;
+        publish_cancelled_runs(&mut tx, vault, cancelled).await?;
         for event in crate::database::workflow_lifecycle::workflow_update_events(
             &workflow,
             existing.enabled,
@@ -298,14 +300,15 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .await
         .map_err(repo_err)?;
         let workflow = workflow_from_row(&row)?;
-        sqlx::query(
-            "UPDATE workflow_runs SET status = 'failed', last_error = 'Workflow was deleted', finished_at = ? WHERE workflow_id = ? AND status = 'pending'",
+        let cancelled = sqlx::query_as(
+            "UPDATE workflow_runs SET status = 'failed', last_error = 'Workflow was deleted', finished_at = ? WHERE workflow_id = ? AND status = 'pending' RETURNING id, workflow_id, payload",
         )
         .bind(&now)
         .bind(id.to_string())
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await
         .map_err(repo_err)?;
+        publish_cancelled_runs(&mut tx, vault, cancelled).await?;
         insert_domain_event(&mut tx, &workflow_event(&workflow, "deleted")?).await?;
         tx.commit().await.map_err(repo_err)?;
         Ok(())
@@ -431,6 +434,11 @@ impl WorkflowRepository for SqliteWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn update_run(&self, run: &WorkflowRun) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
         let updated = sqlx::query(
             "UPDATE workflow_runs SET status = ?, attempts = ?, completed_actions = ?, last_error = ?, \
              response_status = ?, finished_at = ? WHERE id = ? AND status = 'pending'",
@@ -442,7 +450,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .bind(run.response_status)
         .bind(run.finished_at.map(|t| t.to_rfc3339()))
         .bind(run.id.to_string())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
         if updated.rows_affected() == 0 {
@@ -450,6 +458,25 @@ impl WorkflowRepository for SqliteWorkflowRepository {
                 "Workflow run is already terminal or missing".into(),
             ));
         }
+        if run.status.is_terminal() {
+            let (vault_id, workflow_id, payload): (String, String, String) = sqlx::query_as(
+                "SELECT w.vault_id, r.workflow_id, r.payload FROM workflow_runs r
+                 JOIN workflows w ON w.id = r.workflow_id WHERE r.id = ?",
+            )
+            .bind(run.id.to_string())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+            let event = crate::database::workflow_lifecycle::workflow_run_outcome(
+                VaultId(parse_id(&vault_id)?),
+                run.id,
+                parse_id(&workflow_id)?,
+                run.status,
+                &payload,
+            )?;
+            super::insert_domain_event_with_origin(&mut tx, &event, EventOrigin::Workflow).await?;
+        }
+        tx.commit().await.map_err(repo_err)?;
         Ok(())
     }
 
@@ -479,4 +506,22 @@ fn not_found(id: Id) -> Error {
         entity_type: "Workflow",
         id: id.to_string(),
     }
+}
+
+pub(super) async fn publish_cancelled_runs(
+    conn: &mut SqliteConnection,
+    vault: VaultId,
+    runs: Vec<(String, String, String)>,
+) -> Result<()> {
+    for (id, workflow_id, payload) in runs {
+        let event = crate::database::workflow_lifecycle::workflow_run_outcome(
+            vault,
+            parse_id(&id)?,
+            parse_id(&workflow_id)?,
+            RunStatus::Failed,
+            &payload,
+        )?;
+        super::insert_domain_event_with_origin(conn, &event, EventOrigin::Workflow).await?;
+    }
+    Ok(())
 }
