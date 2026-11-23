@@ -84,6 +84,8 @@ struct CustomMetadataWorkflowEditor: View {
                 Text("Any type").tag(CustomFieldKind?.none)
                 ForEach(CustomFieldKind.allCases) { Text($0.label).tag(Optional($0)) }
             }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("metadata-workflow-kind")
             .disabled(fieldID != nil)
             if supportsValues {
                 Picker("Change", selection: $state) {
@@ -142,8 +144,9 @@ struct CustomMetadataWorkflowEditor: View {
     private func save() async {
         guard !saving, let selection = selectedTrigger else { return }
         let supportsValues = selection.supportsValues
-        let compareBefore = supportsValues && state != .set && before.matches
-        let compareAfter = supportsValues && state != .cleared && after.matches
+        let comparesValues = supportsValues && kind != nil
+        let compareBefore = comparesValues && state != .set && before.matches
+        let compareAfter = comparesValues && state != .cleared && after.matches
         let from = compareBefore ? kind.flatMap(before.value) : nil
         let to = compareAfter ? kind.flatMap(after.value) : nil
         if (compareBefore && from == nil) || (compareAfter && to == nil) {

@@ -100,9 +100,21 @@ private final class MetadataWorkflowFixtureService: CustomMetadataWorkflowServic
     }
 
     func createCustomMetadataWorkflow(_ draft: CustomMetadataWorkflowDraft) async throws {
-        guard draft.trigger == "document.metadata.changed",
-            draft.after == .decimal("9007199254740993.01"), draft.kind == .decimal, draft.fieldID != nil
-        else { throw FolioError.unreadableResponse }
+        guard draft.trigger == "document.metadata.changed", draft.before == nil else {
+            throw FolioError.unreadableResponse
+        }
+        switch draft.name {
+        case "Invoice amount":
+            guard draft.after == .decimal("9007199254740993.01"), draft.kind == .decimal, draft.fieldID != nil else {
+                throw FolioError.unreadableResponse
+            }
+        case "Any field change":
+            guard draft.after == nil, draft.kind == nil, draft.fieldID == nil else {
+                throw FolioError.unreadableResponse
+            }
+        default:
+            throw FolioError.unreadableResponse
+        }
         let now = Date()
         created = .init(
             id: UUID(), vaultID: vaultID, name: draft.name, enabled: draft.enabled, trigger: draft.trigger,

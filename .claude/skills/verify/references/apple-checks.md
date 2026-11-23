@@ -213,8 +213,10 @@ Run the isolated FolioKit test
 generated client’s trigger catalog, vault scope, and exact condition encoding.
 Run `CustomMetadataWorkflowUITests` in the isolated NavigationTests fixture.
 Open the editor from Workflows, choose a field lifecycle trigger, switch to a
-document value trigger, and save an exact decimal condition. The fixture
-records the draft in memory and returns the created workflow to the list.
+document value trigger, and save an exact decimal condition. Choose Any type
+after enabling a comparison and verify the workflow saves without that
+comparison. The fixture records each draft in memory and returns the created
+workflow to the list.
 
 ## Apple workflow lifecycle
 
