@@ -856,7 +856,7 @@ fn revision_job_payloads_are_distinct_from_legacy_jobs() {
     assert!(serde_json::from_value::<JobType>(missing_revision).is_err());
 }
 
-async fn revision_jobs_cannot_enqueue_or_prepare_until_fenced(db: &Database) {
+async fn revision_jobs_reject_an_unrelated_revision(db: &Database) {
     let f = Fixture::new(db).await;
     let revision = Uuid::new_v4();
     let (job, _) = f.claim_root().await;
@@ -866,14 +866,16 @@ async fn revision_jobs_cannot_enqueue_or_prepare_until_fenced(db: &Database) {
             f.queue.enqueue(job_type.clone()).await,
             Err(folio_core::Error::Conflict(_))
         ));
-        let unsupported = Job {
+        let mismatched = Job {
             job_type,
             ..job.clone()
         };
-        assert!(matches!(
-            prepare_claim(&f.queue, &unsupported).await,
-            Err(folio_core::Error::Conflict(_))
-        ));
+        let claim = prepare_claim(&f.queue, &mismatched).await;
+        if super::super::REVISION_DISPATCH_ENABLED {
+            assert!(matches!(claim, Ok(ClaimPreparation::Obsolete)));
+        } else {
+            assert!(matches!(claim, Err(folio_core::Error::Conflict(_))));
+        }
     }
 
     assert_eq!(count(db, "SELECT COUNT(*) FROM jobs".into()).await, 1);
@@ -905,10 +907,6 @@ async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
         Err(folio_core::Error::Conflict(_))
     ));
     assert!(matches!(
-        f.queue.enqueue_current_processing(f.vault, f.document, false).await,
-        Err(folio_core::Error::Conflict(message)) if message == "File revision processing is not yet enabled"
-    ));
-    assert!(matches!(
         f.queue.enqueue_processing(f.vault, f.document).await,
         Err(folio_core::Error::Conflict(message)) if message == "Upload revision is no longer current"
     ));
@@ -923,37 +921,54 @@ async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
         revision_id: f.document,
         force: false,
     };
-    let id = Uuid::new_v4();
-    match db {
-        Database::Sqlite(pool) => {
-            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
-            assert!(matches!(
-                super::sqlite::prepare_enqueue(&mut tx, &obsolete, id).await,
-                Err(folio_core::Error::Conflict(_))
-            ));
-            let plan = super::sqlite::prepare_enqueue(&mut tx, &current, id)
-                .await
-                .unwrap();
-            super::sqlite::finish_enqueue(&mut tx, &current, &plan)
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
+    let enabled = super::super::REVISION_DISPATCH_ENABLED;
+    assert!(matches!(
+        f.queue.enqueue(obsolete.clone()).await,
+        Err(folio_core::Error::Conflict(_))
+    ));
+    let id = if enabled {
+        f.queue
+            .enqueue_current_processing(f.vault, f.document, false)
+            .await
+            .unwrap()
+    } else {
+        assert!(matches!(
+            f.queue.enqueue_current_processing(f.vault, f.document, false).await,
+            Err(folio_core::Error::Conflict(message)) if message == "File revision processing is not yet enabled"
+        ));
+        let id = Uuid::new_v4();
+        match db {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+                assert!(matches!(
+                    super::sqlite::prepare_enqueue(&mut tx, &obsolete, id).await,
+                    Err(folio_core::Error::Conflict(_))
+                ));
+                let plan = super::sqlite::prepare_enqueue(&mut tx, &current, id)
+                    .await
+                    .unwrap();
+                super::sqlite::finish_enqueue(&mut tx, &current, &plan)
+                    .await
+                    .unwrap();
+                tx.commit().await.unwrap();
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await.unwrap();
+                assert!(matches!(
+                    super::postgres::prepare_enqueue(&mut tx, &obsolete, id).await,
+                    Err(folio_core::Error::Conflict(_))
+                ));
+                let plan = super::postgres::prepare_enqueue(&mut tx, &current, id)
+                    .await
+                    .unwrap();
+                super::postgres::finish_enqueue(&mut tx, &current, &plan)
+                    .await
+                    .unwrap();
+                tx.commit().await.unwrap();
+            }
         }
-        Database::Postgres(pool) => {
-            let mut tx = pool.begin().await.unwrap();
-            assert!(matches!(
-                super::postgres::prepare_enqueue(&mut tx, &obsolete, id).await,
-                Err(folio_core::Error::Conflict(_))
-            ));
-            let plan = super::postgres::prepare_enqueue(&mut tx, &current, id)
-                .await
-                .unwrap();
-            super::postgres::finish_enqueue(&mut tx, &current, &plan)
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-        }
-    }
+        id
+    };
     assert_eq!(
         f.rows(&format!(
             "group_id = '{id}' AND is_current AND revision_id = '{revision}'"
@@ -966,19 +981,23 @@ async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
         "UPDATE documents SET content = 'indexable text', ocr_status = 'done', embed_status = 'done' WHERE id = '{}'",
         f.document
     )).await;
-    f.queue.reembed_documents().await.unwrap();
+    assert_eq!(
+        f.queue.reembed_documents().await.unwrap(),
+        usize::from(enabled)
+    );
+    let expected_embedding = if enabled { "pending" } else { "done" };
     assert_eq!(
         count(
             db,
             format!(
-                "SELECT COUNT(*) FROM documents WHERE id = '{}' AND embed_status = 'done'",
+                "SELECT COUNT(*) FROM documents WHERE id = '{}' AND embed_status = '{expected_embedding}'",
                 f.document
             )
         )
         .await,
         1
     );
-    assert_eq!(f.rows("TRUE").await, 3);
+    assert_eq!(f.rows("TRUE").await, if enabled { 4 } else { 3 });
 
     execute(
         db,
@@ -990,15 +1009,30 @@ async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
     .await;
     let documents = db.repositories().await.documents;
     documents.delete(f.vault, f.document).await.unwrap();
-    assert!(matches!(
-        documents.restore(f.vault, f.document).await,
-        Err(folio_core::Error::Conflict(message)) if message == "File revision processing is not yet enabled"
-    ));
-    assert!(documents
-        .find_trashed_by_id(f.vault, f.document)
-        .await
-        .unwrap()
-        .is_some());
+    let restored = documents.restore(f.vault, f.document).await;
+    if enabled {
+        restored.unwrap();
+        assert!(documents
+            .find_by_id(f.vault, f.document)
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            f.rows(&format!("is_current AND revision_id = '{revision}'"))
+                .await,
+            3
+        );
+    } else {
+        assert!(matches!(
+            restored,
+            Err(folio_core::Error::Conflict(message)) if message == "File revision processing is not yet enabled"
+        ));
+        assert!(documents
+            .find_trashed_by_id(f.vault, f.document)
+            .await
+            .unwrap()
+            .is_some());
+    }
 }
 
 #[tokio::test]
@@ -1129,7 +1163,7 @@ fn upload_processing_keeps_the_first_revision_across_dispatch_modes() {
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
     repair_enqueues_only_for_live_idle_pending_work(db).await;
-    revision_jobs_cannot_enqueue_or_prepare_until_fenced(db).await;
+    revision_jobs_reject_an_unrelated_revision(db).await;
     revision_enqueue_plan_seeds_only_the_current_revision(db).await;
     partial_supersession_keeps_the_current_parent_stage_live(db).await;
     legacy_claim_rejects_a_forged_in_memory_document(db).await;
