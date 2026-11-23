@@ -85,6 +85,10 @@ use crate::routes::{
         crate::routes::trash::purge,
         documents::upload_document,
         documents::download_document,
+        crate::routes::document_export::export_document,
+        crate::routes::archive::status,
+        crate::routes::archive::request,
+        crate::routes::archive::download,
         documents::document_thumbnail,
         documents::search_documents_get,
         documents::search_documents,
@@ -180,6 +184,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     };
     let mut spec = ApiDoc::openapi();
     let components = spec.components.get_or_insert_with(Default::default);
+    describe_metadata_nulls(components);
     components.add_security_scheme("bearerAuth", SecurityScheme::Http(
         HttpBuilder::new().scheme(HttpAuthScheme::Bearer)
             .bearer_format("opaque")
@@ -261,6 +266,55 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         }
     }
     spec
+}
+
+fn describe_metadata_nulls(components: &mut utoipa::openapi::Components) {
+    use utoipa::openapi::{
+        schema::{ObjectBuilder, OneOfBuilder, Schema, SchemaType, Type},
+        RefOr,
+    };
+
+    // The Swift generator supports a null-only enum in a union but drops bare null types.
+    let null = ObjectBuilder::new()
+        .schema_type(SchemaType::AnyValue)
+        .enum_values(Some([serde_json::Value::Null]))
+        .build();
+    for (name, property) in [
+        ("DocumentMetadataValue", "value"),
+        ("DocumentMetadataValue", "link_target"),
+        ("MetadataChange", "value"),
+    ] {
+        if let Some(RefOr::T(Schema::Object(object))) = components.schemas.get_mut(name) {
+            if let Some(RefOr::T(Schema::OneOf(choices))) = object.properties.get_mut(property) {
+                for item in &mut choices.items {
+                    if matches!(item, RefOr::T(Schema::Object(leaf)) if leaf.schema_type == Type::Null.into())
+                    {
+                        *item = null.clone().into();
+                    }
+                }
+            }
+        }
+    }
+    if let Some(RefOr::T(Schema::Object(object))) =
+        components.schemas.get_mut("PatchDocumentMetadata")
+    {
+        if let Some(RefOr::T(Schema::Object(revision))) = object.properties.get("revision") {
+            let mut uuid = revision.clone();
+            uuid.schema_type = Type::String.into();
+            let description = uuid.description.take();
+            object.properties.insert(
+                "revision".into(),
+                Schema::OneOf(
+                    OneOfBuilder::new()
+                        .item(uuid)
+                        .item(null)
+                        .description(description)
+                        .build(),
+                )
+                .into(),
+            );
+        }
+    }
 }
 
 /// The spec as pretty-printed JSON, built once: the document never changes while running.

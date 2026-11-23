@@ -155,6 +155,59 @@ private let documentJSON = """
         }
     }
 
+    @Test func customMetadataUsesExactValuesAndExplicitNullsThroughTheGeneratedClient() async throws {
+        let vault = UUID()
+        let document = UUID()
+        let field = UUID()
+        let revision = UUID()
+        let service = try #require(makeService().scoped(to: vault) as? any CustomMetadataService)
+        let amount = "9007199254740993.01"
+        let path = "/api/vaults/\(vault.uuidString.lowercased())/documents/\(document.uuidString.lowercased())/metadata"
+        let amountJSON = """
+            {"kind":"decimal","value":"\(amount)"}
+            """
+        let response: (String) -> StubURLProtocol.Reply = { value in
+            .init(
+                body: Data(
+                    """
+                    {"document_id":"\(document)","revision":"\(revision)","values":[{
+                      "field_id":"\(field)","value":\(value),"link_target":null,
+                      "created_at":"2026-11-01T12:00:00Z","updated_at":"2026-11-01T12:00:00Z"
+                    }]}
+                    """.utf8))
+        }
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url?.path == path)
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let payload = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            #expect(payload?["revision"] is NSNull)
+            let change = (payload?["changes"] as? [[String: Any]])?.first
+            #expect(change?["field_id"] as? String == field.uuidString.lowercased())
+            let value = change?["value"] as? [String: String]
+            #expect(value == ["kind": "decimal", "value": amount])
+            return response(amountJSON)
+        }
+        let assigned = try await service.setCustomValue(
+            documentID: document, revision: nil, fieldID: field, value: .decimal(amount)
+        )
+        #expect(assigned.revision == revision)
+        #expect(assigned.values == [.init(fieldID: field, value: .decimal(amount))])
+
+        StubURLProtocol.handler = { request, body in
+            #expect(request.url?.path == path)
+            let payload = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            #expect(payload?["revision"] as? String == revision.uuidString.lowercased())
+            let change = (payload?["changes"] as? [[String: Any]])?.first
+            #expect(change?["value"] is NSNull)
+            return response("null")
+        }
+        let cleared = try await service.setCustomValue(
+            documentID: document, revision: revision, fieldID: field, value: nil
+        )
+        #expect(cleared.values == [.init(fieldID: field, value: nil)])
+    }
+
     @Test func clearingDocumentDateSendsExplicitNullInTheSelectedVault() async throws {
         let vault = UUID()
         let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!

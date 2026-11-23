@@ -65,7 +65,9 @@ fn stages(job: &JobType) -> &'static [&'static str] {
         JobType::GenerateEmbedding { .. } | JobType::GenerateRevisionEmbedding { .. } => {
             &["embedding"]
         }
-        JobType::PurgeDocument { .. } | JobType::ExecuteWorkflowRun { .. } => &[],
+        JobType::PurgeDocument { .. }
+        | JobType::ExecuteWorkflowRun { .. }
+        | JobType::GenerateArchive { .. } => &[],
     }
 }
 

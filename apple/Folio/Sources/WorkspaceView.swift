@@ -11,6 +11,7 @@ struct WorkspaceView: View {
     let takeContinuation: () -> HandoffRoute?
     @State private var showVaultManagement = false
     @State private var showTaxonomy = false
+    @State private var showCustomFields = false
     @State private var showSavedViewEditor = false
     @State private var editingSavedView: SavedView?
     @State private var pendingViewDelete: SavedView?
@@ -157,8 +158,14 @@ struct WorkspaceView: View {
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showTaxonomy = false } } }
             }
         }
+        .sheet(isPresented: $showCustomFields) {
+            if let metadata = workspace.service as? any CustomMetadataService {
+                CustomFieldsManager(metadata: metadata, canManage: workspace.canEdit)
+            }
+        }
         .onChange(of: workspace.selectedVaultID) {
             showTaxonomy = false
+            showCustomFields = false
             activityVault = nil
             workflowVault = nil
         }
@@ -249,6 +256,13 @@ struct WorkspaceView: View {
                     showVaultManagement = true
                 } label: {
                     Label("Vaults", systemImage: "archivebox")
+                }
+            }
+            if workspace.service is any CustomMetadataService {
+                Button {
+                    showCustomFields = true
+                } label: {
+                    Label("Fields", systemImage: "list.bullet.rectangle")
                 }
             }
             if workspace.selectedVault?.role == .owner, service is any SourceActivityService {

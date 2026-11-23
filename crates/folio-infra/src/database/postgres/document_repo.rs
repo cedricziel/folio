@@ -583,6 +583,40 @@ pub(super) fn push_filter(
     Ok(())
 }
 
+impl PostgresDocumentRepository {
+    pub(in crate::database) async fn export_document(
+        &self,
+        source: &folio_core::models::ArchiveSource,
+        text_limit: i64,
+        metadata_limit: i64,
+    ) -> Result<Option<Document>> {
+        let row: Option<DocumentRow> = sqlx::query_as(select_documents!(
+            "WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL
+               AND current_revision_id = $3 AND file_path = $4
+               AND COALESCE(octet_length(content), 0) <= $5
+               AND COALESCE(octet_length(title), 0)
+                   + COALESCE(octet_length(original_filename), 0)
+                   + COALESCE(octet_length(source_meta::text), 0)
+                   + COALESCE(octet_length(mime_type), 0)
+                   + COALESCE(octet_length(uploaded_by), 0)
+                   + COALESCE(octet_length(created_by), 0)
+                   + COALESCE(octet_length(updated_by), 0)
+                   + COALESCE(octet_length(reviewed_by), 0) <= $6"
+        ))
+        .bind(source.document_id)
+        .bind(source.vault_id.0)
+        .bind(source.revision_id)
+        .bind(&source.original.storage_key)
+        .bind(text_limit)
+        .bind(metadata_limit)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+}
+
 #[async_trait]
 impl DocumentRepository for PostgresDocumentRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {

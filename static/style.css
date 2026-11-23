@@ -790,6 +790,42 @@ fieldset.field {
   align-items: center;
   gap: var(--space-3);
 }
+.condition-group,
+.condition-branch {
+  min-width: 0;
+  margin: var(--space-2) 0;
+  padding: var(--space-2) min(var(--space-3), 1.25%);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+}
+.condition-branch > .heading {
+  color: var(--ink-muted);
+}
+.condition-fields > summary,
+.condition-add {
+  margin-block: var(--space-2);
+}
+.condition-add,
+.condition-fields .input-row {
+  flex-wrap: wrap;
+}
+.condition-add > .select {
+  flex: 1 1 min(100%, 9rem);
+  min-width: 0;
+}
+.condition-fields .field {
+  min-width: 0;
+}
+.condition-add > .f-btn,
+.condition-controls > .f-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.condition-controls {
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+
 .settings-card {
   max-width: 640px;
 }

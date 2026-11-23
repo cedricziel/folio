@@ -14,9 +14,6 @@ pub const TIMEOUT: Duration = Duration::from_secs(10);
 
 const USER_AGENT: &str = concat!("Folio-Webhooks/", env!("CARGO_PKG_VERSION"));
 
-/// How much of an error response body is kept in `last_error`
-const ERROR_BODY_LIMIT: usize = 200;
-
 /// `sha256=<hex>` HMAC of `<timestamp>.<body>`, as sent in `X-Folio-Signature`
 pub fn sign(secret: &str, timestamp: i64, body: &str) -> String {
     let mut mac =
@@ -146,7 +143,7 @@ impl WebhookClient {
             );
         }
 
-        let mut response = self
+        let response = self
             .client
             .post(request.url)
             .headers(headers)
@@ -156,23 +153,8 @@ impl WebhookClient {
             .map_err(|e| Failure::transient(describe(e.without_url())))?;
 
         let status = response.status();
-        if status.is_success() {
-            return Ok((status.as_u16(), None));
-        }
-
-        let snippet = match response.chunk().await {
-            Ok(Some(chunk)) => {
-                let end = chunk.len().min(ERROR_BODY_LIMIT);
-                String::from_utf8_lossy(&chunk[..end]).trim().to_string()
-            }
-            _ => String::new(),
-        };
-        let message = if snippet.is_empty() {
-            format!("HTTP {status}")
-        } else {
-            format!("HTTP {status}: {snippet}")
-        };
-        Ok((status.as_u16(), Some(message)))
+        let error = (!status.is_success()).then(|| format!("HTTP {}", status.as_u16()));
+        Ok((status.as_u16(), error))
     }
 }
 

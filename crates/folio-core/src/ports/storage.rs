@@ -148,10 +148,30 @@ pub trait DocumentStore: Send + Sync {
     async fn put(&self, key: &str, data: Bytes) -> Result<()>;
 
     /// Atomically create an object. Returns false if the key already exists.
+    /// A successful create acknowledges the only write. Implementations must
+    /// not replay a potentially in-flight write after an ambiguous response.
+    /// An error or cancellation can still leave an in-flight write.
     async fn put_if_absent(&self, _key: &str, _data: Bytes) -> Result<bool> {
         Err(Error::Storage(
             "Storage does not support create-only writes".into(),
         ))
+    }
+
+    /// Clear temporary files from a completed create while preserving its object.
+    /// The caller must own the key exclusively.
+    async fn clear_create_staging(&self, _key: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Delete an abandoned create's object and any temporary files for its key.
+    /// The caller must fence publication and repeat cleanup for unsettled
+    /// writes, which can still leave files after this call returns.
+    async fn discard_create(&self, key: &str, write_settled: bool) -> Result<()> {
+        self.clear_create_staging(key).await?;
+        if write_settled || self.exists(key).await? {
+            self.delete(key).await?;
+        }
+        Ok(())
     }
 
     /// Open an object for streaming. Missing keys yield [`Error::NotFound`].

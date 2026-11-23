@@ -177,6 +177,8 @@
             </fieldset>
         </fieldset>
 
+        {% include "workflow_condition_editor.html" %}
+
         <p class="f-notice" data-workflow-form-target="discard" hidden>
             Files that match are discarded instead of imported. Nothing else to set up.
         </p>
@@ -267,6 +269,8 @@
                         <dt>Time</dt><dd>{{ run.created }}</dd>
                         <dt>Document</dt><dd>{{ run.document }}</dd>
                         <dt>Attempts</dt><dd>{{ run.attempts }}</dd>
+                        <dt>Completed actions</dt><dd>{{ run.completed_actions }}</dd>
+                        {% match run.finished %}{% when Some with (finished) %}<dt>Finished</dt><dd>{{ finished }}</dd>{% when None %}{% endmatch %}
                         {% match run.response_status %}{% when Some with (s) %}<dt>HTTP</dt><dd>{{ s }}</dd>{% when None %}{% endmatch %}
                     </dl>
                     {% match run.error %}{% when Some with (e) %}<p class="f-meta">{{ e }}</p>{% when None %}{% endmatch %}

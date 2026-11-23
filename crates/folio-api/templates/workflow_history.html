@@ -25,7 +25,12 @@
         <div class="f-row f-row-plain">
             <div class="row-main">
                 <div class="f-row-sub"><span>{{ run.event }}</span> <span class="f-status {{ run.status_class }}">{{ run.status_label }}</span> <span class="f-meta">{{ run.created }}</span></div>
-                <div class="f-row-sub"><span class="f-meta">{{ run.attempts }} attempts</span>{% match run.response_status %}{% when Some with (status) %}<span class="f-meta">HTTP {{ status }}</span>{% when None %}{% endmatch %}</div>
+                <dl class="f-meta-list">
+                    <dt>Attempts</dt><dd>{{ run.attempts }}</dd>
+                    <dt>Completed actions</dt><dd>{{ run.completed_actions }}</dd>
+                    {% match run.response_status %}{% when Some with (status) %}<dt>HTTP</dt><dd>{{ status }}</dd>{% when None %}{% endmatch %}
+                    {% match run.finished %}{% when Some with (finished) %}<dt>Finished</dt><dd>{{ finished }}</dd>{% when None %}{% endmatch %}
+                </dl>
                 {% match run.error %}{% when Some with (error) %}<p>{{ error }}</p>{% when None %}{% endmatch %}
             </div>
         </div>

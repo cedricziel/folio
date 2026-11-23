@@ -21,6 +21,11 @@ typealias Document = FolioKit.Document
                 ShareLayoutFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--processing-state") {
                 ProcessingStateFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--custom-metadata") {
+                CustomMetadataFixture(
+                    documents: service,
+                    canEdit: !ProcessInfo.processInfo.arguments.contains("--read-only")
+                )
             } else if ProcessInfo.processInfo.arguments.contains("--saved-views") {
                 SavedViewsFixture(service: service)
             } else {
