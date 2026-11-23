@@ -419,6 +419,25 @@ extension JSONDecoder {
         #expect(model.preview == .ready(URL(filePath: "/tmp/bill.pdf")))
     }
 
+    @Test func revisionPublicationRefreshesTheCurrentPreviewAndMetadata() async {
+        let service = MockFolioService()
+        let original = Document(
+            title: "Bill", originalFilename: "first.pdf", updatedAt: Date(timeIntervalSince1970: 100))
+        let model = DocumentDetailViewModel(document: original, service: service)
+        await model.loadPreview()
+        #expect(model.preview == .ready(URL(filePath: "/tmp/first.pdf")))
+
+        var replacement = original
+        replacement.originalFilename = "second.pdf"
+        replacement.updatedAt = Date(timeIntervalSince1970: 200)
+        await service.setDocuments([replacement])
+        await model.refreshAfterFilePublication()
+
+        #expect(model.preview == .ready(URL(filePath: "/tmp/second.pdf")))
+        #expect(model.metadata.first { $0.label == "File" }?.value == "second.pdf")
+        #expect(await service.downloads == 2)
+    }
+
     @Test func failedPreviewCanRetryWithoutRestartingTheApp() async {
         let service = MockFolioService()
         await service.setFailure(.unreachable)
@@ -431,6 +450,27 @@ extension JSONDecoder {
         await service.setFailure(nil)
         await model.loadPreview()
         #expect(model.preview == .ready(URL(filePath: "/tmp/bill.pdf")))
+    }
+
+    @Test func revisionPublicationSupersedesAnEarlierPreviewDownload() async {
+        let service = MockFolioService()
+        let original = Document(
+            title: "Bill", originalFilename: "first.pdf", updatedAt: Date(timeIntervalSince1970: 100))
+        let model = DocumentDetailViewModel(document: original, service: service)
+        await service.holdNextFileDownload()
+        let oldLoad = Task { await model.loadPreview() }
+        await service.waitForHeldFileDownload()
+
+        var replacement = original
+        replacement.originalFilename = "second.pdf"
+        replacement.updatedAt = Date(timeIntervalSince1970: 200)
+        await service.setDocuments([replacement])
+        await model.refreshAfterFilePublication()
+        await service.releaseHeldFileDownload()
+        await oldLoad.value
+
+        #expect(model.preview == .ready(URL(filePath: "/tmp/second.pdf")))
+        #expect(await service.downloads == 2)
     }
 
     @Test func refreshedListDataUpdatesTheSameDocumentAndKeepsThePreview() async {
@@ -773,7 +813,8 @@ extension JSONDecoder {
         let route = HandoffRoute(vaultID: UUID(), target: .document(UUID()))
         let window = UUID()
         let inbox = ContinuationInbox()
-        inbox.receive(.payload(HandoffPayload(server: server, vaultID: route.vaultID, target: route.target)), scene: window)
+        inbox.receive(
+            .payload(HandoffPayload(server: server, vaultID: route.vaultID, target: route.target)), scene: window)
         guard case let .signIn(prefill, _) = inbox.decision(isLocked: false, session: .signedOut) else {
             Issue.record("expected a sign-in decision")
             return

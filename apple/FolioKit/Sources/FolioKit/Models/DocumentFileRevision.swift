@@ -20,4 +20,5 @@ public struct DocumentFileRevision: Identifiable, Equatable, Sendable {
 public struct DocumentFileRevisionPage: Equatable, Sendable {
     public let revisions: [DocumentFileRevision]
     public let nextBefore: Int64?
+    public let publicationEnabled: Bool
 }
