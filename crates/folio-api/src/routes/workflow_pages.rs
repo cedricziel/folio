@@ -10,14 +10,14 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use folio_core::models::{
     Id, MetadataChangeState, MetadataKind, MetadataValue, RunStatus, SourceConditions, SourceKind,
     TextMatch, UserId, WebhookMethod, Workflow, WorkflowAction, WorkflowActorCondition,
-    WorkflowEventConditions, WorkflowIngestConditions, WorkflowInput, WorkflowMetadataConditions,
-    WorkflowRun, WorkflowTrigger, WorkflowTriggerRegistry,
+    WorkflowConditions, WorkflowEventConditions, WorkflowIngestConditions, WorkflowInput,
+    WorkflowMetadataConditions, WorkflowRun, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 
 use super::workflows::{find, find_retained, send_test, WorkflowListQuery, SECRET_MASK};
@@ -211,6 +211,7 @@ struct FormValues {
     name: String,
     trigger: String,
     enabled: Option<String>,
+    condition_groups: Option<String>,
     mime_type: String,
     tag_id: String,
     correspondent_id: String,
@@ -251,6 +252,33 @@ struct FormValues {
     /// `action_tag_<id>` checkboxes: the urlencoded form cannot repeat a key
     #[serde(flatten)]
     checkboxes: HashMap<String, String>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct ConditionGroups {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    all: Vec<WorkflowConditions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    any: Option<Vec<WorkflowConditions>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    none: Vec<WorkflowConditions>,
+}
+
+impl ConditionGroups {
+    fn from_conditions(conditions: &WorkflowConditions) -> Self {
+        Self {
+            all: conditions.all.clone(),
+            any: conditions.any.clone(),
+            none: conditions.none.clone(),
+        }
+    }
+
+    fn apply(self, conditions: &mut WorkflowConditions) {
+        conditions.all = self.all;
+        conditions.any = self.any;
+        conditions.none = self.none;
+    }
 }
 
 const TAG_FIELD: &str = "action_tag_";
@@ -607,6 +635,11 @@ impl FormValues {
             .map(|workflow| workflow.conditions.clone())
             .unwrap_or_default();
         conditions.event = event;
+        if let Some(groups) = &self.condition_groups {
+            serde_json::from_str::<ConditionGroups>(groups)
+                .map_err(|_| "Check the values in the nested condition groups.")?
+                .apply(&mut conditions);
+        }
         if trigger.entry_transition().is_none()
             && !trigger.is_ingest_outcome()
             && !trigger.is_custom_metadata()
@@ -799,6 +832,7 @@ struct FormTemplate {
     has_secret: bool,
     secret_mask: &'static str,
     triggers: Vec<Choice>,
+    condition_groups: String,
     metadata_fields: Vec<Choice>,
     metadata_kinds: Vec<Choice>,
     metadata_states: Vec<Choice>,
@@ -867,7 +901,18 @@ async fn build_form(
             |(_, a)| matches!(a, WorkflowAction::Webhook { secret: Some(s), .. } if !s.is_empty()),
         );
 
+    let condition_groups = match values.condition_groups.as_deref() {
+        Some(draft) if serde_json::from_str::<serde_json::Value>(draft).is_ok() => draft.to_owned(),
+        _ => serde_json::to_string(
+            &workflow
+                .map(|w| ConditionGroups::from_conditions(&w.conditions))
+                .unwrap_or_default(),
+        )
+        .map_err(|error| ApiError::internal(error.to_string()))?,
+    };
+
     Ok(FormTemplate {
+        condition_groups,
         sidebar: Sidebar::load(state, vault, Nav::Workflows).await?,
         title: format!(
             "{} - Folio",
