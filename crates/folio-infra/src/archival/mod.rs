@@ -37,6 +37,7 @@ pub struct ValidatedArchive {
 pub enum Tool {
     Qpdf,
     PdfToText,
+    PdfImages,
     OcrMyPdf,
     VeraPdf,
 }
@@ -81,6 +82,7 @@ pub struct ArchiveConverter {
 pub struct ToolPaths {
     pub qpdf: PathBuf,
     pub pdftotext: PathBuf,
+    pub pdfimages: PathBuf,
     pub ocrmypdf: PathBuf,
     pub verapdf: PathBuf,
 }
@@ -90,6 +92,7 @@ impl Default for ToolPaths {
         Self {
             qpdf: "qpdf".into(),
             pdftotext: "pdftotext".into(),
+            pdfimages: "pdfimages".into(),
             ocrmypdf: "ocrmypdf".into(),
             verapdf: "verapdf".into(),
         }
@@ -145,9 +148,11 @@ impl ArchiveConverter {
                 .map_err(|_| SkipReason::TemporaryStorage)??;
         }
 
-        let source_pages = if input_name == "source.pdf" {
+        let (source_pages, ocr_mode) = if input_name == "source.pdf" {
             let pages = self.inspect_pdf(&work, &input).await?;
-            if let Some(version) = self.validate(&work, &input, source.len() as u64).await? {
+            let has_images = self.has_images(&work, &input).await?;
+            let validation = self.validate(&work, &input, source.len() as u64).await?;
+            if let Some(version) = validation.filter(|_| !has_images) {
                 if self.has_text_on_each_page(&work, &input, pages).await {
                     return Ok(ValidatedArchive {
                         bytes: source.to_vec(),
@@ -157,9 +162,14 @@ impl ArchiveConverter {
                     });
                 }
             }
-            Some(pages)
+            let mode = if has_images {
+                "--redo-ocr"
+            } else {
+                "--skip-text"
+            };
+            (Some(pages), mode)
         } else {
-            None
+            (None, "--skip-text")
         };
 
         let version = self
@@ -175,7 +185,7 @@ impl ArchiveConverter {
         command.args([
             "--output-type",
             "pdfa-2",
-            "--skip-text",
+            ocr_mode,
             "--optimize",
             "0",
             "--pdfa-image-compression",
@@ -244,6 +254,7 @@ impl ArchiveConverter {
         let path = match tool {
             Tool::Qpdf => &self.tools.qpdf,
             Tool::PdfToText => &self.tools.pdftotext,
+            Tool::PdfImages => &self.tools.pdfimages,
             Tool::OcrMyPdf => &self.tools.ocrmypdf,
             Tool::VeraPdf => &self.tools.verapdf,
         };

@@ -36,21 +36,25 @@ Settings: `ocr.provider`, `ocr.model` (empty = provider default),
 ## PDF/A converter
 
 The document-level converter accepts PDF, JPEG, PNG and TIFF. It uses
-OCRmyPDF's skip-text mode to preserve digital pages and add text to scanned
-pages. Images are imported at 300 DPI. Transparent PNG pixels are composited
-over a white background. For PDFs, qpdf checks the object
-structure before conversion. Encrypted PDFs and PDFs containing signature or
-embedded attachment objects are skipped.
+OCRmyPDF to add text to scanned pages and to scanned regions on pages with
+digital text. Existing visible text and vector content are preserved. OCRmyPDF
+can replace an existing invisible OCR layer and skips unsupported conversions
+such as raster-bearing PDFs with fillable forms.
+
+Images are imported at 300 DPI. Transparent PNG pixels are composited over a
+white background. For PDFs, qpdf checks the object structure before conversion.
+Encrypted PDFs and PDFs containing signature or embedded attachment objects
+are skipped.
 
 veraPDF checks each candidate against PDF/A-2b. The converter can reuse
-the exact source bytes when that source passes the same check and has
-extractable text on every page. A successful result includes the validation
-profile and tool versions. Any skip or tool failure leaves the source available
-to the caller and produces no archival copy.
+the exact source bytes when that source passes the same check, contains no
+raster images, and has extractable text on every page. A successful result
+includes the validation profile and tool versions. Any skip or tool failure
+leaves the source available to the caller and produces no archival copy.
 
 The Folio container includes the tools. Native Unix installations need qpdf
-11+, Poppler's `pdftotext`, OCRmyPDF and its Tesseract language packs, and
-the veraPDF CLI with Java on the service's PATH.
+11+, Poppler's `pdftotext` and `pdfimages`, OCRmyPDF and its Tesseract
+language packs, and the veraPDF CLI with Java on the service's PATH.
 [veraPDF installation guide](https://docs.verapdf.org/install/)
 
 The converter uses a private temporary directory and caps input and

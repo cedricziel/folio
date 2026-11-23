@@ -225,7 +225,14 @@ fn fixture_command(command: &mut StdCommand) -> Vec<u8> {
 
 #[tokio::test]
 async fn real_archival_tools_keep_digital_text_and_ocr_a_scan() {
-    if !real_tools_available(&["qpdf", "pdftotext", "pdftoppm", "ocrmypdf", "verapdf"]) {
+    if !real_tools_available(&[
+        "qpdf",
+        "pdftotext",
+        "pdfimages",
+        "pdftoppm",
+        "ocrmypdf",
+        "verapdf",
+    ]) {
         return;
     }
     let converter = ArchiveConverter::new("eng");
@@ -250,11 +257,15 @@ async fn real_archival_tools_keep_digital_text_and_ocr_a_scan() {
     );
     assert_eq!(String::from_utf8_lossy(&images).lines().count(), 2);
 
-    let reused = converter
-        .convert(&archive.bytes, "application/pdf")
+    let digital = converter
+        .convert(&tiny_pdf("Searchable digital page"), "application/pdf")
         .await
         .unwrap();
-    assert_eq!(reused.bytes, archive.bytes);
+    let reused = converter
+        .convert(&digital.bytes, "application/pdf")
+        .await
+        .unwrap();
+    assert_eq!(reused.bytes, digital.bytes);
     assert_eq!(reused.ocrmypdf_version, None);
 
     for (flag, ext, mime) in [
@@ -293,6 +304,66 @@ async fn real_archival_tools_keep_digital_text_and_ocr_a_scan() {
         .unwrap();
     let text = crate::ai::pdf::text_layer(&archive.bytes).await.unwrap();
     assert!(text[0].contains("Cobalt Orchard 9716"), "{text:?}");
+}
+
+#[tokio::test]
+async fn real_archival_tools_ocr_a_scan_that_shares_a_page_with_digital_text() {
+    if !real_tools_available(&["qpdf", "pdftotext", "pdfimages", "ocrmypdf", "verapdf"]) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("original.pdf");
+    let overlay = dir.path().join("overlay.pdf");
+    let mixed = dir.path().join("mixed.pdf");
+    let partly_searchable = dir.path().join("partly-searchable.pdf");
+    std::fs::write(&original, MIXED).unwrap();
+    std::fs::write(&overlay, tiny_pdf("Digital page header 2036")).unwrap();
+    fixture_command(
+        StdCommand::new("qpdf")
+            .arg(&original)
+            .arg("--overlay")
+            .arg(&overlay)
+            .args(["--to=3", "--"])
+            .arg(&mixed),
+    );
+    fixture_command(
+        StdCommand::new("ocrmypdf")
+            .args([
+                "--skip-text",
+                "--output-type",
+                "pdfa-2",
+                "--optimize",
+                "0",
+                "--pdfa-image-compression",
+                "lossless",
+                "--jobs",
+                "1",
+            ])
+            .arg(&mixed)
+            .arg(&partly_searchable),
+    );
+
+    let source = std::fs::read(&partly_searchable).unwrap();
+    let before = crate::ai::pdf::text_layer(&source).await.unwrap();
+    assert!(before[2].contains("Digital page header 2036"), "{before:?}");
+    assert!(!before[2].contains("Cobalt Orchard 9716"), "{before:?}");
+    let converter = ArchiveConverter::new("eng");
+    assert!(converter
+        .validate(dir.path(), &partly_searchable, source.len() as u64)
+        .await
+        .unwrap()
+        .is_some());
+
+    let archive = converter.convert(&source, "application/pdf").await.unwrap();
+    assert_eq!(archive.profile, PROFILE);
+    assert!(archive.ocrmypdf_version.is_some());
+    let after = crate::ai::pdf::text_layer(&archive.bytes).await.unwrap();
+    assert_eq!(
+        after[2].matches("Digital page header 2036").count(),
+        1,
+        "{after:?}"
+    );
+    assert!(after[2].contains("Cobalt Orchard 9716"), "{after:?}");
 }
 
 #[tokio::test]

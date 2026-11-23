@@ -41,6 +41,30 @@ impl ArchiveConverter {
         inspect_structure(&output.stdout)
     }
 
+    pub(super) async fn has_images(&self, work: &Path, input: &Path) -> Result<bool, SkipReason> {
+        let output = run_command(
+            Tool::PdfImages,
+            self.command(Tool::PdfImages, work)
+                .env("LC_ALL", "C")
+                .arg("-list")
+                .arg(input),
+            INFO_TIMEOUT,
+        )
+        .await?;
+        if !output.status.success() {
+            return Err(SkipReason::ToolFailed(Tool::PdfImages));
+        }
+        let list = std::str::from_utf8(&output.stdout)
+            .map_err(|_| SkipReason::ToolFailed(Tool::PdfImages))?;
+        let mut lines = list.lines();
+        if lines.next().and_then(|line| line.split_whitespace().next()) != Some("page")
+            || !lines.next().is_some_and(|line| line.starts_with("---"))
+        {
+            return Err(SkipReason::ToolFailed(Tool::PdfImages));
+        }
+        Ok(lines.next().is_some())
+    }
+
     pub(super) async fn has_text_on_each_page(
         &self,
         work: &Path,
