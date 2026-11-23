@@ -85,14 +85,19 @@ import XCTest
         app.launch()
         try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
-        for destination in ["All documents", "Inbox", "Inbox", "All documents", "All documents", "Inbox"] {
+        let inbox = ("inbox", "Inbox")
+        let all = ("all", "All documents")
+        for (id, title) in [all, inbox, inbox, all, all, inbox] {
             returnToSidebar(in: app)
-            let row = app.buttons[destination].firstMatch
-            XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+            let row = app.buttons["workspace-destination-\(id)"].firstMatch
+            guard row.waitForExistence(timeout: 5) else {
+                XCTFail("The sidebar must show the \(title) destination after returning.")
+                return
+            }
             row.tap()
             XCTAssertTrue(
-                app.navigationBars[destination].waitForExistence(timeout: 5),
-                "Tapping \(destination) in the sidebar must open it.\n\(app.debugDescription)"
+                app.navigationBars[title].waitForExistence(timeout: 5),
+                "Tapping \(title) in the sidebar must open it."
             )
         }
     }
@@ -342,9 +347,11 @@ import XCTest
 
     /// Goes back to the sidebar, repeating once when the first tap lands during the push animation.
     private func returnToSidebar(in app: XCUIApplication) {
+        let sidebarTitle = app.navigationBars["Folio"]
         navigateBack(in: app)
-        if !app.navigationBars["Folio"].waitForExistence(timeout: 3) { navigateBack(in: app) }
-        XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
+        if sidebarTitle.waitForExistence(timeout: 3) { return }
+        navigateBack(in: app)
+        XCTAssertTrue(sidebarTitle.waitForExistence(timeout: 5), "The Folio sidebar must reopen.")
     }
 
     /// The iOS 27.1 runtime reports the bar's back button as `Other` to type queries and gives it no identifier,

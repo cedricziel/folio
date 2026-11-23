@@ -58,6 +58,7 @@ struct WorkspaceView: View {
                         NavigationLink(value: SidebarItem.destination(destination)) {
                             Label(destination.title, systemImage: destination.systemImage)
                         }
+                        .accessibilityIdentifier("workspace-destination-\(destination.rawValue)")
                     }
                 }
                 .disabled(!workspace.isReady || workspace.selectedVaultID == nil)
