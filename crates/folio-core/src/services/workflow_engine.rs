@@ -69,11 +69,10 @@ impl WorkflowEngine {
             DocumentEvent::Processed { .. } => Some(WorkflowTrigger::DocumentProcessed),
             DocumentEvent::Updated { .. } => Some(WorkflowTrigger::DocumentUpdated),
             DocumentEvent::Deleted { .. } => Some(WorkflowTrigger::DocumentDeleted),
-            DocumentEvent::ThumbnailReady { .. }
-            | DocumentEvent::OcrComplete { .. }
-            | DocumentEvent::Trashed { .. }
-            | DocumentEvent::PurgeRequested { .. }
-            | DocumentEvent::Restored { .. } => None,
+            DocumentEvent::Trashed { .. } => Some(WorkflowTrigger::DocumentTrashed),
+            DocumentEvent::Restored { .. } => Some(WorkflowTrigger::DocumentRestored),
+            DocumentEvent::PurgeRequested { .. } => Some(WorkflowTrigger::DocumentPurgeRequested),
+            DocumentEvent::ThumbnailReady { .. } | DocumentEvent::OcrComplete { .. } => None,
         }
     }
 
@@ -204,7 +203,14 @@ impl WorkflowEngine {
         trigger: WorkflowTrigger,
         use_projection: bool,
     ) -> Result<Vec<WorkflowRun>> {
-        let (document_id, vault, snapshot, occurred_at) = if use_projection {
+        let purge_with_snapshot = matches!(
+            (trigger, outbox_event.event.as_ref()),
+            (
+                WorkflowTrigger::DocumentPurged,
+                Some(DocumentEvent::Deleted { .. })
+            )
+        );
+        let (document_id, vault, snapshot, occurred_at) = if use_projection || purge_with_snapshot {
             let event = outbox_event
                 .event
                 .as_ref()
@@ -243,6 +249,8 @@ impl WorkflowEngine {
                     | WorkflowTrigger::DocumentTagsChanged
                     | WorkflowTrigger::DocumentCorrespondentChanged
                     | WorkflowTrigger::DocumentTypeChanged
+                    | WorkflowTrigger::DocumentMovedOut
+                    | WorkflowTrigger::DocumentMovedIn
             ) {
                 let ctx = Self::metadata_context(envelope)?;
                 (

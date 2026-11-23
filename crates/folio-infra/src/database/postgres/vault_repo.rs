@@ -6,6 +6,7 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use super::outbox::insert_domain_event;
+use super::workflow_repo::publish_cancelled_runs;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     AuditEvent, GroupId, NewAuditEvent, Principal, UserId, Vault, VaultId, VaultMember, VaultRole,
@@ -272,8 +273,20 @@ impl VaultRepository for PostgresVaultRepository {
         .map_err(db)?;
         sqlx::query("UPDATE archival_attempts SET state = 'skipped', reason = 'Vault deleted' WHERE state = 'queued' AND document_id IN (SELECT id FROM documents WHERE vault_id = $1)")
             .bind(id.0).execute(&mut *tx).await.map_err(db)?;
-        sqlx::query("UPDATE workflow_runs SET status = 'failed', finished_at = $2, last_error = 'Vault deleted before workflow execution completed' WHERE status = 'pending' AND workflow_id IN (SELECT id FROM workflows WHERE vault_id = $1)")
-            .bind(id.0).bind(now).execute(&mut *tx).await.map_err(db)?;
+        let cancelled = sqlx::query_as(
+            "UPDATE workflow_runs
+             SET status = 'failed', finished_at = $2,
+                 last_error = 'Vault deleted before workflow execution completed'
+             WHERE status = 'pending'
+               AND workflow_id IN (SELECT id FROM workflows WHERE vault_id = $1)
+             RETURNING id, workflow_id, payload",
+        )
+        .bind(id.0)
+        .bind(now)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db)?;
+        publish_cancelled_runs(&mut tx, id, cancelled).await?;
         emit_vault(&mut tx, &changed, "deleted", Uuid::new_v4()).await?;
         tx.commit().await.map_err(db)
     }

@@ -17,7 +17,7 @@ use folio_core::ports::{
     SearchService,
 };
 
-use super::{FailOutcome, Job, JobClass, JobQueue, JobType, HEARTBEAT_SECONDS};
+use super::{ArchiveService, FailOutcome, Job, JobClass, JobQueue, JobType, HEARTBEAT_SECONDS};
 use crate::ai::chunker::{chunk_text, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS};
 use crate::ai::PipelineContext;
 use crate::telemetry::metrics;
@@ -67,10 +67,18 @@ async fn run_with_lease<T>(
             }
         }
     };
+    tokio::pin!(work);
     tokio::select! {
         biased;
-        _ = heartbeats => None,
-        result = work => Some(result),
+        _ = heartbeats => {
+            // A late object-store response still needs its publication and
+            // cleanup fences. The archive reservation survives process death.
+            if matches!(job.job_type, JobType::GenerateArchive { .. }) {
+                let _ = work.await;
+            }
+            None
+        },
+        result = &mut work => Some(result),
     }
 }
 
@@ -144,6 +152,7 @@ pub struct Worker {
     config: WorkerConfig,
     outbox: Arc<dyn OutboxStore>,
     workflow_runner: Option<Arc<WorkflowRunner>>,
+    archive: Option<Arc<ArchiveService>>,
 }
 
 impl Worker {
@@ -173,12 +182,19 @@ impl Worker {
             config,
             outbox,
             workflow_runner: None,
+            archive: None,
         }
     }
 
     /// Let this worker execute workflow runs
     pub fn with_workflow_runner(mut self, runner: Arc<WorkflowRunner>) -> Self {
         self.workflow_runner = Some(runner);
+        self
+    }
+
+    /// Enable the archival worker lane.
+    pub fn with_archive_service(mut self, service: Arc<ArchiveService>) -> Self {
+        self.archive = Some(service);
         self
     }
 
@@ -208,11 +224,15 @@ impl Worker {
         info!("Job worker started");
         tokio::join!(
             self.run_processing(shutdown.clone()),
-            self.run_workflows(shutdown)
+            self.run_workflows(shutdown.clone()),
+            self.run_archives(shutdown)
         );
     }
 
     async fn run_processing(&self, mut shutdown: watch::Receiver<bool>) {
+        if let Err(e) = self.queue.reset_stuck().await {
+            error!("Failed initial queue recovery: {e}");
+        }
         // Run repair immediately on startup to catch any orphaned documents
         if let Err(e) = self.repair_orphaned_documents().await {
             error!("Failed initial document repair: {}", e);
@@ -264,6 +284,45 @@ impl Worker {
                 Err(e) => {
                     error!("Failed to dequeue job: {}", e);
                     sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
+                }
+            }
+        }
+    }
+
+    /// One conversion at a time per instance, independent of other lanes.
+    async fn run_archives(&self, mut shutdown: watch::Receiver<bool>) {
+        let Some(archive) = &self.archive else { return };
+        let mut repair = tokio::time::interval(Duration::from_secs(
+            self.config.repair_check_interval_secs.max(1),
+        ));
+        repair.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut poll =
+            tokio::time::interval(Duration::from_millis(self.config.poll_interval_ms.max(1)));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut next_discovery = Instant::now();
+        while !*shutdown.borrow() {
+            tokio::select! {
+                biased;
+                changed = shutdown.changed() => {
+                    if changed.is_err() { break; }
+                }
+                _ = repair.tick() => {
+                    if let Err(error) = archive.repair().await {
+                        error!(%error, "Failed archival repair");
+                    }
+                }
+                _ = poll.tick() => {
+                    match self.queue.dequeue_class(JobClass::Archive).await {
+                        Ok(Some(job)) => self.handle_job(job).await,
+                        Ok(None) if archive.automatic && Instant::now() >= next_discovery => {
+                            next_discovery = Instant::now() + Duration::from_secs(5);
+                            if let Err(error) = archive.discover(None, 16).await {
+                                error!(%error, "Failed automatic archive admission");
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => error!(%error, "Failed to dequeue archive job"),
+                    }
                 }
             }
         }
@@ -515,6 +574,15 @@ impl Worker {
         }
         let result = match claim {
             Some(job) => match job_type {
+                JobType::GenerateArchive { .. } => {
+                    let archive = self
+                        .archive
+                        .as_ref()
+                        .ok_or("Archival worker is not configured")?;
+                    Box::pin(archive.generate(&self.queue, job))
+                        .await
+                        .map_err(Into::into)
+                }
                 JobType::ExtractText { .. } => Box::pin(self.process_claimed_ocr(job)).await,
                 JobType::GenerateEmbedding { .. } => {
                     Box::pin(self.process_claimed_embedding(job)).await
@@ -598,6 +666,9 @@ impl Worker {
             | JobType::ExtractRevisionText { .. }
             | JobType::GenerateRevisionEmbedding { .. } => {
                 job_type.ensure_dispatchable().map_err(Into::into)
+            }
+            JobType::GenerateArchive { .. } => {
+                Err("Archival generation requires a job claim".into())
             }
             JobType::ExecuteWorkflowRun { run_id } => self.execute_workflow_run(*run_id).await,
             JobType::PurgeDocument {
@@ -2648,6 +2719,82 @@ mod tests {
             .exists(&folio_core::ports::keys::original(f.doc_id))
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn permanent_deletion_waits_for_archive_and_removes_its_staged_copy() {
+        use folio_core::models::FileIdentity;
+        use folio_core::ports::keys;
+
+        let f = fixture("text").await;
+        let vault = crate::database::test_vault();
+        let doc = f
+            .repo
+            .create_for_upload(
+                vault,
+                CreateDocument {
+                    title: "Original to purge".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+        let original = keys::original(doc);
+        let bytes = bytes::Bytes::from_static(b"verified PDF");
+        let identity = FileIdentity::from_bytes(&original, "application/pdf", &bytes);
+        f.storage.put(&original, bytes).await.unwrap();
+        assert!(f
+            .repo
+            .finalize_verified_upload(vault, doc, &identity)
+            .await
+            .unwrap());
+        let database = crate::Database::Sqlite(f.pool.clone());
+        let archives = database.repositories().await.archival;
+        let source = archives.current_source(vault, doc).await.unwrap().unwrap();
+        let attempt = uuid::Uuid::new_v4();
+        assert!(archives
+            .enqueue_archive(&source, attempt, None)
+            .await
+            .unwrap());
+        let running = f
+            .queue
+            .dequeue_class(JobClass::Archive)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(database
+            .reserve_archive_output(&source, &running)
+            .await
+            .unwrap());
+
+        f.repo.delete(vault, doc).await.unwrap();
+        f.repo.request_purge(vault, doc).await.unwrap();
+        assert!(f.worker.purge_requested(doc).await.is_err());
+        assert!(f.storage.exists(&original).await.unwrap());
+        let key = keys::revision_artifact(doc, source.revision_id, attempt);
+        assert!(f
+            .storage
+            .put_if_absent(&key, bytes::Bytes::from_static(b"staged PDF"))
+            .await
+            .unwrap());
+        assert!(!archives
+            .complete_archive(
+                &source,
+                attempt,
+                &folio_core::models::ArchiveCompletion::Failed("stale".into()),
+            )
+            .await
+            .unwrap());
+
+        assert!(f.queue.complete(&running).await.unwrap());
+        f.worker.purge_requested(doc).await.unwrap();
+        assert!(f
+            .storage
+            .list(&keys::document_prefix(doc))
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

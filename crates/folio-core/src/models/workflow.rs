@@ -62,6 +62,18 @@ pub enum WorkflowTrigger {
     MetadataOptionRestored,
     #[serde(rename = "document.metadata.changed")]
     DocumentMetadataChanged,
+    #[serde(rename = "document.moved_out")]
+    DocumentMovedOut,
+    #[serde(rename = "document.moved_in")]
+    DocumentMovedIn,
+    #[serde(rename = "document.trashed")]
+    DocumentTrashed,
+    #[serde(rename = "document.restored")]
+    DocumentRestored,
+    #[serde(rename = "document.purge_requested")]
+    DocumentPurgeRequested,
+    #[serde(rename = "document.purged")]
+    DocumentPurged,
     /// A document was deleted
     #[serde(rename = "document.deleted")]
     DocumentDeleted,
@@ -84,7 +96,7 @@ pub enum WorkflowTrigger {
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 30] = [
+    pub const ALL: [WorkflowTrigger; 36] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -107,6 +119,12 @@ impl WorkflowTrigger {
         Self::MetadataOptionDeleted,
         Self::MetadataOptionRestored,
         Self::DocumentMetadataChanged,
+        Self::DocumentMovedOut,
+        Self::DocumentMovedIn,
+        Self::DocumentTrashed,
+        Self::DocumentRestored,
+        Self::DocumentPurgeRequested,
+        Self::DocumentPurged,
         Self::DocumentDeleted,
         Self::IngestReceived,
         Self::IngestImported,
@@ -142,6 +160,12 @@ impl WorkflowTrigger {
             Self::MetadataOptionDeleted => "metadata_option.deleted",
             Self::MetadataOptionRestored => "metadata_option.restored",
             Self::DocumentMetadataChanged => "document.metadata.changed",
+            Self::DocumentMovedOut => "document.moved_out",
+            Self::DocumentMovedIn => "document.moved_in",
+            Self::DocumentTrashed => "document.trashed",
+            Self::DocumentRestored => "document.restored",
+            Self::DocumentPurgeRequested => "document.purge_requested",
+            Self::DocumentPurged => "document.purged",
             Self::DocumentDeleted => "document.deleted",
             Self::IngestReceived => "ingest.received",
             Self::IngestImported => "ingest.imported",
@@ -178,6 +202,12 @@ impl WorkflowTrigger {
             Self::MetadataOptionDeleted => "When a select option is retired",
             Self::MetadataOptionRestored => "When a select option is restored",
             Self::DocumentMetadataChanged => "When a document's custom fields change",
+            Self::DocumentMovedOut => "When a document leaves this vault",
+            Self::DocumentMovedIn => "When a document enters this vault",
+            Self::DocumentTrashed => "When a document is moved to trash",
+            Self::DocumentRestored => "When a document is restored",
+            Self::DocumentPurgeRequested => "When permanent deletion is requested",
+            Self::DocumentPurged => "When a document is permanently deleted",
             Self::DocumentDeleted => "When a document is deleted",
             Self::IngestReceived => "When a file arrives, before import",
             Self::IngestImported => "When an item is imported",
@@ -204,7 +234,9 @@ impl WorkflowTrigger {
             | Self::DocumentCommentCreated
             | Self::DocumentCommentUpdated
             | Self::DocumentCommentDeleted
-            | Self::DocumentMetadataChanged => WorkflowTarget::Document,
+            | Self::DocumentMetadataChanged
+            | Self::DocumentMovedIn
+            | Self::DocumentRestored => WorkflowTarget::Document,
             Self::MetadataFieldCreated
             | Self::MetadataFieldUpdated
             | Self::MetadataFieldDeleted
@@ -213,6 +245,10 @@ impl WorkflowTrigger {
             | Self::MetadataOptionUpdated
             | Self::MetadataOptionDeleted
             | Self::MetadataOptionRestored
+            | Self::DocumentMovedOut
+            | Self::DocumentTrashed
+            | Self::DocumentPurgeRequested
+            | Self::DocumentPurged
             | Self::DocumentDeleted
             | Self::IngestImported
             | Self::IngestSkipped
@@ -709,6 +745,8 @@ impl WorkflowInput {
                     && self.trigger.target() == WorkflowTarget::Event
                 {
                     "Custom field and option workflows take only webhook actions"
+                } else if self.trigger.target() == WorkflowTarget::Event {
+                    "Only webhook actions can run for this document lifecycle event"
                 } else {
                     "ingest.received workflows take only skip_import, and skip_import needs that trigger"
                 });
@@ -835,12 +873,16 @@ pub struct WorkflowRun {
 
 impl WorkflowRun {
     pub fn source_identity(&self) -> Result<Option<WorkflowEventIdentity>> {
+        Self::source_identity_from_payload(&self.payload)
+    }
+
+    pub fn source_identity_from_payload(payload: &str) -> Result<Option<WorkflowEventIdentity>> {
         #[derive(Deserialize)]
         struct Context {
             #[serde(default)]
             source_event: Option<WorkflowEventIdentity>,
         }
-        serde_json::from_str::<Context>(&self.payload)
+        serde_json::from_str::<Context>(payload)
             .map(|context| context.source_event)
             .map_err(|error| {
                 Error::Repository(format!("Invalid captured workflow payload: {error}"))
@@ -1400,6 +1442,51 @@ mod tests {
                 target == WorkflowTarget::Document
             );
         }
+    }
+
+    #[test]
+    fn departed_document_triggers_reject_document_mutations() {
+        let action = WorkflowAction::AddTags { tag_ids: vec![] };
+        for name in [
+            "document.moved_out",
+            "document.trashed",
+            "document.purge_requested",
+            "document.purged",
+        ] {
+            let trigger = WorkflowTrigger::parse(name).expect(name);
+            assert_eq!(trigger.target(), WorkflowTarget::Event);
+            assert!(!trigger.target().accepts(&action));
+            assert!(!trigger.once_per_document());
+        }
+    }
+
+    #[test]
+    fn returning_document_triggers_support_document_actions() {
+        let action = WorkflowAction::AddTags { tag_ids: vec![] };
+        for name in ["document.moved_in", "document.restored"] {
+            let trigger = WorkflowTrigger::parse(name).expect(name);
+            assert_eq!(trigger.target(), WorkflowTarget::Document);
+            assert!(trigger.target().accepts(&action));
+            assert!(!trigger.once_per_document());
+        }
+    }
+
+    #[test]
+    fn purge_workflows_report_unavailable_document_actions() {
+        let trigger = WorkflowTrigger::parse("document.purged").expect("purge trigger");
+        let workflow = input(
+            trigger,
+            vec![WorkflowAction::AddTags {
+                tag_ids: vec![Id::new_v4()],
+            }],
+        );
+        assert_eq!(
+            workflow.validate().unwrap_err().to_string(),
+            "Validation error: Only webhook actions can run for this document lifecycle event"
+        );
+        assert!(input(trigger, vec![webhook("https://example.com/hook")])
+            .validate()
+            .is_ok());
     }
 
     #[test]

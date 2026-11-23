@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::models::{ArchiveAttempt, ArchiveCompletion, ArchiveSource, Id, VaultId};
+use crate::models::{ArchiveAttempt, ArchiveCompletion, ArchiveSource, Document, Id, VaultId};
 use crate::Result;
 
 /// Revision-bound archival state. Callers enforce user access before reading this port.
@@ -9,6 +9,16 @@ pub trait ArchivalRepository: Send + Sync {
     /// The live verified original. Unverified uploads, Trash and purging documents are invisible.
     async fn current_source(&self, vault: VaultId, document: Id) -> Result<Option<ArchiveSource>>;
 
+    /// The document metadata/text for this exact live source, bounded before
+    /// loading it into the API. None means the source changed or the row exceeds
+    /// the supplied byte budgets.
+    async fn export_document(
+        &self,
+        source: &ArchiveSource,
+        text_limit: i64,
+        metadata_limit: i64,
+    ) -> Result<Option<Document>>;
+
     /// The current attempt for the live verified original, including its state.
     /// Resolve this per download request because revision and attempt changes hide old results.
     async fn current_attempt(&self, vault: VaultId, document: Id)
@@ -16,6 +26,7 @@ pub trait ArchivalRepository: Send + Sync {
 
     /// Compare-and-swap queueing. Use a fresh ID, and pass the observed current attempt ID
     /// on retry (or None for the initial attempt). Replaying the current ID succeeds.
+    /// The server adapter commits the durable delivery alongside the new attempt.
     /// False means the source or expected attempt changed.
     async fn enqueue_archive(
         &self,

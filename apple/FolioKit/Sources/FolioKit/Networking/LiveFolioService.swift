@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 /// Talks to a Folio server. JSON endpoints go through the generated client; file transfer uses
 /// URLSession directly because the generated client cannot set per-part content types on uploads
 /// or accept the server's file-specific download content types.
-public struct LiveFolioService: FolioService, SourceActivityService {
+public struct LiveFolioService: FolioService, SourceActivityService, CustomMetadataService {
     private let baseURL: URL
     private let tokenProvider: any BearerTokenProvider
     private let session: URLSession
@@ -850,6 +850,232 @@ extension LiveFolioService: DeviceRegistrationService {
             request.httpMethod = "POST"
             let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
             try check(response, body: data)
+        }
+    }
+}
+
+extension LiveFolioService {
+    private var metadataVault: String {
+        get throws {
+            guard let vaultID else { throw FolioError.unreadableResponse }
+            return vaultID.uuidString.lowercased()
+        }
+    }
+
+    public func customFields(after: UUID?) async throws -> [CustomFieldDefinition] {
+        try await call("metadata_fields.list") {
+            let vault = try metadataVault
+            let fields = try await client.listMetadataFields(
+                path: .init(vaultId: vault),
+                query: .init(includeDeleted: true, after: after?.uuidString.lowercased(), limit: 50)
+            ).ok.body.json
+            return try fields.map { try customField($0) }
+        }
+    }
+
+    public func saveCustomField(id: UUID?, draft: CustomFieldDraft) async throws -> CustomFieldDefinition {
+        try await call("metadata_fields.save") {
+            let vault = try metadataVault
+            guard let kind = Components.Schemas.MetadataKind(rawValue: draft.kind.rawValue) else {
+                throw FolioError.unreadableResponse
+            }
+            let input = Components.Schemas.MetadataFieldInput(
+                kind: kind, name: draft.name, required: draft.required, unique: draft.unique
+            )
+            if let id {
+                return try await customField(
+                    client.updateMetadataField(
+                        path: .init(vaultId: vault, fieldId: id.uuidString.lowercased()), body: .json(input)
+                    ).ok.body.json
+                )
+            }
+            return try await customField(
+                client.createMetadataField(
+                    path: .init(vaultId: vault), body: .json(input)
+                ).created.body.json)
+        }
+    }
+
+    public func setCustomFieldRetired(id: UUID, retired: Bool) async throws {
+        try await call("metadata_fields.lifecycle") {
+            let vault = try metadataVault
+            let field = id.uuidString.lowercased()
+            if retired {
+                _ = try await client.deleteMetadataField(path: .init(vaultId: vault, fieldId: field)).noContent
+            } else {
+                _ = try await client.restoreMetadataField(path: .init(vaultId: vault, fieldId: field)).ok.body.json
+            }
+        }
+    }
+
+    public func customOption(fieldID: UUID, id: UUID) async throws -> CustomFieldOption {
+        try await call("metadata_options.get") {
+            let option = try await client.getMetadataOption(
+                path: .init(
+                    vaultId: metadataVault, fieldId: fieldID.uuidString.lowercased(),
+                    optionId: id.uuidString.lowercased()
+                )
+            ).ok.body.json
+            return try customOption(option, fieldID: fieldID)
+        }
+    }
+
+    public func customOptions(fieldID: UUID, after: UUID?) async throws -> [CustomFieldOption] {
+        try await call("metadata_options.list") {
+            let options = try await client.listMetadataOptions(
+                path: .init(vaultId: metadataVault, fieldId: fieldID.uuidString.lowercased()),
+                query: .init(includeDeleted: true, after: after?.uuidString.lowercased(), limit: 50)
+            ).ok.body.json
+            return try options.map { try customOption($0, fieldID: fieldID) }
+        }
+    }
+
+    public func saveCustomOption(
+        fieldID: UUID, id: UUID?, label: String, position: UInt32
+    ) async throws -> CustomFieldOption {
+        try await call("metadata_options.save") {
+            let vault = try metadataVault
+            let field = fieldID.uuidString.lowercased()
+            let input = Components.Schemas.MetadataOptionInput(label: label, position: Int64(position))
+            let option: Components.Schemas.MetadataOption
+            if let id {
+                option = try await client.updateMetadataOption(
+                    path: .init(vaultId: vault, fieldId: field, optionId: id.uuidString.lowercased()),
+                    body: .json(input)
+                ).ok.body.json
+            } else {
+                option = try await client.createMetadataOption(
+                    path: .init(vaultId: vault, fieldId: field), body: .json(input)
+                ).created.body.json
+            }
+            return try customOption(option, fieldID: fieldID)
+        }
+    }
+
+    public func setCustomOptionRetired(fieldID: UUID, id: UUID, retired: Bool) async throws {
+        try await call("metadata_options.lifecycle") {
+            let vault = try metadataVault
+            let field = fieldID.uuidString.lowercased()
+            let option = id.uuidString.lowercased()
+            if retired {
+                _ = try await client.deleteMetadataOption(
+                    path: .init(vaultId: vault, fieldId: field, optionId: option)
+                ).noContent
+            } else {
+                _ = try await client.restoreMetadataOption(
+                    path: .init(vaultId: vault, fieldId: field, optionId: option)
+                ).ok.body.json
+            }
+        }
+    }
+
+    public func customMetadata(documentID: UUID) async throws -> CustomMetadataSnapshot {
+        try await call("document_metadata.get") {
+            let snapshot = try await client.getDocumentMetadata(
+                path: .init(vaultId: metadataVault, documentId: documentID.uuidString.lowercased())
+            ).ok.body.json
+            return try Self.customMetadata(snapshot, documentID: documentID)
+        }
+    }
+
+    public func setCustomValue(
+        documentID: UUID, revision: UUID?, fieldID: UUID, value: CustomFieldValue?
+    ) async throws -> CustomMetadataSnapshot {
+        try await call("document_metadata.patch") {
+            let null = try OpenAPIValueContainer(unvalidatedValue: nil)
+            let snapshot = try await client.patchDocumentMetadata(
+                path: .init(vaultId: metadataVault, documentId: documentID.uuidString.lowercased()),
+                body: .json(
+                    .init(
+                        changes: [
+                            .init(
+                                fieldId: fieldID.uuidString.lowercased(),
+                                value: value.map {
+                                    .MetadataValue($0.apiValue)
+                                } ?? .case2(null))
+                        ],
+                        revision: revision.map { .case1($0.uuidString.lowercased()) } ?? .case2(null)
+                    ))
+            ).ok.body.json
+            return try Self.customMetadata(snapshot, documentID: documentID)
+        }
+    }
+
+    private func customField(_ field: Components.Schemas.MetadataField) throws -> CustomFieldDefinition {
+        guard try Self.uuid(field.vaultId) == vaultID,
+            let kind = CustomFieldKind(rawValue: field.kind.rawValue)
+        else { throw FolioError.unreadableResponse }
+        return try CustomFieldDefinition(
+            id: Self.uuid(field.id),
+            draft: .init(name: field.name, kind: kind, required: field.required, unique: field.unique),
+            isRetired: field.deletedAt != nil
+        )
+    }
+
+    private func customOption(
+        _ option: Components.Schemas.MetadataOption, fieldID: UUID
+    ) throws -> CustomFieldOption {
+        guard try Self.uuid(option.vaultId) == vaultID, try Self.uuid(option.fieldId) == fieldID,
+            let position = UInt32(exactly: option.position)
+        else { throw FolioError.unreadableResponse }
+        return try CustomFieldOption(
+            id: Self.uuid(option.id), label: option.label, position: position, isRetired: option.deletedAt != nil
+        )
+    }
+
+    private static func customMetadata(
+        _ metadata: Components.Schemas.DocumentMetadata, documentID: UUID
+    ) throws -> CustomMetadataSnapshot {
+        guard try uuid(metadata.documentId) == documentID else { throw FolioError.unreadableResponse }
+        let values = try metadata.values.map { assignment in
+            let value: CustomFieldValue?
+            switch assignment.value {
+            case let .MetadataValue(raw)?: value = try CustomFieldValue(raw)
+            case let .case2(raw)? where raw.value == nil: value = nil
+            case nil: value = nil
+            default: throw FolioError.unreadableResponse
+            }
+            let link: CustomFieldLink?
+            switch assignment.linkTarget {
+            case let .MetadataLinkTarget(target)?: link = .init(title: target.title, isTrashed: target.trashed)
+            case let .case2(raw)? where raw.value == nil: link = nil
+            case nil: link = nil
+            default: throw FolioError.unreadableResponse
+            }
+            return try CustomFieldAssignment(fieldID: uuid(assignment.fieldId), value: value, link: link)
+        }
+        return try CustomMetadataSnapshot(revision: metadata.revision.map(uuid), values: values)
+    }
+}
+
+private extension CustomFieldValue {
+    init(_ value: Components.Schemas.MetadataValue) throws {
+        switch value {
+        case let .case1(row): self = .text(row.value)
+        case let .case2(row): self = .longText(row.value)
+        case let .case3(row): self = .boolean(row.value)
+        case let .case4(row): self = .integer(row.value)
+        case let .case5(row): self = .decimal(row.value)
+        case let .case6(row): self = .date(row.value)
+        case let .case7(row): self = .money(amount: row.value.amount, currency: row.value.currency)
+        case let .case8(row): self = .select(try LiveFolioService.uuid(row.value))
+        case let .case9(row): self = .url(row.value)
+        case let .case10(row): self = .documentLink(try LiveFolioService.uuid(row.value))
+        }
+    }
+
+    var apiValue: Components.Schemas.MetadataValue {
+        switch self {
+        case let .text(value): .case1(.init(kind: .text, value: value))
+        case let .longText(value): .case2(.init(kind: .longText, value: value))
+        case let .boolean(value): .case3(.init(kind: .boolean, value: value))
+        case let .integer(value): .case4(.init(kind: .integer, value: value))
+        case let .decimal(value): .case5(.init(kind: .decimal, value: value))
+        case let .date(value): .case6(.init(kind: .date, value: value))
+        case let .money(amount, currency): .case7(.init(kind: .money, value: .init(amount: amount, currency: currency)))
+        case let .select(value): .case8(.init(kind: .select, value: value.uuidString.lowercased()))
+        case let .url(value): .case9(.init(kind: .url, value: value))
+        case let .documentLink(value): .case10(.init(kind: .documentLink, value: value.uuidString.lowercased()))
         }
     }
 }

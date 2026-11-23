@@ -1,12 +1,14 @@
 //! API routes
 
 mod apple;
+pub(crate) mod archive;
 mod assets;
 pub mod auth;
 pub(crate) mod browse;
 pub(crate) mod correspondents;
 pub mod devices;
 pub(crate) mod document_entries;
+pub(crate) mod document_export;
 pub(crate) mod document_types;
 pub(crate) mod documents;
 mod entry_pages;

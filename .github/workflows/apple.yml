@@ -172,7 +172,7 @@ jobs:
               -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO
           done
       - name: Test navigation on iPhone and iPad (26.6) or iPhone Duo (27.1)
-        # Allow for a cold iPhone Duo runtime after the full iPhone suite.
+        # Allow for a cold Duo runtime and one fresh simulator after a recognized launch failure.
         timeout-minutes: ${{ matrix.toolchain.xcode == '27.1' && 65 || 40 }}
         run: |
           verify_dir=$(mktemp -d)
@@ -219,12 +219,28 @@ jobs:
               -only-testing:NavigationTests/NavigationTests/testFilingBesideTheListKeepsTheDocumentOpen
           else
             # iPhone Duo ships as its own iOS 27.1 runtime; width-dependent tests skip themselves.
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_duo_navigation_retry.py
             duo=$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; print(next(d["identifier"] for d in json.load(sys.stdin)["devicetypes"] if d["name"] == "iPhone Duo"))')
             duo_runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and any(d["identifier"] == sys.argv[1] for d in r.get("supportedDeviceTypes", []))))' "$duo")
-            verify_device=$(xcrun simctl create Folio-Duo-Navigation-CI "$duo" "$duo_runtime")
-            xcrun simctl bootstatus "$verify_device" -b
-            xcrun xcodebuild test-without-building "${common[@]}" \
-              -destination "platform=iOS Simulator,id=$verify_device"
+            for duo_attempt in 1 2; do
+              verify_device=$(xcrun simctl create Folio-Duo-Navigation-CI "$duo" "$duo_runtime")
+              xcrun simctl bootstatus "$verify_device" -b
+              duo_log="$verify_dir/duo-$duo_attempt.log"
+              if (set -o pipefail; xcrun xcodebuild test-without-building "${common[@]}" \
+                  -destination "platform=iOS Simulator,id=$verify_device" 2>&1 | tee "$duo_log"); then
+                break
+              else
+                duo_exit=$?
+              fi
+              if [ "$duo_attempt" -ne 1 ] || [ "$duo_exit" -ne 65 ] || \
+                  ! python3 scripts/duo_navigation_retry.py "$duo_log"; then
+                exit "$duo_exit"
+              fi
+              echo '::warning::Duo simulator failed to launch the navigation fixture. Retrying the full suite on a fresh simulator.'
+              xcrun simctl shutdown "$verify_device" || true
+              xcrun simctl delete "$verify_device"
+              verify_device=""
+            done
           fi
 
   thumbnails:

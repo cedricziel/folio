@@ -1,6 +1,6 @@
 # Storage
 
-Folio keeps uploaded files, thumbnails and page previews in an object store.
+Folio keeps uploaded files, archival derivatives, thumbnails and page previews in an object store.
 Two backends exist: the local filesystem (default) and any S3-compatible
 service. Select one with `FOLIO_STORAGE__BACKEND=local|s3`.
 
@@ -11,7 +11,9 @@ filesystem paths.
 
 | Key | Content |
 | --- | --- |
-| `documents/{id}/original` | The uploaded file |
+| `documents/{id}/original` | The initial uploaded file |
+| `documents/{id}/revisions/{revision}/original` | A revision-specific original |
+| `documents/{id}/revisions/{revision}/artifacts/{attempt}` | A retained archival derivative |
 | `documents/{id}/thumb.jpg` | First-page thumbnail (also page 1 in the viewer) |
 | `documents/{id}/pages/{n}.jpg` | Page previews for pages 2 and up |
 

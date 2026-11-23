@@ -1,5 +1,6 @@
 //! Job queue for background processing (SQLite or PostgreSQL)
 
+mod archive_jobs;
 mod postgres;
 mod processing_scope;
 mod recovery;
@@ -8,6 +9,7 @@ pub mod stages;
 mod trace_context;
 mod worker;
 
+pub use archive_jobs::ArchiveService;
 use postgres::PostgresJobQueue;
 pub(crate) use postgres::{
     insert_current_processing as insert_current_processing_postgres,
@@ -32,6 +34,7 @@ use async_trait::async_trait;
 
 use folio_core::error::Result;
 use folio_core::events::EventOrigin;
+use folio_core::models::VaultId;
 use folio_core::ports::{ProcessingQueue, ProcessingStatus};
 
 const REVISION_DISPATCH_ENABLED: bool = false;
@@ -115,6 +118,12 @@ pub enum JobType {
         #[serde(default, skip_serializing_if = "is_user")]
         origin: EventOrigin,
     },
+    GenerateArchive {
+        vault_id: VaultId,
+        document_id: Uuid,
+        source_revision_id: Uuid,
+        attempt_id: Uuid,
+    },
     /// Remove objects and metadata after an explicit permanent-deletion request.
     PurgeDocument {
         document_id: Uuid,
@@ -170,6 +179,7 @@ impl JobType {
             JobType::GenerateThumbnail { document_id }
             | JobType::ExtractText { document_id, .. }
             | JobType::GenerateEmbedding { document_id, .. }
+            | JobType::GenerateArchive { document_id, .. }
             | JobType::PurgeDocument { document_id, .. }
             | JobType::ProcessDocument { document_id, .. }
             | JobType::ProcessDocumentRevision { document_id, .. }
@@ -180,8 +190,18 @@ impl JobType {
         }
     }
 
+    fn new_queue_id(&self) -> Uuid {
+        match self {
+            Self::GenerateArchive { attempt_id, .. } => *attempt_id,
+            _ => Uuid::new_v4(),
+        }
+    }
+
     pub fn revision_id(&self) -> Option<Uuid> {
         match self {
+            JobType::GenerateArchive {
+                source_revision_id, ..
+            } => Some(*source_revision_id),
             JobType::ProcessDocumentRevision { revision_id, .. }
             | JobType::GenerateRevisionThumbnail { revision_id, .. }
             | JobType::ExtractRevisionText { revision_id, .. }
@@ -191,7 +211,10 @@ impl JobType {
     }
 
     fn ensure_dispatchable(&self) -> Result<()> {
-        if self.revision_id().is_some() && !REVISION_DISPATCH_ENABLED {
+        if self.revision_id().is_some()
+            && !matches!(self, Self::GenerateArchive { .. })
+            && !REVISION_DISPATCH_ENABLED
+        {
             return Err(folio_core::Error::Conflict(
                 "File revision processing is not yet enabled".into(),
             ));
@@ -209,6 +232,7 @@ impl JobType {
             JobType::GenerateRevisionThumbnail { .. } => "generate_revision_thumbnail",
             JobType::ExtractRevisionText { .. } => "extract_revision_text",
             JobType::GenerateRevisionEmbedding { .. } => "generate_revision_embedding",
+            JobType::GenerateArchive { .. } => "generate_archive",
             JobType::PurgeDocument { .. } => "purge_document",
             JobType::ExecuteWorkflowRun { .. } => "execute_workflow_run",
         }
@@ -221,17 +245,20 @@ impl JobType {
 /// own class and its own loop instead of queueing behind OCR, and vice versa.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobClass {
-    /// Everything except workflow runs
+    /// OCR, thumbnails, embeddings and purge
     Processing,
     /// Workflow runs
     Workflow,
+    /// PDF/A conversion
+    Archive,
 }
 
 impl JobClass {
     /// SQL condition on `job_type` selecting this class
     pub(crate) fn condition(self) -> &'static str {
         match self {
-            Self::Processing => "job_type <> 'execute_workflow_run'",
+            Self::Processing => "job_type NOT IN ('execute_workflow_run', 'generate_archive')",
+            Self::Archive => "job_type = 'generate_archive'",
             Self::Workflow => "job_type = 'execute_workflow_run'",
         }
     }
@@ -585,7 +612,8 @@ impl ProcessingQueue for JobQueue {
     }
 
     async fn processing_status(&self, document_id: Uuid) -> Result<ProcessingStatus> {
-        let active = self.find_active_jobs_for_document(document_id).await?;
+        let mut active = self.find_active_jobs_for_document(document_id).await?;
+        active.retain(|job| !matches!(job.job_type, JobType::GenerateArchive { .. }));
         if active.iter().any(|j| j.status == JobStatus::Processing) {
             Ok(ProcessingStatus::Processing)
         } else if !active.is_empty() {

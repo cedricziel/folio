@@ -67,6 +67,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         Vec::new(),
     );
     let state = AppState::new(
+        repos.archival,
         repos.metadata_fields,
         repos.metadata_options,
         repos.metadata_values,
@@ -200,16 +201,79 @@ async fn condition_groups_survive_api_storage_and_html_edits() {
     assert_eq!(stored["conditions"], groups);
 }
 
-/// A receiver that records requests and answers with a fixed status
+#[tokio::test]
+async fn web_editor_replaces_nested_groups_and_distinguishes_empty_any() {
+    let app = test_app().await;
+    let mut body = workflow_body("https://example.com/hook");
+    body["conditions"] = json!({
+        "mime_type": "application/pdf",
+        "any": [{"filename_glob": "previous-*"}]
+    });
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = created["id"].as_str().unwrap();
+    let uri = format!("/workflows/{id}");
+    let api = format!("/api/workflows/{id}");
+    let submit = |groups: &Value| {
+        url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("name", "Quarterly invoices")
+            .append_pair("trigger", "document.uploaded")
+            .append_pair("mime_type", "application/pdf")
+            .append_pair("webhook_url", "https://example.com/hook")
+            .append_pair("condition_groups", &groups.to_string())
+            .finish()
+    };
+    let nested = json!({
+        "all": [
+            {
+                "any": [{"filename_glob": "quarter-*"}, {"filename_glob": "invoice-*"}],
+                "none": [{"filename_glob": "draft-*"}]
+            }
+        ],
+        "any": []
+    });
+    let (status, _) = post_form(&app, &uri, submit(&nested)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, stored) = json_request(&app, "GET", &api, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        stored["conditions"],
+        json!({
+            "mime_type": "application/pdf",
+            "all": nested["all"],
+            "any": []
+        })
+    );
+
+    let (status, _) = post_form(&app, &uri, submit(&json!({"all": nested["all"]}))).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, stored) = json_request(&app, "GET", &api, None).await;
+    assert_eq!(
+        stored["conditions"],
+        json!({"mime_type": "application/pdf", "all": nested["all"]})
+    );
+
+    let bad = json!({"all": [{"source": {"email_from": {"regex": "("}}}]});
+    let (status, html) = post_form(&app, &uri, submit(&bad)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("Invalid regex"));
+    let (_, unchanged) = json_request(&app, "GET", &api, None).await;
+    assert_eq!(unchanged, stored);
+}
+
+/// A receiver that records requests and answers with a fixed status and diagnostic.
 async fn receiver(status: u16) -> (String, Arc<Mutex<Vec<(HeaderMap, String)>>>) {
     type Log = Arc<Mutex<Vec<(HeaderMap, String)>>>;
     async fn handle(
         State((log, status)): State<(Log, u16)>,
         headers: HeaderMap,
         body: String,
-    ) -> StatusCode {
+    ) -> (StatusCode, &'static str) {
         log.lock().unwrap().push((headers, body));
-        StatusCode::from_u16(status).unwrap()
+        (
+            StatusCode::from_u16(status).unwrap(),
+            "Receiver diagnostic (fixture only)",
+        )
     }
 
     let log: Log = Arc::default();
@@ -351,10 +415,7 @@ async fn test_endpoint_reports_a_failing_receiver() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["deliveries"][0]["success"], false);
     assert_eq!(result["deliveries"][0]["status"], 500);
-    assert!(result["deliveries"][0]["error"]
-        .as_str()
-        .unwrap()
-        .contains("500"));
+    assert_eq!(result["deliveries"][0]["error"], "HTTP 500");
 }
 
 #[tokio::test]
@@ -484,6 +545,54 @@ async fn lists_runs_newest_first() {
 }
 
 #[tokio::test]
+async fn run_history_preserves_progress_without_receiver_diagnostics() {
+    let app = test_app().await;
+    let input = serde_json::from_value(workflow_body("http://127.0.0.1:1/unused")).unwrap();
+    let workflow = app
+        .state
+        .workflow_repo
+        .create(app.vault, input)
+        .await
+        .unwrap();
+    let id = workflow.id;
+    let mut run = WorkflowRun::new(
+        app.vault,
+        id,
+        workflow.trigger,
+        Some(Uuid::new_v4()),
+        r#"{"note":"Captured payload (fixture only)"}"#.into(),
+    )
+    .with_actions(workflow.actions);
+    run.attempts = 2;
+    run.completed_actions = 1;
+    run.response_status = Some(503);
+    run.last_error =
+        Some("HTTP 503 Service Unavailable: Receiver diagnostic (fixture only)".into());
+    assert!(app.state.workflow_repo.create_run(&run).await.unwrap());
+
+    let (status, runs) =
+        json_request(&app, "GET", &format!("/api/workflows/{id}/runs"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(runs[0]["last_error"], "HTTP 503");
+    assert_eq!(runs[0]["response_status"], 503);
+    assert_eq!(runs[0]["completed_actions"], 1);
+    assert!(runs[0].get("payload").is_none());
+    assert!(runs[0].get("actions").is_none());
+
+    for uri in [
+        format!("/workflows/{id}/history"),
+        format!("/workflows/{id}"),
+    ] {
+        let (status, html) = send(&app, "GET", &uri, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains("Retrying"));
+        assert!(html.contains("<dt>Completed actions</dt><dd>1</dd>"));
+        assert!(!html.contains("Receiver diagnostic (fixture only)"));
+        assert!(!html.contains("Captured payload (fixture only)"));
+    }
+}
+
+#[tokio::test]
 async fn pages_render_and_the_form_creates_a_workflow() {
     let app = test_app().await;
 
@@ -541,6 +650,58 @@ async fn precise_metadata_trigger_roundtrips_through_api_and_web_editor() {
     assert_eq!(status, StatusCode::OK);
     assert!(html.contains("value=\"document.tags_changed\" selected"));
     assert!(html.contains("When document tags change"));
+}
+
+#[tokio::test]
+async fn lifecycle_trigger_editor_explains_when_document_actions_are_unavailable() {
+    let app = test_app().await;
+    let (status, tag) =
+        json_request(&app, "POST", "/api/tags", Some(json!({"name": "restored"}))).await;
+    assert_eq!(status, StatusCode::OK);
+    let tag = tag["id"].as_str().unwrap();
+    let (status, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Tag after restore",
+            "trigger": "document.restored",
+            "actions": [{"type": "add_tags", "tag_ids": [tag]}],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let workflow = created["id"].as_str().unwrap();
+    let edit_url = format!("/workflows/{workflow}");
+    let (status, html) = send(&app, "GET", &edit_url, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("value=\"document.restored\" selected"));
+    assert!(html.contains("When a document is restored"));
+
+    let form =
+        format!("name=Tag+after+restore&trigger=document.moved_out&enabled=on&action_tag_{tag}=on");
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post(edit_url)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&body)
+        .contains("Only webhook actions can run for this document lifecycle event"));
+    let (status, stored) =
+        json_request(&app, "GET", &format!("/api/workflows/{workflow}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["trigger"], "document.restored");
 }
 
 #[tokio::test]
@@ -837,7 +998,7 @@ async fn workflow_trash_restore_and_retained_history_are_usable_from_management_
         .await
         .unwrap()
         .unwrap();
-    let run = WorkflowRun::new(
+    let mut run = WorkflowRun::new(
         app.vault,
         stored.id,
         stored.trigger,
@@ -845,6 +1006,7 @@ async fn workflow_trash_restore_and_retained_history_are_usable_from_management_
         r#"{"note":"frozen execution context"}"#.into(),
     )
     .with_actions(stored.actions.clone());
+    run.response_status = Some(503);
     app.state.workflow_repo.create_run(&run).await.unwrap();
     let (status, _) = send(&app, "POST", &format!("/workflows/{id}/delete"), None).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
@@ -861,11 +1023,13 @@ async fn workflow_trash_restore_and_retained_history_are_usable_from_management_
     let (status, history) = send(&app, "GET", &format!("/workflows/{id}/history"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(history.contains("Workflow was deleted"));
+    assert!(history.contains("<dt>Finished</dt>"));
     assert!(!history.contains("hunter2"));
     let (status, runs) =
         json_request(&app, "GET", &format!("/api/workflows/{id}/runs"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(runs[0]["status"], "failed");
+    assert_eq!(runs[0]["last_error"], "Workflow was deleted");
     let (status, _) = send(&app, "POST", &format!("/workflows/{id}/restore"), None).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let (_, restored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
@@ -962,6 +1126,90 @@ async fn trigger_catalog_matches_workflow_choices_and_describes_entry_filters() 
                 .any(|field| field["key"] == "event.subject_id"));
         }
     }
+}
+
+#[tokio::test]
+async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
+    let app = test_app().await;
+    let (status, json) = json_request(&app, "GET", "/api/workflows/triggers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let catalog = json.as_array().unwrap();
+    let field_type = |trigger: &str, key: &str| {
+        catalog
+            .iter()
+            .find(|choice| choice["event_type"] == trigger)
+            .unwrap()["condition_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["key"] == key)
+            .and_then(|field| field["value_type"].as_str())
+    };
+
+    let email_fields = [
+        "source.email_from",
+        "source.email_to",
+        "source.email_subject",
+    ];
+    for trigger in [
+        "document.uploaded",
+        "document.title_changed",
+        "document.deleted",
+    ] {
+        assert_eq!(field_type(trigger, "mime_type"), Some("text"));
+        assert_eq!(field_type(trigger, "filename_glob"), Some("text"));
+        assert_eq!(field_type(trigger, "source.kind"), Some("text"));
+        for field in email_fields {
+            assert_eq!(field_type(trigger, field), Some("text"));
+        }
+        assert_eq!(field_type(trigger, "source.folder_path_glob"), Some("text"));
+        assert_eq!(
+            field_type(trigger, "source.email_attachment_glob"),
+            Some("text")
+        );
+        assert_eq!(
+            field_type(trigger, "source.email_mailbox_glob"),
+            Some("text")
+        );
+        assert_eq!(field_type(trigger, "tag_id"), Some("identifier"));
+        assert_eq!(field_type(trigger, "correspondent_id"), Some("identifier"));
+        assert_eq!(field_type(trigger, "document_type_id"), Some("identifier"));
+    }
+    assert_eq!(field_type("ingest.received", "filename_glob"), Some("text"));
+    assert_eq!(field_type("ingest.received", "source.kind"), Some("text"));
+    for field in email_fields {
+        assert_eq!(field_type("ingest.received", field), Some("text"));
+    }
+    assert_eq!(field_type("ingest.received", "tag_id"), None);
+    assert_eq!(field_type("ingest.received", "event.subject_id"), None);
+
+    for trigger in [
+        "document_note.created",
+        "document_comment.updated",
+        "document.metadata.changed",
+        "ingest.failed",
+        "source.recovered",
+    ] {
+        assert_eq!(field_type(trigger, "mime_type"), None);
+        assert_eq!(field_type(trigger, "tag_id"), None);
+        assert_eq!(field_type(trigger, "source.folder_path_glob"), None);
+        assert_eq!(field_type(trigger, "source.kind"), None);
+        for field in email_fields {
+            assert_eq!(field_type(trigger, field), None);
+        }
+    }
+    assert_eq!(
+        field_type("document_note.created", "event.subject_id"),
+        Some("identifier")
+    );
+    assert_eq!(
+        field_type("document.metadata.changed", "event.metadata.after"),
+        Some("metadata_value")
+    );
+    assert_eq!(
+        field_type("ingest.failed", "data.retryable"),
+        Some("boolean")
+    );
 }
 
 #[tokio::test]

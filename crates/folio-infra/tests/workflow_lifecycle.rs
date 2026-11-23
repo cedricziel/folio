@@ -6,7 +6,7 @@ use folio_core::models::{
     RunStatus, UserId, WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun,
     WorkflowTrigger,
 };
-use folio_core::mutation::with_actor;
+use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::ports::OutboxStore;
 use folio_infra::{Database, PostgresOutboxStore, SqliteOutboxStore};
 use testcontainers_modules::postgres::Postgres;
@@ -269,11 +269,28 @@ async fn contract(db: Database) {
         enabled: false,
         ..input("Pause and resume")
     };
-    let disabled = r
-        .workflows
-        .update(vault, toggle.id, disabling)
-        .await
-        .unwrap();
+    let lineage = MutationLineage {
+        correlation_id: uuid::Uuid::new_v4(),
+        causation_id: Some(uuid::Uuid::new_v4()),
+    };
+    let operator = UserId::from("operator");
+    let disabled = with_actor(
+        Some(operator.clone()),
+        with_lineage(
+            Some(lineage),
+            r.workflows.update(vault, toggle.id, disabling.clone()),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        r.workflows
+            .update(vault, toggle.id, disabling.clone())
+            .await
+            .unwrap()
+            .revision,
+        disabled.revision
+    );
     assert!(!r.workflows.create_run(&captured).await.unwrap());
     let resumed = r
         .workflows
@@ -283,6 +300,64 @@ async fn contract(db: Database) {
     assert!(resumed.revision > disabled.revision);
     assert!(!r.workflows.create_run(&captured).await.unwrap());
     assert!(r.workflows.find_run(captured.id).await.unwrap().is_none());
+    let pending = WorkflowRun::new(vault, toggle.id, toggle.trigger, None, "{}".into())
+        .with_definition(&resumed);
+    assert!(r.workflows.create_run(&pending).await.unwrap());
+    reject_disables(&db).await;
+    assert!(r
+        .workflows
+        .update(vault, toggle.id, disabling)
+        .await
+        .is_err());
+    let after_rejection = r
+        .workflows
+        .find_by_id(vault, toggle.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(after_rejection.enabled);
+    assert_eq!(after_rejection.revision, resumed.revision);
+    assert_eq!(
+        r.workflows
+            .find_run(pending.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        RunStatus::Pending
+    );
+
+    let claimed = outbox.claim(50, Duration::seconds(30), 10).await.unwrap();
+    let toggles: Vec<_> = claimed
+        .iter()
+        .filter_map(|event| event.envelope.as_ref())
+        .filter(|envelope| envelope.subject().id == toggle.id)
+        .collect();
+    assert_eq!(
+        toggles
+            .iter()
+            .map(|event| event.event_type())
+            .collect::<Vec<_>>(),
+        vec![
+            "workflow.created",
+            "workflow.updated",
+            "workflow.disabled",
+            "workflow.updated",
+            "workflow.enabled",
+        ]
+    );
+    for (updated, transition) in [(toggles[1], toggles[2]), (toggles[3], toggles[4])] {
+        assert_ne!(updated.event_id(), transition.event_id());
+        assert_eq!(updated.mutation_id(), transition.mutation_id());
+        assert_eq!(updated.correlation_id(), transition.correlation_id());
+        assert_eq!(updated.data(), transition.data());
+        assert_eq!(transition.audience(), &EventAudience::Owners);
+    }
+    assert_eq!(toggles[2].actor_id(), Some(&operator));
+    assert_eq!(toggles[2].correlation_id(), lineage.correlation_id);
+    assert_eq!(toggles[2].causation_id(), lineage.causation_id);
+    assert_eq!(toggles[2].data()["enabled"], false);
+    assert_eq!(toggles[4].data()["enabled"], true);
     r.workflows.delete(vault, toggle.id).await.unwrap();
 
     let rollback_restore = r
@@ -332,6 +407,34 @@ async fn contract(db: Database) {
         .unwrap()
         .is_some());
     assert_eq!(r.workflows.list(vault).await.unwrap().len(), 1);
+}
+
+async fn reject_disables(db: &Database) {
+    match db {
+        Database::Sqlite(pool) => {
+            sqlx::raw_sql(
+                "CREATE TRIGGER reject_workflow_disable BEFORE INSERT ON outbox_events
+                 WHEN NEW.type = 'workflow.disabled' BEGIN
+                   SELECT RAISE(ABORT, 'rejected workflow disable');
+                 END;",
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        Database::Postgres(pool) => {
+            sqlx::raw_sql(
+                "CREATE FUNCTION reject_workflow_disable() RETURNS trigger LANGUAGE plpgsql
+                 AS $$ BEGIN RAISE EXCEPTION 'rejected workflow disable'; END; $$;
+                 CREATE TRIGGER reject_workflow_disable BEFORE INSERT ON outbox_events
+                 FOR EACH ROW WHEN (NEW.type = 'workflow.disabled')
+                 EXECUTE FUNCTION reject_workflow_disable();",
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
 }
 
 async fn reject_events(db: &Database) {

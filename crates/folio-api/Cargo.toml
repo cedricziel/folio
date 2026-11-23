@@ -19,7 +19,7 @@ futures = { workspace = true }
 # Web framework
 axum = { workspace = true }
 tower = { workspace = true }
-tokio-util = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true, features = ["rt", "compat"] }
 tower-http = { workspace = true }
 tower-livereload = { workspace = true }
 
@@ -50,6 +50,10 @@ tracing-opentelemetry = { workspace = true }
 uuid = { workspace = true }
 url = "2"
 base64 = { workspace = true }
+async_zip = { version = "0.0.18", features = ["tokio"] }
+sha2 = { workspace = true }
+hex = { workspace = true }
+tempfile = { workspace = true }
 
 # Async traits
 async-trait = { workspace = true }
@@ -64,8 +68,7 @@ sqlx = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tracing-subscriber = { workspace = true }
 base64 = "0.23"
-sha2 = "0.11"
-tempfile = "3"
+zip = { version = "9", default-features = false }
 http-body-util = "0.1"
 tower = { workspace = true, features = ["util"] }
 tokio = { workspace = true, features = ["test-util"] }
