@@ -52,16 +52,17 @@ struct CustomMetadataWorkflowEditor: View {
                             .onSubmit { destinationFocused = false }
                         Toggle("Enabled", isOn: $enabled)
                     }
+                    Section {
+                        Button("Save workflow") { Task { await save() } }
+                            .accessibilityIdentifier("metadata-workflow-save")
+                            .disabled(saving || selectedTrigger == nil || name.isEmpty || webhook.isEmpty)
+                    }
                 }
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("New custom field workflow")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save workflow") { Task { await save() } }
-                        .disabled(saving || selectedTrigger == nil || name.isEmpty || webhook.isEmpty)
-                }
             }
             .interactiveDismissDisabled(saving)
             .task { await load() }

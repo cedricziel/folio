@@ -18,7 +18,7 @@ final class CustomMetadataWorkflowUITests: XCTestCase {
         for _ in 0..<4 where !value.isHittable { app.swipeUp() }
         XCTAssertTrue(value.isHittable)
         value.tap()
-        value.typeText("9007199254740993.01")
+        value.typeText("9007199254740993.01\n")
         saveWorkflow(named: "Invoice amount", in: app)
     }
 
@@ -67,7 +67,7 @@ final class CustomMetadataWorkflowUITests: XCTestCase {
         XCTAssertTrue(url.waitForExistence(timeout: 10))
         url.tap()
         url.typeText("http://127.0.0.1:9/unused\n")
-        let save = app.buttons["Save workflow"]
+        let save = app.buttons["metadata-workflow-save"]
         XCTAssertTrue(save.waitForExistence(timeout: 10))
         save.tap()
         XCTAssertTrue(app.staticTexts[name].waitForExistence(timeout: 10))
