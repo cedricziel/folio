@@ -85,9 +85,9 @@ jobs:
     runs-on: ${{ matrix.toolchain.runner }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_${{ matrix.toolchain.xcode }}.app/Contents/Developer
-    # The build plus several navigation passes can pass 60 minutes on a loaded runner; the
-    # FolioKit watchdog still stops a hung `swift test` after 15.
-    timeout-minutes: 90
+    # The Xcode 27 leg builds the app and runs two full device suites. FolioKit
+    # and each navigation test still have their own watchdogs.
+    timeout-minutes: ${{ matrix.toolchain.xcode == '27.1' && 110 || 90 }}
     defaults:
       run:
         working-directory: apple
@@ -172,8 +172,8 @@ jobs:
               -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO
           done
       - name: Test navigation on iPhone and iPad (26.6) or iPhone Duo (27.1)
-        # The 27.1 leg also allows one fresh Duo run after a simulator launch failure.
-        timeout-minutes: ${{ matrix.toolchain.xcode == '27.1' && 55 || 40 }}
+        # Allow for a cold Duo runtime and one fresh simulator after a recognized launch failure.
+        timeout-minutes: ${{ matrix.toolchain.xcode == '27.1' && 65 || 40 }}
         run: |
           verify_dir=$(mktemp -d)
           verify_device=""

@@ -173,6 +173,7 @@ public struct DocumentType: Identifiable, Hashable, Sendable {
 
 /// What the list endpoint can narrow by. Empty fields do not filter.
 public struct DocumentFilter: Equatable, Sendable {
+    public var inboxOnly: Bool
     public var reviewed: Bool?
     public var documentDateFrom: DocumentDate?
     public var documentDateTo: DocumentDate?
@@ -189,7 +190,8 @@ public struct DocumentFilter: Equatable, Sendable {
     public init(
         tagIDs: [Tag.ID] = [], correspondentID: Correspondent.ID? = nil, documentTypeID: DocumentType.ID? = nil,
         createdAfter: Date? = nil, createdBefore: Date? = nil,
-        reviewed: Bool? = nil, documentDateFrom: DocumentDate? = nil, documentDateTo: DocumentDate? = nil
+        reviewed: Bool? = nil, documentDateFrom: DocumentDate? = nil, documentDateTo: DocumentDate? = nil,
+        inboxOnly: Bool = false
     ) {
         self.tagIDs = tagIDs
         self.correspondentID = correspondentID
@@ -199,6 +201,7 @@ public struct DocumentFilter: Equatable, Sendable {
         self.reviewed = reviewed
         self.documentDateFrom = documentDateFrom
         self.documentDateTo = documentDateTo
+        self.inboxOnly = inboxOnly
     }
 }
 

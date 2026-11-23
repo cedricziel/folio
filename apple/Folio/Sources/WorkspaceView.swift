@@ -117,7 +117,6 @@ struct WorkspaceView: View {
                             editingSavedView = nil
                             showSavedViewEditor = true
                         }
-                        .disabled(workspace.destination == .inbox)
                     }
                 }
             } else if workspace.isReady {

@@ -8,6 +8,18 @@ fn rejects_unknown_query_version() {
 }
 
 #[test]
+fn inbox_filter_requires_a_version_that_older_clients_reject() {
+    let vault = VaultId::new();
+    let mut query: SavedViewQuery = serde_json::from_value(json!({
+        "version": 1, "filters": {"inbox_only": true}
+    }))
+    .unwrap();
+    assert!(query.page(vault, 50, None).is_err());
+    query.version = 2;
+    assert!(query.page(vault, 50, None).unwrap().filter.inbox_only);
+}
+
+#[test]
 fn rejects_unknown_filters_instead_of_broadening_results() {
     assert!(serde_json::from_value::<SavedViewQuery>(json!({
         "version": 1, "filters": {"unsupported": "value"}

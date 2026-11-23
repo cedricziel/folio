@@ -547,6 +547,9 @@ pub(super) fn push_filter(
         super::metadata_value_repo::push_exact_value(qb, &value)?;
         qb.push(")");
     }
+    if filter.inbox_only {
+        qb.push(" AND (reviewed_at IS NULL OR ocr_status IN ('pending', 'running', 'failed') OR embed_status IN ('pending', 'running', 'failed'))");
+    }
     if let Some(reviewed) = filter.reviewed {
         qb.push(if reviewed {
             " AND reviewed_at IS NOT NULL"

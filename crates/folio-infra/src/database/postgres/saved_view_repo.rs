@@ -135,14 +135,15 @@ impl SavedViewRepository for PostgresSavedViewRepository {
         access: &SavedViewAccess,
         after: Option<Id>,
         limit: u32,
+        max_query_version: Option<u32>,
     ) -> Result<Vec<SavedView>> {
         if !(1..=100).contains(&limit) {
             return Err(Error::Validation(
                 "Page limit must be between 1 and 100".into(),
             ));
         }
-        let rows = sqlx::query_as::<_, ViewRow>("SELECT * FROM saved_views WHERE vault_id = $1 AND deleted_at IS NULL AND (owner_id = $2 OR visibility = 'shared') AND ($3::uuid IS NULL OR id > $3) ORDER BY id LIMIT $4")
-            .bind(vault.0).bind(access.user.as_str()).bind(after).bind(i64::from(limit))
+        let rows = sqlx::query_as::<_, ViewRow>("SELECT * FROM saved_views WHERE vault_id = $1 AND deleted_at IS NULL AND (owner_id = $2 OR visibility = 'shared') AND ($3::uuid IS NULL OR id > $3) AND ($5::bigint IS NULL OR (query_json::jsonb ->> 'version')::bigint <= $5) ORDER BY id LIMIT $4")
+            .bind(vault.0).bind(access.user.as_str()).bind(after).bind(i64::from(limit)).bind(max_query_version.map(i64::from))
             .fetch_all(&self.pool).await.map_err(storage_error)?;
         rows.into_iter().map(SavedView::try_from).collect()
     }

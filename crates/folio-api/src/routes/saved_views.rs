@@ -1,4 +1,9 @@
-use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    routing::get,
+    Json, Router,
+};
 use folio_core::models::{
     SavedView, SavedViewInput, SavedViewQuery, VaultId, VaultRole, ViewPresentation, ViewVisibility,
 };
@@ -117,19 +122,39 @@ fn page_size() -> u32 {
 }
 
 #[utoipa::path(get, path = "/api/vaults/{vault_id}/saved-views", operation_id = "listSavedViews", tag = "saved-views",
-    params(("vault_id" = Uuid, Path), ListViewsQuery),
+    params(("vault_id" = Uuid, Path), ListViewsQuery,
+        ("X-Folio-Saved-View-Query-Version" = Option<u32>, Header, description = "Maximum saved query version the client can read. Defaults to 1.")),
     responses((status = 200, description = "Visible views ordered by ID; pass the last ID as after for the next page", body = Vec<SavedView>), (status = 401, description = "Sign-in required"), crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::InternalError))]
 pub(crate) async fn list(
     DefaultVault(vault): DefaultVault,
     uploader: Uploader,
     State(state): State<AppState>,
+    headers: HeaderMap,
     ApiQuery(query): ApiQuery<ListViewsQuery>,
 ) -> ApiResult<Json<Vec<SavedView>>> {
     let access = access(&state, vault, uploader).await?;
+    let max_query_version = headers
+        .get("x-folio-saved-view-query-version")
+        .map(|value| {
+            value
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|version| *version > 0)
+                .ok_or_else(|| ApiError::bad_request("Invalid saved-view query version"))
+        })
+        .transpose()?
+        .unwrap_or(1);
     Ok(Json(
         state
             .saved_views
-            .list(vault, &access, query.after, query.limit)
+            .list(
+                vault,
+                &access,
+                query.after,
+                query.limit,
+                Some(max_query_version),
+            )
             .await?,
     ))
 }

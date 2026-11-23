@@ -263,6 +263,15 @@ public final class WorkspaceViewModel {
         }
     }
 
+    /// Captures the displayed list, including the implicit scope of the Inbox.
+    public var currentSavedViewQuery: DocumentBrowseQuery {
+        var query = session.list.query
+        if destination == .inbox && query.filter.reviewed == nil {
+            query.filter.inboxOnly = true
+        }
+        return query
+    }
+
     @discardableResult
     public func saveView(_ draft: SavedViewDraft, replacing id: UUID? = nil) async -> Bool {
         guard isReady, !isSavingView else { return false }

@@ -10,6 +10,7 @@
     <summary>{% if is_saved %}Edit saved view{% else %}View details{% endif %}</summary>
     <form data-folio-action="saved_view.save" action="{{ "/saved-views"|vault_url }}{% if is_saved %}/{{ id }}{% endif %}" method="post" data-turbo="false" class="saved-view-form">
       {% if let Some(user) = sidebar.user %}<input type="hidden" name="csrf" value="{{ user.csrf }}">{% endif %}
+      {% if inbox_only %}<input type="hidden" name="inbox_only" value="true"><p>Inbox documents only</p>{% endif %}
       <label>Name<input class="input" name="name" required maxlength="100" value="{{ name }}"></label>
       <label>Search<input class="input" type="search" name="q" value="{{ search }}"></label>
       <label>From<select class="select" name="correspondent_id"><option value="">Any correspondent</option>{% for item in correspondents %}<option value="{{ item.id }}" {% if item.selected %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
@@ -42,7 +43,7 @@
   <div class="{% if presentation == "grid" %}saved-view-grid{% else %}f-list{% endif %}">
     {% for row in rows %}
     <a id="document-{{ row.id }}"
-       class="f-row" href="{{ row.id|document_href }}" data-turbo-frame="_top">
+       class="f-row{% if presentation == "list" %} f-row-plain{% endif %}" href="{{ row.id|document_href }}" data-turbo-frame="_top">
       {% if presentation == "grid" %}<img loading="lazy" class="saved-view-preview" src="{{ "/documents"|vault_url }}/{{ row.id }}/thumbnail" alt="">{% endif %}
       <div class="row-main"><h3 class="f-row-title">{{ row.title }}</h3><p class="f-row-sub">{{ row.subline() }}</p><span class="f-meta">{{ row.date }}</span></div>
     </a>

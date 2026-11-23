@@ -149,6 +149,7 @@ async fn index_page(
     let has_review_filters =
         reviewed.is_some() || document_date_from.is_some() || document_date_to.is_some();
     let filtered = taxonomy_filtered || has_review_filters;
+    let inbox_only = !view_all && reviewed.is_none();
 
     let all = state.document_repo.list(vault, None).await?;
     let sidebar = Sidebar::build(
@@ -180,9 +181,7 @@ async fn index_page(
             .list(vault, Some(filter))
             .await?
             .into_iter()
-            .filter(|document| {
-                view_all || reviewed.is_some() || document.status() != DocumentStatus::Filed
-            })
+            .filter(|document| !inbox_only || document.status() != DocumentStatus::Filed)
             .collect()
     } else if view_all {
         all
@@ -215,6 +214,9 @@ async fn index_page(
     let save_view_url = {
         let mut saved_query = url::form_urlencoded::Serializer::new(String::new());
         taxonomy_pairs(&mut saved_query);
+        if inbox_only {
+            saved_query.append_pair("inbox_only", "true");
+        }
         if let Some(reviewed) = reviewed {
             saved_query.append_pair("reviewed", &reviewed.to_string());
         }

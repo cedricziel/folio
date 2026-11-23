@@ -495,3 +495,26 @@ test("saved view results update without replacing its open editor", async ({ pag
     await page.request.delete(`${api}/${view.id}`);
   }
 });
+
+test("save the current Inbox and reopen it on a phone", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const root = `/vaults/${personal.id}`;
+  const name = uniqueTitle("Morning Inbox");
+  await page.goto(`${root}/`);
+  await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
+  await page.getByRole("link", { name: "Save current view", exact: true }).click();
+  await expect(page.getByText("Inbox documents only", { exact: true })).toBeVisible();
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await capture(page, testInfo, "save-inbox-editor.png");
+  await page.getByRole("button", { name: "Save view", exact: true }).click();
+  await expect(page.getByRole("heading", { name, level: 1 })).toBeVisible();
+  await page.getByRole("link", { name: "All saved views", exact: true }).click();
+  await page.locator("main").getByRole("link", { name, exact: false }).click();
+  await expect(page.getByRole("heading", { name, level: 1 })).toBeVisible();
+  await page.getByText("Edit saved view", { exact: true }).click();
+  await expect(page.getByText("Inbox documents only", { exact: true })).toBeVisible();
+  const documentTitle = page.getByRole("heading", { name: personalDocument.title, exact: true });
+  await expect(documentTitle).toBeVisible();
+  expect(await documentTitle.evaluate((title) => title.scrollWidth <= title.clientWidth)).toBe(true);
+  await capture(page, testInfo, "reopened-inbox-view.png");
+});

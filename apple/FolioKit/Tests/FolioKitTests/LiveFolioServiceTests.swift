@@ -304,6 +304,39 @@ private let documentJSON = """
                     ), sort: .title)))
     }
 
+    @Test func savesAndRestoresInboxUsingTheVersionedQuery() async throws {
+        let vault = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let response = Data(
+            savedViewJSON.replacingOccurrences(
+                of: #""version":1,"filters":{"reviewed":false"#,
+                with: #""version":2,"filters":{"inbox_only":true"#
+            ).utf8
+        )
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "POST")
+            let object = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let query = object?["query"] as? [String: Any]
+            #expect(query?["version"] as? Int == 2)
+            let filters = query?["filters"] as? [String: Any]
+            #expect(filters?["inbox_only"] as? Bool == true)
+            #expect(filters?["reviewed"] == nil)
+            return .init(status: 201, body: response)
+        }
+        let view = try await makeService().scoped(to: vault).saveView(
+            .init(name: "Inbox", query: .init(filter: .init(inboxOnly: true)))
+        )
+        #expect(view.query.filter.inboxOnly)
+        #expect(view.query.filter.reviewed == nil)
+        StubURLProtocol.handler = { request, _ in
+            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+            #expect(items?.first { $0.name == "inbox_only" }?.value == "true")
+            return .init(
+                body: Data(
+                    "{\"vault_id\":\"\(vault)\",\"documents\":[],\"supports_document_review_filters\":true}".utf8))
+        }
+        _ = try await makeService().scoped(to: vault).documentPage(query: view.query, cursor: nil)
+    }
+
     @Test func renamingViewOmitsUnchangedQuery() async throws {
         let vault = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
@@ -325,7 +358,7 @@ private let documentJSON = """
     }
 
     @Test func unsupportedSavedQueryVersionIsNotSilentlyOpened() async throws {
-        let response = Data(savedViewJSON.replacingOccurrences(of: "\"version\":1", with: "\"version\":2").utf8)
+        let response = Data(savedViewJSON.replacingOccurrences(of: "\"version\":1", with: "\"version\":3").utf8)
         StubURLProtocol.handler = { _, _ in .init(body: response) }
         await #expect(throws: FolioError.unreadableResponse) {
             try await makeService().scoped(to: UUID()).savedView(id: UUID())
