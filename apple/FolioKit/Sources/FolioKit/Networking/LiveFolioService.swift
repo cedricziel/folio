@@ -833,6 +833,52 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     }
 }
 
+extension LiveFolioService: WorkflowMemberReadService {
+    public func memberWorkflowConfigurations(vaultID: UUID) async throws -> [WorkflowConfigurationSummary] {
+        let scoped = memberWorkflowClient(vaultID: vaultID)
+        return try await scoped.call("workflows.list_summaries") {
+            let rows = try await scoped.client.listWorkflowSummaries().ok.body.json
+            return try rows.map { row in
+                guard try Self.uuid(row.vaultId) == vaultID,
+                    let count = Int(exactly: row.actionCount), count >= 0
+                else { throw FolioError.unreadableResponse }
+                return try WorkflowConfigurationSummary(
+                    id: Self.uuid(row.id), vaultID: vaultID, name: row.name, enabled: row.enabled,
+                    trigger: row.trigger.rawValue, createdAt: row.createdAt, updatedAt: row.updatedAt,
+                    actionCount: count
+                )
+            }
+        }
+    }
+
+    public func memberWorkflowHistory(vaultID: UUID, workflowID: UUID) async throws -> [WorkflowExecutionSummary] {
+        let scoped = memberWorkflowClient(vaultID: vaultID)
+        return try await scoped.call("workflows.list_run_summaries") {
+            let rows = try await scoped.client.listWorkflowRunSummaries(
+                path: .init(id: workflowID.uuidString.lowercased()), query: .init(limit: 50)
+            ).ok.body.json
+            return try rows.map { row in
+                guard try Self.uuid(row.vaultId) == vaultID, try Self.uuid(row.workflowId) == workflowID else {
+                    throw FolioError.unreadableResponse
+                }
+                return try WorkflowExecutionSummary(
+                    id: Self.uuid(row.id), vaultID: vaultID, workflowID: workflowID, event: row.event.rawValue,
+                    status: row.status.rawValue, attempts: Int(row.attempts),
+                    completedActions: Int(row.completedActions),
+                    createdAt: row.createdAt, finishedAt: row.finishedAt
+                )
+            }
+        }
+    }
+
+    private func memberWorkflowClient(vaultID: UUID) -> LiveFolioService {
+        LiveFolioService(
+            baseURL: baseURL, tokenProvider: tokenProvider, session: session, telemetry: telemetry,
+            downloadDirectory: downloadDirectory, vaultID: vaultID
+        )
+    }
+}
+
 extension Document {
     init(_ raw: Components.Schemas.Document) throws {
         try self.init(

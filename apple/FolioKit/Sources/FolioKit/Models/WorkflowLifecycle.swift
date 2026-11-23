@@ -10,6 +10,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
     public let trigger: String
     public let triggers: [String]?
     public let cadence: Components.Schemas.WorkflowCadence?
+    public let actionCount: Int?
     public let createdAt: Date
     public let updatedAt: Date
     public let revision: Int64?
@@ -20,6 +21,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
     enum CodingKeys: String, CodingKey {
         case id, name, enabled, trigger, triggers, revision, cadence
         case vaultID = "vault_id"
+        case actionCount = "action_count"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case deletedAt = "deleted_at"
@@ -31,7 +33,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         id: UUID, vaultID: UUID, name: String, enabled: Bool, trigger: String,
         createdAt: Date, updatedAt: Date, deletedAt: Date? = nil,
         createdBy: String? = nil, updatedBy: String? = nil, revision: Int64? = nil,
-        cadence: Components.Schemas.WorkflowCadence? = nil, triggers: [String]? = nil
+        cadence: Components.Schemas.WorkflowCadence? = nil, triggers: [String]? = nil, actionCount: Int? = nil
     ) {
         self.id = id
         self.vaultID = vaultID
@@ -40,6 +42,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         self.trigger = trigger
         self.triggers = triggers
         self.cadence = cadence
+        self.actionCount = actionCount
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.revision = revision
@@ -137,6 +140,12 @@ public struct WorkflowExecutionSummary: Identifiable, Decodable, Sendable, Equat
         default: status
         }
     }
+}
+
+/// Read-only workflow projections in an explicitly selected vault.
+public protocol WorkflowMemberReadService: Sendable {
+    func memberWorkflowConfigurations(vaultID: UUID) async throws -> [WorkflowConfigurationSummary]
+    func memberWorkflowHistory(vaultID: UUID, workflowID: UUID) async throws -> [WorkflowExecutionSummary]
 }
 
 /// Owner-only workflow lifecycle operations in an explicitly selected vault.

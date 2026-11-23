@@ -336,6 +336,22 @@ import XCTest
         capture(app, name: "Workflow owner access restriction")
     }
 
+    func testVaultViewerCanReadWorkflowAndVisibleRunWithoutEditing() {
+        let app = launch(arguments: ["--read-only", "--workflow-member"])
+        XCTAssertFalse(app.buttons["New workflow"].exists)
+        openWorkflow(app)
+        let actions = app.staticTexts["Actions, 2"]
+        guard actions.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        let failed = app.staticTexts["Failed"]
+        guard scroll(app, until: failed) else { return XCTFail(app.debugDescription) }
+        XCTAssertFalse(app.buttons["Move workflow to Trash"].exists)
+        XCTAssertFalse(app.buttons["Edit settings"].exists)
+        XCTAssertFalse(app.buttons["Edit actions"].exists)
+        XCTAssertFalse(app.staticTexts["Receiver unavailable"].exists)
+        XCTAssertFalse(app.staticTexts["Created by, Taylor"].exists)
+        capture(app, name: "Read-only workflow configuration and run history")
+    }
+
     private func launch(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--workflow-lifecycle"] + arguments
