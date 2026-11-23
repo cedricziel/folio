@@ -39,9 +39,11 @@
         {% include "partials/document_pages.html" %}
 
         <aside class="doc-aside">
-            {% if let Some(archive) = archive %}
+            {% match archive %}
+            {% when Some with (archive) %}
             {% include "partials/document_archive.html" %}
-            {% endif %}
+            {% when None %}
+            {% endmatch %}
             <section class="panel">
                 <h2 class="heading">Details</h2>
                 <dl class="f-meta-list">

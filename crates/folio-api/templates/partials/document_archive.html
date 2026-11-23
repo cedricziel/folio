@@ -1,10 +1,11 @@
 <section class="panel" aria-labelledby="archive-heading">
     <h2 class="heading" id="archive-heading">Archival copy</h2>
     <p class="f-meta">{{ archive.label() }}</p>
-    {% if let Some(reason) = archive.reason %}<p>{{ reason }}</p>{% endif %}
+    {% match archive.reason %}{% when Some with (reason) %}<p>{{ reason }}</p>{% when None %}{% endmatch %}
     {% if archive.ready() %}
     <a class="f-btn" href="{{ "/api/documents"|vault_url }}/{{ document.id }}/archive/download" download>{{ icons::download() }} Download PDF/A</a>
-    {% if let Some(details) = archive.details %}
+    {% match archive.details %}
+    {% when Some with (details) %}
     <details>
         <summary>PDF/A details</summary>
         <dl class="f-meta-list">
@@ -13,12 +14,13 @@
             <dt>Validator</dt><dd>{{ details.validator.name }} {{ details.validator.version }}</dd>
         </dl>
     </details>
-    {% endif %}
+    {% when None %}
+    {% endmatch %}
     {% else if archive.queued() %}
     <a class="f-btn f-btn-quiet" href="{{ archive_refresh_href }}">Refresh archival status</a>
     {% else if document|can_edit_document && (archive.can_generate() || archive.can_retry()) %}
     <form action="{{ "/documents"|vault_url }}/{{ document.id }}/archive" method="post" data-turbo="false">
-        {% if let Some(attempt) = archive.attempt_id %}<input type="hidden" name="expected_attempt_id" value="{{ attempt }}">{% endif %}
+        {% match archive.attempt_id %}{% when Some with (attempt) %}<input type="hidden" name="expected_attempt_id" value="{{ attempt }}">{% when None %}{% endmatch %}
         {% if !return_to.is_empty() %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
         <button class="f-btn f-btn-quiet" type="submit">{% if archive.can_retry() %}Retry archival copy{% else %}Generate archival copy{% endif %}</button>
     </form>
