@@ -298,7 +298,127 @@ async fn duplicate_empty_completion_is_one_combined_event(db: &Database) {
     assert_eq!(skipped.correlation_id(), fixture.lineage.correlation_id);
     assert_eq!(skipped.actor_id(), None);
     assert!(fixture.embedding_jobs().await.is_empty());
+    processing_workflow_contract(db, &fixture).await;
     fixture.finish().await;
+}
+
+async fn processing_workflow_contract(db: &Database, fixture: &Fixture<'_>) {
+    use folio_core::models::{
+        SourceConditions, SourceKind, WebhookMethod, WorkflowAction, WorkflowConditions,
+        WorkflowInput, WorkflowTrigger,
+    };
+    use folio_core::services::WorkflowEngine;
+    use folio_core::EventOrigin;
+    use folio_infra::{ObjectStoreDocumentStore, StorageFileMetadata};
+    use std::sync::Arc;
+
+    let repos = db.repositories().await;
+    let engine = WorkflowEngine::new(
+        repos.workflows.clone(),
+        repos.documents.clone(),
+        repos.correspondents.clone(),
+        repos.document_types.clone(),
+        Arc::new(StorageFileMetadata::new(Arc::new(
+            ObjectStoreDocumentStore::in_memory(),
+        ))),
+        "http://folio.test",
+    );
+    let definition = WorkflowInput {
+        name: "OCR completed".into(),
+        enabled: true,
+        trigger: WorkflowTrigger::DocumentOcrCompleted,
+        conditions: WorkflowConditions {
+            event: Some(folio_core::models::WorkflowEventConditions {
+                processing: Some(folio_core::models::WorkflowProcessingConditions {
+                    has_text: Some(false),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        actions: vec![WorkflowAction::Webhook {
+            url: "https://example.com/ocr".into(),
+            method: WebhookMethod::Post,
+            headers: Default::default(),
+            secret: None,
+        }],
+    };
+    let exact = repos
+        .workflows
+        .create(fixture.vault, definition.clone())
+        .await
+        .unwrap();
+    repos
+        .workflows
+        .create(
+            fixture.vault,
+            WorkflowInput {
+                conditions: WorkflowConditions {
+                    source: SourceConditions {
+                        kind: Some(SourceKind::Upload),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..definition
+            },
+        )
+        .await
+        .unwrap();
+    let events = repos
+        .outbox
+        .replay(0, chrono::Utc::now() - chrono::Duration::hours(1), 100)
+        .await
+        .unwrap();
+    let event = events
+        .iter()
+        .find(|event| {
+            event.envelope.as_ref().is_some_and(|envelope| {
+                envelope.subject().id == fixture.document
+                    && envelope.event_type() == "document.processing.ocr.completed"
+            })
+        })
+        .expect("committed OCR envelope");
+    for origin in [EventOrigin::Import, EventOrigin::Workflow] {
+        assert!(engine
+            .handle(&folio_core::OutboxEvent {
+                origin,
+                ..event.clone()
+            })
+            .await
+            .unwrap()
+            .is_empty());
+    }
+    let runs = engine.handle(event).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].workflow_id, exact.id);
+    let stored = repos.workflows.find_run(runs[0].id).await.unwrap().unwrap();
+    assert_eq!(stored.definition_revision, Some(exact.revision));
+    let envelope = event.envelope.as_ref().unwrap();
+    let identity = stored.source_identity().unwrap().unwrap();
+    assert_eq!(identity.event_id, envelope.event_id());
+    assert_eq!(identity.mutation_id, envelope.mutation_id());
+    let payload: serde_json::Value = serde_json::from_str(&stored.payload).unwrap();
+    assert_eq!(
+        payload["occurred_at"],
+        serde_json::json!(envelope.occurred_at())
+    );
+    assert_eq!(payload["processing"]["run_id"], envelope.data()["run_id"]);
+    assert_eq!(payload["document"]["title"], "Immutable OCR title");
+    assert!(payload["document"].get("source").is_none());
+    assert_eq!(payload["processing"]["has_text"], false);
+    assert!(engine.handle(event).await.unwrap().is_empty());
+    let job = repos
+        .jobs
+        .dequeue_class(folio_infra::queue::JobClass::Workflow)
+        .await
+        .unwrap()
+        .expect("queued workflow job");
+    assert!(
+        matches!(&job.job_type, JobType::ExecuteWorkflowRun { run_id } if *run_id == runs[0].id)
+    );
+    assert!(repos.jobs.complete(&job).await.unwrap());
 }
 
 async fn outbox_rejection_rolls_back_start_and_completion(db: &Database) {
