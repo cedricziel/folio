@@ -12278,6 +12278,14 @@
           }
         }
       },
+      "ReviewOrigin": {
+        "type": "string",
+        "enum": [
+          "human",
+          "system",
+          "legacy_classification"
+        ]
+      },
       "RevisionOriginalView": {
         "type": "object",
         "required": [
@@ -14171,6 +14179,77 @@
           }
         }
       },
+      "WorkflowDocumentConditions": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "after": {
+                "type": "string",
+                "format": "date"
+              },
+              "before": {
+                "type": "string",
+                "format": "date"
+              },
+              "state": {
+                "$ref": "#/components/schemas/MetadataChangeState"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "date"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "origin": {
+                "$ref": "#/components/schemas/ReviewOrigin"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/WorkflowUnreviewReason"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "review"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
+              "source": {
+                "$ref": "#/components/schemas/WorkflowRevisionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "revision"
+                ]
+              }
+            }
+          }
+        ]
+      },
       "WorkflowEventConditions": {
         "type": "object",
         "properties": {
@@ -14183,6 +14262,9 @@
                 "type": "null"
               }
             ]
+          },
+          "document_change": {
+            "$ref": "#/components/schemas/WorkflowDocumentConditions"
           },
           "ingest": {
             "oneOf": [
@@ -14387,6 +14469,14 @@
         },
         "additionalProperties": false
       },
+      "WorkflowRevisionSource": {
+        "type": "string",
+        "enum": [
+          "upload",
+          "replacement",
+          "restoration"
+        ]
+      },
       "WorkflowRun": {
         "type": "object",
         "description": "One execution of a workflow for one event",
@@ -14486,6 +14576,11 @@
           "document.tags_changed",
           "document.correspondent_changed",
           "document.document_type_changed",
+          "document.date_changed",
+          "document.reviewed",
+          "document.unreviewed",
+          "document.revision_created",
+          "document.revision_restored",
           "document_note.created",
           "document_note.updated",
           "document_note.deleted",
@@ -14583,6 +14678,15 @@
             "$ref": "#/components/schemas/WorkflowTrigger"
           }
         }
+      },
+      "WorkflowUnreviewReason": {
+        "type": "string",
+        "enum": [
+          "user",
+          "system",
+          "file_replaced",
+          "file_restored"
+        ]
       }
     },
     "securitySchemes": {

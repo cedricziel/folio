@@ -40,3 +40,56 @@ test("chooses custom metadata triggers and exact transition conditions", async (
     after: { kind: "decimal", value: "9007199254740993.01" },
   });
 });
+
+test("shows and saves the condition fields for the selected document event", async ({ page }) => {
+  test.skip(
+    Boolean(process.env.E2E_BASE_URL) || !process.env.FOLIO_VERIFY_ENV,
+    "Workflow editing requires the disposable global-setup instance",
+  );
+  await page.goto("/workflows/new");
+  await page.getByRole("textbox", { name: "Name", exact: true }).fill(uniqueTitle("File changes"));
+  const trigger = page.getByRole("combobox", { name: "When" });
+  const processing = page.locator('[data-workflow-form-target="processingFilter"]');
+  await trigger.selectOption("document.processing.ocr.completed");
+  await expect(processing.getByRole("combobox", { name: "Text found", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Revision number")).toBeHidden();
+  await trigger.selectOption("document.date_changed");
+  await expect(processing).toBeHidden();
+  await page.getByLabel("Previous document date", { exact: true }).fill("2024-02-29");
+  await page.getByLabel("Date change", { exact: true }).selectOption("cleared");
+  await trigger.selectOption("document.reviewed");
+  await expect(page.getByLabel("Review origin", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Reason for marking unreviewed")).toBeHidden();
+  await trigger.selectOption("document.unreviewed");
+  await expect(page.getByLabel("Reason for marking unreviewed")).toBeVisible();
+  await trigger.selectOption("document.revision_restored");
+  await expect(page.getByLabel("Revision number")).toBeVisible();
+  await expect(page.getByLabel("Revision source", { exact: true })).toBeHidden();
+  await trigger.selectOption("document.revision_created");
+  await expect(page.getByLabel("Previous document date", { exact: true })).toBeHidden();
+  await page.getByLabel("Revision number").fill("3");
+  await page.getByLabel("Revision source", { exact: true }).selectOption("restoration");
+
+  const editor = page.getByRole("group", { name: "Nested conditions", exact: true });
+  const groups = editor.locator(":scope > [data-condition-add]");
+  await groups.getByRole("combobox", { name: "Group operator" }).selectOption("any");
+  await groups.getByRole("button", { name: "Add group", exact: true }).click();
+  const alternatives = editor.getByRole("group", { name: "Any of these", exact: true });
+  await alternatives.getByRole("button", { name: "Add branch", exact: true }).click();
+  const fileType = alternatives.getByRole("textbox", { name: "File type", exact: true });
+  await fileType.fill("application/pdf");
+
+  await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
+  await page.getByRole("button", { name: "Save workflow", exact: true }).click();
+  await expect(page.getByLabel("Revision source", { exact: true })).toHaveValue("restoration");
+  await expect(page.getByLabel("Revision number")).toHaveValue("3");
+  await expect(fileType).toHaveValue("application/pdf");
+  const id = new URL(page.url()).pathname.split("/").pop();
+  const response = await page.request.get(`/api/workflows/${id}`);
+  await expect(response).toBeOK();
+  const { conditions } = await response.json();
+  expect(conditions.event.document_change).toEqual({
+    type: "revision", number: 3, source: "restoration",
+  });
+  expect(conditions.any).toEqual([{ mime_type: "application/pdf" }]);
+});
