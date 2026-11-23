@@ -280,18 +280,6 @@ async fn real_qpdf_detects_compressed_signature_and_attachment_and_password() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.pdf");
     std::fs::write(&source, tiny_pdf("Archive fixture")).unwrap();
-    let attachment = dir.path().join("attachment.txt");
-    std::fs::write(&attachment, "contents").unwrap();
-    let attached = dir.path().join("attached.pdf");
-    fixture_command(
-        StdCommand::new("qpdf")
-            .arg(&source)
-            .arg("--object-streams=generate")
-            .arg("--add-attachment")
-            .arg(&attachment)
-            .arg("--")
-            .arg(&attached),
-    );
     let encrypted = dir.path().join("encrypted.pdf");
     fixture_command(
         StdCommand::new("qpdf")
@@ -306,21 +294,39 @@ async fn real_qpdf_detects_compressed_signature_and_attachment_and_password() {
             .arg(&source),
     );
     let mut objects: serde_json::Value = serde_json::from_slice(&objects).unwrap();
+    // Inline the attachment data so qpdf only needs to open the PDF and JSON fixture.
+    let mut attachment_objects = objects.clone();
+    let filespec = attachment_objects["qpdf"][0]["maxobjectid"]
+        .as_u64()
+        .unwrap()
+        + 1;
+    let embedded_file = filespec + 1;
+    attachment_objects["qpdf"][1]["obj:1 0 R"]["value"]["/Names"] = serde_json::json!({
+        "/EmbeddedFiles": {"/Names": ["u:attachment.txt", format!("{filespec} 0 R")]}
+    });
+    attachment_objects["qpdf"][1][format!("obj:{filespec} 0 R")] = serde_json::json!({
+        "value": {
+            "/Type": "/Filespec",
+            "/F": "u:attachment.txt",
+            "/EF": {"/F": format!("{embedded_file} 0 R")}
+        }
+    });
+    attachment_objects["qpdf"][1][format!("obj:{embedded_file} 0 R")] = serde_json::json!({
+        "stream": {
+            "dict": {"/Type": "/EmbeddedFile"},
+            "data": "Y29udGVudHM="
+        }
+    });
+    let attached = dir.path().join("attached.pdf");
+    compressed_pdf_with_json(&source, &attached, &attachment_objects);
+
     // A synthetic signature dictionary tests structural detection. Its
     // signature does not need to verify to prevent destructive conversion.
     objects["qpdf"][1]["obj:1 0 R"]["value"]["/Perms"] = serde_json::json!({
         "/DocMDP": {"/Type":"/Sig", "/ByteRange":[0,100,200,100], "/Contents":"b:00"}
     });
-    let update = dir.path().join("signed.json");
-    std::fs::write(&update, serde_json::to_vec(&objects).unwrap()).unwrap();
     let signed = dir.path().join("signed.pdf");
-    fixture_command(
-        StdCommand::new("qpdf")
-            .arg(&source)
-            .arg(format!("--update-from-json={}", update.display()))
-            .arg("--object-streams=generate")
-            .arg(&signed),
-    );
+    compressed_pdf_with_json(&source, &signed, &objects);
 
     let converter = ArchiveConverter::new("eng");
     for (path, reason) in [
@@ -334,4 +340,16 @@ async fn real_qpdf_detects_compressed_signature_and_attachment_and_password() {
             Err(reason)
         );
     }
+}
+
+fn compressed_pdf_with_json(source: &Path, output: &Path, objects: &serde_json::Value) {
+    let update = output.with_extension("json");
+    std::fs::write(&update, serde_json::to_vec(objects).unwrap()).unwrap();
+    fixture_command(
+        StdCommand::new("qpdf")
+            .arg(source)
+            .arg(format!("--update-from-json={}", update.display()))
+            .arg("--object-streams=generate")
+            .arg(output),
+    );
 }
