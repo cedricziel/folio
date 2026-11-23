@@ -66,8 +66,10 @@ final class CustomMetadataWorkflowUITests: XCTestCase {
         let url = app.textFields["Destination URL"]
         XCTAssertTrue(url.waitForExistence(timeout: 10))
         url.tap()
-        url.typeText("http://127.0.0.1:9/unused")
-        app.buttons["Save workflow"].tap()
+        url.typeText("http://127.0.0.1:9/unused\n")
+        let save = app.buttons["Save workflow"]
+        XCTAssertTrue(save.waitForExistence(timeout: 10))
+        save.tap()
         XCTAssertTrue(app.staticTexts[name].waitForExistence(timeout: 10))
     }
 }

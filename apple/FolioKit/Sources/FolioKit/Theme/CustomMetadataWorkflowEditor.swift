@@ -19,6 +19,7 @@ struct CustomMetadataWorkflowEditor: View {
     @State private var loadingFields = false
     @State private var saving = false
     @State private var error: String?
+    @FocusState private var destinationFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
     private var selectedTrigger: CustomMetadataWorkflowTrigger? {
@@ -46,6 +47,9 @@ struct CustomMetadataWorkflowEditor: View {
                     }
                     Section("Send a webhook") {
                         TextField("Destination URL", text: $webhook)
+                            .focused($destinationFocused)
+                            .submitLabel(.done)
+                            .onSubmit { destinationFocused = false }
                         Toggle("Enabled", isOn: $enabled)
                     }
                 }
