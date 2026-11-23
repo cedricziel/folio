@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Document, DocumentSource, Id, SourceConditions, UserId, VaultId, WorkflowEventConditions,
-    WorkflowEventIdentity, WorkflowTarget,
+    Document, DocumentDate, DocumentSource, Id, SourceConditions, UserId, VaultId,
+    WorkflowEventConditions, WorkflowEventIdentity, WorkflowTarget,
 };
 use crate::error::{Error, Result};
 
@@ -654,6 +654,25 @@ pub enum WorkflowAction {
     },
     /// Discard the file instead of importing it; only valid for `ingest.received`
     SkipImport,
+    /// Set the document's title.
+    RenameDocument { title: String },
+    /// Remove tags from the document.
+    RemoveTags {
+        #[cfg_attr(feature = "openapi", schema(value_type = Vec<uuid::Uuid>))]
+        tag_ids: Vec<Id>,
+    },
+    /// Remove the correspondence assignment.
+    ClearCorrespondent,
+    /// Remove the document type assignment.
+    ClearDocumentType,
+    /// Move the document to Trash as the final action.
+    TrashDocument,
+    /// Set the document's date without a time or time zone.
+    SetDocumentDate { date: DocumentDate },
+    /// Clear the document's date.
+    ClearDocumentDate,
+    /// Mark a document reviewed or unreviewed as a system decision.
+    SetReviewed { reviewed: bool },
 }
 
 impl WorkflowAction {
@@ -723,7 +742,7 @@ impl WorkflowInput {
         if self.actions.is_empty() {
             return invalid("A workflow needs at least one action");
         }
-        for action in &self.actions {
+        for (index, action) in self.actions.iter().enumerate() {
             match action {
                 WorkflowAction::Webhook { url, headers, .. } => {
                     validate_webhook_url(url)?;
@@ -733,6 +752,15 @@ impl WorkflowInput {
                 }
                 WorkflowAction::AddTags { tag_ids } if tag_ids.is_empty() => {
                     return invalid("add_tags needs at least one tag");
+                }
+                WorkflowAction::RemoveTags { tag_ids } if tag_ids.is_empty() => {
+                    return invalid("remove_tags needs at least one tag");
+                }
+                WorkflowAction::RenameDocument { title } if title.trim().is_empty() => {
+                    return invalid("Enter a document title");
+                }
+                WorkflowAction::TrashDocument if index + 1 != self.actions.len() => {
+                    return invalid("Move to Trash must be the final action");
                 }
                 _ => {}
             }

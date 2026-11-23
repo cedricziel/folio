@@ -22,7 +22,15 @@ impl WorkflowTarget {
             WorkflowAction::SkipImport => self == Self::IngestCandidate,
             WorkflowAction::AddTags { .. }
             | WorkflowAction::SetCorrespondent { .. }
-            | WorkflowAction::SetDocumentType { .. } => self == Self::Document,
+            | WorkflowAction::SetDocumentType { .. }
+            | WorkflowAction::RenameDocument { .. }
+            | WorkflowAction::RemoveTags { .. }
+            | WorkflowAction::ClearCorrespondent
+            | WorkflowAction::ClearDocumentType
+            | WorkflowAction::TrashDocument
+            | WorkflowAction::SetDocumentDate { .. }
+            | WorkflowAction::ClearDocumentDate
+            | WorkflowAction::SetReviewed { .. } => self == Self::Document,
         }
     }
 }

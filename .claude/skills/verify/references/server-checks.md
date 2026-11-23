@@ -446,6 +446,16 @@ page on desktop and mobile in both themes. Check long actor labels for wrapping.
 Regenerate OpenAPI after response or route changes. Never verify workflow delivery
 against an existing webhook receiver or user archive.
 
+## Verify ordered document workflow actions
+
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_document_actions --test workflows --test workflow_lifecycle --test repository_contract`
+with an isolated Cargo target. The action contract forces the progress write to
+fail and checks that the mutation and its outbox event roll back. It also checks
+concurrent claims, stale progress, vault boundaries, and restart after someone
+edits a title that a workflow renamed. The API workflow suite checks action order
+and requires Trash to come last. Verify the generated client with
+`WorkflowDocumentActionTests` after updating OpenAPI.
+
 ## Verify managed source lifecycle
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test source_lifecycle`

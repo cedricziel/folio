@@ -9522,6 +9522,11 @@
           }
         }
       },
+      "DocumentDate": {
+        "type": "string",
+        "format": "date",
+        "description": "A Gregorian date from year 1 through 9999, serialized as YYYY-MM-DD."
+      },
       "DocumentDatePatch": {
         "type": "object",
         "properties": {
@@ -12985,6 +12990,146 @@
                 "type": "string",
                 "enum": [
                   "skip_import"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Set the document's title.",
+            "required": [
+              "title",
+              "type"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "rename_document"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Remove tags from the document.",
+            "required": [
+              "tag_ids",
+              "type"
+            ],
+            "properties": {
+              "tag_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "remove_tags"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Remove the correspondence assignment.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "clear_correspondent"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Remove the document type assignment.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "clear_document_type"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Move the document to Trash as the final action.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "trash_document"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Set the document's date without a time or time zone.",
+            "required": [
+              "date",
+              "type"
+            ],
+            "properties": {
+              "date": {
+                "$ref": "#/components/schemas/DocumentDate"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set_document_date"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Clear the document's date.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "clear_document_date"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Mark a document reviewed or unreviewed as a system decision.",
+            "required": [
+              "reviewed",
+              "type"
+            ],
+            "properties": {
+              "reviewed": {
+                "type": "boolean"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set_reviewed"
                 ]
               }
             }

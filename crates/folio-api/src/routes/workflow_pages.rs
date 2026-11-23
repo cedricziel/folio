@@ -479,7 +479,7 @@ impl FormValues {
                 WorkflowAction::SetDocumentType { document_type_id } => {
                     action_document_type_id = document_type_id.to_string()
                 }
-                WorkflowAction::Webhook { .. } | WorkflowAction::SkipImport => {}
+                _ => {}
             }
         }
         let metadata = c.event.as_ref().and_then(|event| event.metadata.as_ref());

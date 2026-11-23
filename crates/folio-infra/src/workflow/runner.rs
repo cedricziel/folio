@@ -7,8 +7,8 @@ use tracing::{info, warn};
 
 use folio_core::error::Error;
 use folio_core::models::{
-    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WebhookPayload, Workflow,
-    WorkflowAction, WorkflowRun, WorkflowTarget,
+    validate_webhook_url, Id, RunStatus, WebhookPayload, Workflow, WorkflowAction, WorkflowRun,
+    WorkflowTarget,
 };
 use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::ports::{DocumentRepository, WorkflowRepository};
@@ -18,6 +18,8 @@ use super::webhook::{WebhookClient, WebhookRequest};
 
 /// Attempts per run before it is marked failed
 pub const MAX_ATTEMPTS: u32 = 5;
+
+const DOCUMENT_UNAVAILABLE: &str = "Document is no longer active in the workflow's vault";
 
 /// What the caller should do with the job that triggered the execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,12 +40,9 @@ struct ActionFailure {
 
 /// Runs the actions of a [`WorkflowRun`], recording progress and errors on it
 ///
-/// Actions run in order and each is at-least-once: a run that is retried
-/// resumes at the action that failed rather than repeating finished ones. It
-/// executes the actions snapshotted when the run was created, so editing the
-/// workflow in between changes nothing. Document changes go through a
-/// repository whose events are attributed to workflows: live clients see them,
-/// but they never trigger `document.updated` workflows again.
+/// A retry resumes from persisted progress. Document changes and their progress
+/// commit together, while webhooks use a stable delivery ID across retries.
+/// Each run holds the actions captured when it was queued.
 pub struct WorkflowRunner {
     workflows: Arc<dyn WorkflowRepository>,
     documents: Arc<dyn DocumentRepository>,
@@ -129,6 +128,9 @@ impl WorkflowRunner {
                     RunOutcome::Failed
                 });
             }
+            if advance_to_persisted_progress(&mut run, &stored, index) {
+                continue;
+            }
             let Some(workflow) = self.active_definition(&run).await? else {
                 self.finish(
                     &mut run,
@@ -138,13 +140,13 @@ impl WorkflowRunner {
                 .await?;
                 return Ok(RunOutcome::Failed);
             };
-            if run.event.target() == WorkflowTarget::Document {
+            if action.is_webhook() && run.event.target() == WorkflowTarget::Document {
                 if let Some(document_id) = run.document_id {
                     if self.documents.locate(document_id).await? != Some(vault) {
                         self.finish(
                             &mut run,
                             RunStatus::Failed,
-                            Some("Document is no longer active in the workflow's vault".into()),
+                            Some(DOCUMENT_UNAVAILABLE.into()),
                         )
                         .await?;
                         return Ok(RunOutcome::Failed);
@@ -174,18 +176,29 @@ impl WorkflowRunner {
             }
             match with_actor(
                 None,
-                with_lineage(lineage, self.perform(vault, index, action, &run)),
+                with_lineage(lineage, self.perform(index, action, &run)),
             )
             .await
             {
                 Ok(response_status) => {
                     run.completed_actions = index as u32 + 1;
                     run.response_status = response_status.or(run.response_status);
-                    if !self.save(&run).await? {
+                    if action.is_webhook() && !self.save(&run).await? {
                         return Ok(RunOutcome::Failed);
                     }
                 }
                 Err(failure) => {
+                    if !action.is_webhook()
+                        && self
+                            .workflows
+                            .find_run(run.id)
+                            .await?
+                            .is_some_and(|stored| {
+                                advance_to_persisted_progress(&mut run, &stored, index)
+                            })
+                    {
+                        continue;
+                    }
                     run.response_status = failure.response_status;
                     let give_up = !failure.retryable || run.attempts >= MAX_ATTEMPTS;
                     if give_up {
@@ -264,7 +277,6 @@ impl WorkflowRunner {
     /// Returns the webhook's HTTP status when the action was a webhook
     async fn perform(
         &self,
-        vault: VaultId,
         action_index: usize,
         action: &WorkflowAction,
         run: &WorkflowRun,
@@ -302,66 +314,39 @@ impl WorkflowRunner {
                     }),
                 }
             }
-            local => self.perform_local(vault, local, run).await.map(|()| None),
+            _ => self
+                .documents
+                .apply_workflow_document_action(run, action_index as u32)
+                .await
+                .map(|()| None)
+                .map_err(|error| ActionFailure {
+                    retryable: !matches!(
+                        error,
+                        Error::NotFound { .. } | Error::Validation(_) | Error::Conflict(_)
+                    ),
+                    message: match error {
+                        Error::NotFound {
+                            entity_type: "Document",
+                            ..
+                        } => DOCUMENT_UNAVAILABLE.into(),
+                        other => other.to_string(),
+                    },
+                    response_status: None,
+                }),
         }
     }
+}
 
-    async fn perform_local(
-        &self,
-        vault: VaultId,
-        action: &WorkflowAction,
-        run: &WorkflowRun,
-    ) -> Result<(), ActionFailure> {
-        let document_id = run.document_id.ok_or_else(|| ActionFailure {
-            message: "Run has no document to change".into(),
-            retryable: false,
-            response_status: None,
-        })?;
-
-        let result = match action {
-            WorkflowAction::AddTags { tag_ids } => {
-                let mut result = Ok(());
-                for tag_id in tag_ids {
-                    result = self.documents.add_tag(vault, document_id, *tag_id).await;
-                    if result.is_err() {
-                        break;
-                    }
-                }
-                result
-            }
-            WorkflowAction::SetCorrespondent { correspondent_id } => self
-                .documents
-                .update(
-                    vault,
-                    document_id,
-                    UpdateDocument {
-                        correspondent_id: Some(Some(*correspondent_id)),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .map(|_| ()),
-            WorkflowAction::SetDocumentType { document_type_id } => self
-                .documents
-                .update(
-                    vault,
-                    document_id,
-                    UpdateDocument {
-                        document_type_id: Some(Some(*document_type_id)),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .map(|_| ()),
-            WorkflowAction::Webhook { .. } => unreachable!("webhooks are handled by the caller"),
-            // Only valid before import, where the pipeline handles it; nothing to do on a stored document.
-            WorkflowAction::SkipImport => Ok(()),
-        };
-
-        result.map_err(|e| ActionFailure {
-            retryable: !matches!(e, Error::NotFound { .. } | Error::Validation(_)),
-            message: e.to_string(),
-            response_status: None,
-        })
+fn advance_to_persisted_progress(
+    run: &mut WorkflowRun,
+    stored: &WorkflowRun,
+    index: usize,
+) -> bool {
+    if stored.completed_actions as usize <= index {
+        return false;
     }
+    run.completed_actions = stored.completed_actions;
+    run.attempts = run.attempts.max(stored.attempts);
+    run.response_status = stored.response_status;
+    true
 }

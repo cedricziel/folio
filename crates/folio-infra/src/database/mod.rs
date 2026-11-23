@@ -20,6 +20,7 @@ mod processing_summary;
 mod saved_view;
 mod source_lifecycle;
 pub mod sqlite;
+mod workflow_actions;
 mod workflow_lifecycle;
 
 use std::sync::Arc;
