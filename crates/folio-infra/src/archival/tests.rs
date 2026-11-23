@@ -280,18 +280,6 @@ async fn real_qpdf_detects_compressed_signature_and_attachment_and_password() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.pdf");
     std::fs::write(&source, tiny_pdf("Archive fixture")).unwrap();
-    let attachment = dir.path().join("attachment.txt");
-    std::fs::write(&attachment, "contents").unwrap();
-    let attached = dir.path().join("attached.pdf");
-    fixture_command(
-        StdCommand::new("qpdf")
-            .arg(&source)
-            .arg("--object-streams=generate")
-            .arg("--add-attachment")
-            .arg(&attachment)
-            .arg("--")
-            .arg(&attached),
-    );
     let encrypted = dir.path().join("encrypted.pdf");
     fixture_command(
         StdCommand::new("qpdf")
@@ -305,22 +293,46 @@ async fn real_qpdf_detects_compressed_signature_and_attachment_and_password() {
             .args(["--json=2", "--json-key=qpdf"])
             .arg(&source),
     );
-    let mut objects: serde_json::Value = serde_json::from_slice(&objects).unwrap();
+    let objects: serde_json::Value = serde_json::from_slice(&objects).unwrap();
+    let write_fixture = |kind: &str, objects: &serde_json::Value| {
+        let update = dir.path().join(format!("{kind}.json"));
+        std::fs::write(&update, serde_json::to_vec(objects).unwrap()).unwrap();
+        let pdf = dir.path().join(format!("{kind}.pdf"));
+        fixture_command(
+            StdCommand::new("qpdf")
+                .arg(&source)
+                .arg(format!("--update-from-json={}", update.display()))
+                .arg("--object-streams=generate")
+                .arg(&pdf),
+        );
+        pdf
+    };
+    let mut attached_objects = objects.clone();
+    attached_objects["qpdf"][1]["obj:1 0 R"]["value"]["/Names"] = serde_json::json!({
+        "/EmbeddedFiles": {"/Names": ["u:attachment.txt", {
+            "/Type": "/Filespec", "/F": "u:attachment.txt", "/EF": {"/F": "6 0 R"}
+        }]}
+    });
+    attached_objects["qpdf"][1]["obj:6 0 R"] = serde_json::json!({
+        "stream": {"dict": {"/Type": "/EmbeddedFile"}, "data": "Y29udGVudHM="}
+    });
+    let attached = write_fixture("attached", &attached_objects);
+    assert_eq!(
+        fixture_command(
+            StdCommand::new("qpdf")
+                .arg("--show-attachment=attachment.txt")
+                .arg(&attached),
+        ),
+        b"contents"
+    );
+
+    let mut signed_objects = objects;
     // A synthetic signature dictionary tests structural detection. Its
     // signature does not need to verify to prevent destructive conversion.
-    objects["qpdf"][1]["obj:1 0 R"]["value"]["/Perms"] = serde_json::json!({
+    signed_objects["qpdf"][1]["obj:1 0 R"]["value"]["/Perms"] = serde_json::json!({
         "/DocMDP": {"/Type":"/Sig", "/ByteRange":[0,100,200,100], "/Contents":"b:00"}
     });
-    let update = dir.path().join("signed.json");
-    std::fs::write(&update, serde_json::to_vec(&objects).unwrap()).unwrap();
-    let signed = dir.path().join("signed.pdf");
-    fixture_command(
-        StdCommand::new("qpdf")
-            .arg(&source)
-            .arg(format!("--update-from-json={}", update.display()))
-            .arg("--object-streams=generate")
-            .arg(&signed),
-    );
+    let signed = write_fixture("signed", &signed_objects);
 
     let converter = ArchiveConverter::new("eng");
     for (path, reason) in [
