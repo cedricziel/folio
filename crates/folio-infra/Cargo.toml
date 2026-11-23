@@ -18,6 +18,7 @@ sqlx = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+roxmltree = "0.21"
 
 # Error handling
 thiserror = { workspace = true }
@@ -90,6 +91,7 @@ optional = true
 libc = "0.2"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 axum = { workspace = true, features = ["http2"] }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }

@@ -9186,7 +9186,9 @@
                 "$ref": "#/components/schemas/MetadataLinkTarget"
               },
               {
-                "type": "null"
+                "enum": [
+                  null
+                ]
               }
             ]
           },
@@ -9206,7 +9208,9 @@
                 "$ref": "#/components/schemas/MetadataValue"
               },
               {
-                "type": "null"
+                "enum": [
+                  null
+                ]
               }
             ]
           }
@@ -9907,7 +9911,9 @@
                 "description": "Required: an explicit `null` clears, so a missing key cannot clear by accident."
               },
               {
-                "type": "null"
+                "enum": [
+                  null
+                ]
               }
             ]
           }
@@ -10078,7 +10084,8 @@
           },
           "position": {
             "type": "integer",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
             "minimum": 0
           },
           "updated_at": {
@@ -10108,7 +10115,8 @@
           },
           "position": {
             "type": "integer",
-            "format": "int32",
+            "format": "int64",
+            "maximum": 4294967295,
             "minimum": 0
           }
         },
@@ -10473,11 +10481,17 @@
             }
           },
           "revision": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
             ],
-            "format": "uuid",
             "description": "Revision returned by the last read. Send null before the first change."
           }
         },

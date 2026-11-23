@@ -26,6 +26,7 @@ pub trait ArchivalRepository: Send + Sync {
 
     /// Compare-and-swap queueing. Use a fresh ID, and pass the observed current attempt ID
     /// on retry (or None for the initial attempt). Replaying the current ID succeeds.
+    /// The server adapter commits the durable delivery alongside the new attempt.
     /// False means the source or expected attempt changed.
     async fn enqueue_archive(
         &self,

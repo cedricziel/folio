@@ -201,6 +201,66 @@ async fn condition_groups_survive_api_storage_and_html_edits() {
     assert_eq!(stored["conditions"], groups);
 }
 
+#[tokio::test]
+async fn web_editor_replaces_nested_groups_and_distinguishes_empty_any() {
+    let app = test_app().await;
+    let mut body = workflow_body("https://example.com/hook");
+    body["conditions"] = json!({
+        "mime_type": "application/pdf",
+        "any": [{"filename_glob": "previous-*"}]
+    });
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = created["id"].as_str().unwrap();
+    let uri = format!("/workflows/{id}");
+    let api = format!("/api/workflows/{id}");
+    let submit = |groups: &Value| {
+        url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("name", "Quarterly invoices")
+            .append_pair("trigger", "document.uploaded")
+            .append_pair("mime_type", "application/pdf")
+            .append_pair("webhook_url", "https://example.com/hook")
+            .append_pair("condition_groups", &groups.to_string())
+            .finish()
+    };
+    let nested = json!({
+        "all": [
+            {
+                "any": [{"filename_glob": "quarter-*"}, {"filename_glob": "invoice-*"}],
+                "none": [{"filename_glob": "draft-*"}]
+            }
+        ],
+        "any": []
+    });
+    let (status, _) = post_form(&app, &uri, submit(&nested)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, stored) = json_request(&app, "GET", &api, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        stored["conditions"],
+        json!({
+            "mime_type": "application/pdf",
+            "all": nested["all"],
+            "any": []
+        })
+    );
+
+    let (status, _) = post_form(&app, &uri, submit(&json!({"all": nested["all"]}))).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, stored) = json_request(&app, "GET", &api, None).await;
+    assert_eq!(
+        stored["conditions"],
+        json!({"mime_type": "application/pdf", "all": nested["all"]})
+    );
+
+    let bad = json!({"all": [{"source": {"email_from": {"regex": "("}}}]});
+    let (status, html) = post_form(&app, &uri, submit(&bad)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("Invalid regex"));
+    let (_, unchanged) = json_request(&app, "GET", &api, None).await;
+    assert_eq!(unchanged, stored);
+}
+
 /// A receiver that records requests and answers with a fixed status
 async fn receiver(status: u16) -> (String, Arc<Mutex<Vec<(HeaderMap, String)>>>) {
     type Log = Arc<Mutex<Vec<(HeaderMap, String)>>>;

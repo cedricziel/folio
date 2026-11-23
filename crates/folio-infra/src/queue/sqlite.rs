@@ -24,7 +24,8 @@ pub(crate) async fn insert_job(
 ) -> Result<Uuid> {
     job_type.ensure_dispatchable()?;
     let plan =
-        super::processing_scope::sqlite::prepare_enqueue(conn, &job_type, Uuid::new_v4()).await?;
+        super::processing_scope::sqlite::prepare_enqueue(conn, &job_type, job_type.new_queue_id())
+            .await?;
     if plan.existing {
         return Ok(plan.id);
     }
@@ -737,7 +738,8 @@ impl SqliteJobQueue {
                 SELECT status, ROW_NUMBER() OVER (
                     PARTITION BY job_type ORDER BY created_at DESC, completed_at DESC, id DESC
                 ) AS position FROM jobs
-                WHERE payload LIKE ? AND status IN ('completed', 'failed')
+                WHERE payload LIKE ? AND job_type <> 'generate_archive'
+                  AND status IN ('completed', 'failed')
             ) WHERE position = 1 AND status = 'failed'
             "#,
         )

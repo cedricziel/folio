@@ -1,12 +1,16 @@
 mod common;
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use folio_core::models::{
     ArchiveCompletion, ArchiveSource, ArchiveState, ArchiveTool, CreateDocument, FileIdentity, Id,
     ValidatedArchive,
 };
-use folio_core::ports::{keys, purge_document, DocumentStore};
+use folio_core::ports::{keys, purge_document, DocumentStore, ProcessingQueue, ProcessingStatus};
 use folio_core::Error;
+use folio_infra::archival::ArchiveConverter;
+use folio_infra::queue::{ArchiveService, FailOutcome, JobClass, JobStatus, JobType};
 use folio_infra::{Database, ObjectStoreDocumentStore};
 
 fn output(source: &ArchiveSource, attempt: Id) -> ValidatedArchive {
@@ -45,7 +49,7 @@ async fn archival_contract(db: Database) {
         .await
         .unwrap()
         .id;
-    let store = ObjectStoreDocumentStore::in_memory();
+    let store = Arc::new(ObjectStoreDocumentStore::in_memory());
     let bytes = Bytes::from_static(b"immutable original");
     let original = FileIdentity::from_bytes(keys::original(id), "application/pdf", &bytes);
     assert!(archives.current_source(vault, id).await.unwrap().is_none());
@@ -105,6 +109,74 @@ async fn archival_contract(db: Database) {
         .enqueue_archive(&source, first, None)
         .await
         .unwrap());
+    let jobs = &repos.jobs;
+    let mut retrying = true;
+    while retrying {
+        assert_eq!(
+            jobs.processing_status(id).await.unwrap(),
+            ProcessingStatus::Completed
+        );
+        let active = jobs.find_active_jobs_for_document(id).await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(
+            (active[0].id, &active[0].status),
+            (first, &JobStatus::Pending)
+        );
+        let job = jobs
+            .dequeue_class(JobClass::Archive)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.id, first);
+        assert!(matches!(job.job_type, JobType::GenerateArchive {
+            vault_id, document_id, source_revision_id, attempt_id,
+        } if (vault_id, document_id, source_revision_id, attempt_id) == (vault, id, source.revision_id, first)));
+        assert_eq!(
+            jobs.processing_status(id).await.unwrap(),
+            ProcessingStatus::Completed
+        );
+        let active = jobs.find_active_jobs_for_document(id).await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(
+            (active[0].id, &active[0].status),
+            (first, &JobStatus::Processing)
+        );
+        let outcome = jobs
+            .fail(&job, "archive storage unavailable", true)
+            .await
+            .unwrap();
+        if job.attempts < job.max_attempts {
+            assert_eq!(outcome, FailOutcome::Retrying);
+            let sql = "UPDATE jobs SET scheduled_at = $1 WHERE job_type = 'generate_archive' AND status = 'pending'";
+            let ready_to_run = job.created_at;
+            match &db {
+                Database::Sqlite(pool) => sqlx::query(sql)
+                    .bind(ready_to_run.to_rfc3339())
+                    .execute(pool)
+                    .await
+                    .map(|_| ()),
+                Database::Postgres(pool) => sqlx::query(sql)
+                    .bind(ready_to_run)
+                    .execute(pool)
+                    .await
+                    .map(|_| ()),
+            }
+            .unwrap();
+        } else {
+            assert_eq!(outcome, FailOutcome::GaveUp);
+            retrying = false;
+        }
+    }
+    assert_eq!(
+        jobs.processing_status(id).await.unwrap(),
+        ProcessingStatus::Completed
+    );
+    assert!(repos
+        .jobs
+        .dequeue_class(JobClass::Archive)
+        .await
+        .unwrap()
+        .is_none());
     let queued = archives.current_attempt(vault, id).await.unwrap().unwrap();
     assert_eq!(queued.id, first);
     assert_eq!(queued.state, ArchiveState::Queued);
@@ -295,6 +367,20 @@ async fn archival_contract(db: Database) {
     assert_eq!(new_source.revision_id, replacement);
     assert_eq!(new_source.original, source.original);
 
+    let service = ArchiveService::new(
+        db.clone(),
+        archives.clone(),
+        store.clone(),
+        ArchiveConverter::new("eng"),
+        false,
+    );
+    assert_eq!(service.backfill(other_vault, 1).await.unwrap(), 0);
+    assert_eq!(service.backfill(vault, 1).await.unwrap(), 1);
+    let backfill = service.status(vault, id).await.unwrap().unwrap();
+    assert_eq!(backfill.source, new_source);
+    assert_eq!(backfill.state, ArchiveState::Queued);
+    assert_eq!(service.backfill(vault, 1).await.unwrap(), 0);
+
     // Move schedules processing. Restore the initial fixture revision before
     // exercising lifecycle behavior: dispatch of replacement revisions is gated.
     let sql = sqlx::AssertSqlSafe(format!(
@@ -383,7 +469,7 @@ async fn archival_contract(db: Database) {
         .enqueue_archive(&moved.source, Id::new_v4(), Some(final_attempt))
         .await
         .unwrap());
-    purge_document(&store, id).await.unwrap();
+    purge_document(store.as_ref(), id).await.unwrap();
     documents.finalize_purge(other_vault, id).await.unwrap();
     assert!(!archives
         .retains_archive(id, source.revision_id, third)

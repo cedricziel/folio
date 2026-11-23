@@ -48,6 +48,26 @@ pub struct Config {
     pub import: ImportConfig,
     pub push: PushConfig,
     pub apple: AppleConfig,
+    pub archival: ArchivalConfig,
+}
+
+/// Automatic PDF/A discovery and local converter options.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArchivalConfig {
+    pub automatic: bool,
+    pub languages: String,
+    pub verapdf: PathBuf,
+}
+
+impl Default for ArchivalConfig {
+    fn default() -> Self {
+        Self {
+            automatic: false,
+            languages: "eng".into(),
+            verapdf: "verapdf".into(),
+        }
+    }
 }
 
 /// Automatic ingestion, configured per named source
@@ -905,6 +925,21 @@ pub const SETTINGS: &[Setting] = &[
         key: "processing.auto_embed",
         env: "FOLIO_PROCESSING__AUTO_EMBED",
         kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "archival.automatic",
+        env: "FOLIO_ARCHIVAL__AUTOMATIC",
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "archival.languages",
+        env: "FOLIO_ARCHIVAL__LANGUAGES",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "archival.verapdf",
+        env: "FOLIO_ARCHIVAL__VERAPDF",
+        kind: ValueKind::Str,
     },
     Setting {
         key: "mcp.enabled",
