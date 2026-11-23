@@ -912,10 +912,10 @@ Stimulus.register("revision-publication", class extends Controller {
       if (!status) throw new Error("File history response is incomplete");
       status.textContent = message;
       this.element.replaceWith(replacement);
-      status.scrollIntoView({ block: "nearest" });
+      status.scrollIntoView({ block: "center" });
     } catch {
       this.statusTarget.textContent = "The file changed while you were editing. Reload to see the latest file.";
-      this.statusTarget.scrollIntoView({ block: "nearest" });
+      this.statusTarget.scrollIntoView({ block: "center" });
     }
   }
 

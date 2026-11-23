@@ -260,24 +260,43 @@ test("the file history publishes a replacement and restores an earlier original"
     await expect(current).toBeOK();
     expect(await current.body()).toEqual(blankPdf(1));
 
+    await page.setViewportSize({ width: 390, height: 844 });
     const pageResponse = await request.get(`${document}/revisions`);
     await expect(pageResponse).toBeOK();
     const { publication_enabled, revisions } = await pageResponse.json();
     expect(publication_enabled).toBe(true);
-    await expect(await request.post(`${document}/revisions`, {
-      headers: { "Idempotency-Key": randomUUID() },
-      multipart: {
-        expected_current_revision_id: revisions[0].id,
-        file: { name: "newer.pdf", mimeType: "application/pdf", buffer: blankPdf(3) },
-      },
-    })).toBeOK();
+    const append = async (currentID: string, filename: string) => {
+      const response = await request.post(`${document}/revisions`, {
+        headers: { "Idempotency-Key": randomUUID() },
+        multipart: {
+          expected_current_revision_id: currentID,
+          file: { name: filename, mimeType: "application/pdf", buffer: blankPdf(3) },
+        },
+      });
+      await expect(response).toBeOK();
+      return (await response.json()).id as string;
+    };
+    let currentID = revisions[0].id;
+    for (let number = 4; number <= 7; number++) {
+      currentID = await append(currentID, `revision-${number}.pdf`);
+    }
+    await page.reload();
+    await openHistory();
+    await expect(history.getByText("Revision 7", { exact: true })).toBeVisible();
+    await append(currentID, "newer.pdf");
     await Promise.all([
       publication(409),
-      history.getByRole("button", { name: "Restore revision 2", exact: true }).click(),
+      history.getByRole("button", { name: "Restore revision 1", exact: true }).click(),
     ]);
-    await expect(history.getByRole("status")).toContainText("The file changed while you were editing");
+    const conflict = history.getByRole("status");
+    await expect(conflict).toContainText("The file changed while you were editing");
     await expect(history.getByText("newer.pdf", { exact: true })).toBeVisible();
-    await expect(history.getByText("Revision 4", { exact: true })).toBeVisible();
+    await expect(history.getByText("Revision 8", { exact: true })).toBeVisible();
+    await expect.poll(() => conflict.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      const toolbar = element.ownerDocument.querySelector(".topbar")?.getBoundingClientRect();
+      return rect.top >= (toolbar?.bottom ?? 0) && rect.bottom <= window.innerHeight;
+    })).toBe(true);
     await expect(page).toHaveURL(new RegExp(`/documents/${id}`));
   } finally {
     await request.delete(document);
