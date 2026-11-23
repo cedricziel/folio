@@ -183,12 +183,6 @@ test("file history downloads the original without leaving the document", async (
     await expect(history.getByText("Revision 1", { exact: true })).toBeVisible();
     await expect(history.getByText("Current", { exact: true })).toBeVisible();
     await expect(history.getByText("statement.pdf", { exact: true })).toBeVisible();
-    if (process.env.FOLIO_REVISION_PUBLICATION_TEST !== "1") {
-      const listing = await request.get(`/api/documents/${id}/revisions`);
-      await expect(listing).toBeOK();
-      expect((await listing.json()).publication_enabled).toBeUndefined();
-      await expect(history.getByRole("button", { name: "Replace file", exact: true })).toHaveCount(0);
-    }
 
     const downloaded = page.waitForEvent("download");
     await history.getByRole("link", { name: "Download original", exact: true }).click();
@@ -212,7 +206,6 @@ function blankPdf(pages: number): Buffer {
 }
 
 test("the file history publishes a replacement and restores an earlier original", async ({ page, request }) => {
-  test.skip(process.env.FOLIO_REVISION_PUBLICATION_TEST !== "1", "Requires the isolated publication build");
   test.setTimeout(60_000);
   const upload = await request.post("/api/documents/upload", {
     multipart: {
@@ -229,6 +222,9 @@ test("the file history publishes a replacement and restores an earlier original"
     await expect(history.getByRole("button", { name: "Replace file", exact: true })).toBeVisible();
   };
   try {
+    const initialHistory = await request.get(`${document}/revisions`);
+    await expect(initialHistory).toBeOK();
+    expect(await initialHistory.json()).toMatchObject({ publication_enabled: true });
     await page.goto(`/documents/${id}`);
     await openHistory();
     await history.getByLabel("Choose a replacement file").setInputFiles({
@@ -263,8 +259,7 @@ test("the file history publishes a replacement and restores an earlier original"
     await page.setViewportSize({ width: 390, height: 844 });
     const pageResponse = await request.get(`${document}/revisions`);
     await expect(pageResponse).toBeOK();
-    const { publication_enabled, revisions } = await pageResponse.json();
-    expect(publication_enabled).toBe(true);
+    const { revisions } = await pageResponse.json();
     const append = async (currentID: string, filename: string) => {
       const response = await request.post(`${document}/revisions`, {
         headers: { "Idempotency-Key": randomUUID() },
