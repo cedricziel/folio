@@ -448,7 +448,7 @@ against an existing webhook receiver or user archive.
 
 ## Verify ordered document workflow actions
 
-Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_document_actions --test workflows --test workflow_lifecycle --test repository_contract`
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_document_actions --test workflows --test workflow_lifecycle --test repository_contract`
 with an isolated Cargo target. The action contract forces the progress write to
 fail and checks that the mutation and its outbox event roll back. It also checks
 concurrent claims, stale progress, vault boundaries, and restart after someone
