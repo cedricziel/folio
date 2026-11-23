@@ -29,7 +29,7 @@
         <div class="field">
             <label for="trigger">When</label>
             <select class="select" id="trigger" name="trigger" data-workflow-form-target="trigger" data-action="change->workflow-form#sync">
-                {% for t in triggers %}<option value="{{ t.value }}"{% if t.selected %} selected{% endif %}>{{ t.label }}</option>{% endfor %}
+                {% for t in triggers %}<option value="{{ t.value }}"{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}{% if t.selected %} selected{% endif %}>{{ t.label }}</option>{% endfor %}
             </select>
         </div>
 
@@ -140,6 +140,25 @@
                 <option value="true"{% if values.ingest_retryable == "true" %} selected{% endif %}>Yes</option>
                 <option value="false"{% if values.ingest_retryable == "false" %} selected{% endif %}>No</option>
             </select>
+        </fieldset>
+
+        <fieldset class="field" data-workflow-form-target="processingFilter" hidden disabled>
+            <legend class="legend">Processing conditions</legend>
+            <input type="hidden" name="processing_form" value="1">
+            {% for field in processing_fields %}
+            <div data-processing-key="{{ field.key }}">
+                <label for="processing_{{ field.key }}">{{ field.label }}</label>
+                {% if field.boolean %}
+                <select class="select" id="processing_{{ field.key }}" name="processing_{{ field.key }}">
+                    <option value="">Any</option>
+                    <option value="true"{% if field.value == "true" %} selected{% endif %}>Yes</option>
+                    <option value="false"{% if field.value == "false" %} selected{% endif %}>No</option>
+                </select>
+                {% else %}
+                <input class="input" type="text" id="processing_{{ field.key }}" name="processing_{{ field.key }}" value="{{ field.value }}"{% if field.integer %} inputmode="numeric"{% endif %}{% if field.timestamp %} placeholder="2040-01-03T09:30:00Z"{% endif %}>
+                {% endif %}
+            </div>
+            {% endfor %}
         </fieldset>
 
         <fieldset class="field" data-workflow-form-target="metadataFilter" hidden disabled>
