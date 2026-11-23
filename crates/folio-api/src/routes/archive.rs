@@ -9,7 +9,6 @@ use axum::{
 };
 use folio_core::models::{ArchiveAttempt, ArchiveCompletion, ArchiveState, ArchiveTool};
 use folio_infra::queue::ArchiveService;
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Semaphore, SemaphorePermit};
 use utoipa::ToSchema;
@@ -306,16 +305,23 @@ fn acquire_download(slots: &Semaphore) -> ApiResult<SemaphorePermit<'_>> {
     })
 }
 
+struct DownloadAllocation {
+    bytes: Vec<u8>,
+    _permit: SemaphorePermit<'static>,
+}
+
+impl AsRef<[u8]> for DownloadAllocation {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
 fn download_body(bytes: Vec<u8>, permit: SemaphorePermit<'static>) -> Body {
-    // Slow clients retain the allocation, so keep their slot with the body.
-    let stream = futures::stream::once(async move {
-        Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(bytes))
-    })
-    .map(move |chunk| {
-        let _lease = &permit;
-        chunk
-    });
-    Body::from_stream(stream)
+    // The transport can retain emitted bytes after dropping the response body.
+    Body::from(axum::body::Bytes::from_owner(DownloadAllocation {
+        bytes,
+        _permit: permit,
+    }))
 }
 
 #[cfg(test)]
@@ -342,6 +348,20 @@ mod tests {
             axum::body::to_bytes(body, 10).await.unwrap().as_ref(),
             &[1, 2, 3]
         );
+        assert!(acquire_download(&SLOTS).is_ok());
+    }
+    #[tokio::test]
+    async fn emitted_bytes_keep_capacity_after_body_drop_until_last_clone_drops() {
+        use http_body_util::BodyExt;
+        static SLOTS: Semaphore = Semaphore::const_new(1);
+        let mut body = download_body(vec![1, 2, 3], acquire_download(&SLOTS).unwrap());
+        let bytes = body.frame().await.unwrap().unwrap().into_data().unwrap();
+        let retained = bytes.clone();
+        drop(body);
+        drop(bytes);
+        assert_eq!(retained.as_ref(), &[1, 2, 3]);
+        assert!(acquire_download(&SLOTS).is_err());
+        drop(retained);
         assert!(acquire_download(&SLOTS).is_ok());
     }
 }
