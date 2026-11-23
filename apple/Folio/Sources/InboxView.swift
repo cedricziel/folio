@@ -110,7 +110,8 @@ struct InboxView: View {
             }
             .listActivity(
                 vaultID: vaultID, list: advertisedList,
-                selection: showsPreview ? session.selection : session.path.last)
+                selection: showsPreview ? session.selection : session.path.last
+            )
             .onChange(of: showsPreview) { _, showsPreview in
                 session.adaptToLayout(showsPreview: showsPreview)
             }
@@ -148,6 +149,7 @@ struct InboxView: View {
                 DocumentDetailView(
                     snapshot: .init(document: document, lookups: list.lookups), service: service,
                     vaultID: vaultID, onDocumentChange: { list.apply($0) },
+                    openLinkedDocument: { onOpenDocument($0, vaultID) },
                     continuation: session.continuation?.documentID == id ? session.continuation : nil,
                     onContinued: { session.continuation = nil }
                 )

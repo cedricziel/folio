@@ -198,6 +198,14 @@ Regenerate OpenAPI before running the suite and verify schema equality with
 pinned Swift generator. The equivalent null-only enum preserves the generated
 value union and keeps explicit clears available.
 
+## Verify the native custom fields inspector
+
+Run `CustomMetadataUITests` in the isolated NavigationTests fixture. Verify a
+viewer can follow a logical link without editing and an editor can replace an
+exact decimal without rounding. Use the field manager in a disposable account to
+create a field, rename an option, and retire and restore it. Select a different vault
+and confirm the first vault’s fields are gone from the manager.
+
 ## Apple workflow lifecycle
 
 Run the isolated package suite with `--filter 'WorkflowLifecycleTests|WorkflowLifecycleServiceTests'`.
