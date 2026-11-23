@@ -1,6 +1,7 @@
 //! Domain models
 
 mod apple_app_id;
+mod archival;
 mod caller;
 mod correspondent;
 mod document;
@@ -33,6 +34,9 @@ mod workflow_event_conditions;
 mod workflow_trigger;
 
 pub use apple_app_id::{AppleAppId, InvalidAppleAppId};
+pub use archival::{
+    ArchiveAttempt, ArchiveCompletion, ArchiveSource, ArchiveState, ArchiveTool, ValidatedArchive,
+};
 pub use caller::Caller;
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
 pub use document::{

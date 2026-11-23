@@ -9,6 +9,7 @@
 //! rather than `query!` macros, so building needs neither a live database nor
 //! an offline cache per backend.
 
+mod archival;
 mod health;
 mod ingest_outcomes;
 mod metadata_value;
@@ -137,6 +138,7 @@ const LIVE_CHUNK_DOCUMENT: &str = "d.deleted_at IS NULL AND d.purge_requested_at
 
 /// The ports Folio needs, implemented for one backend
 pub struct Repositories {
+    pub archival: Arc<dyn folio_core::ports::ArchivalRepository>,
     pub metadata_fields: Arc<dyn folio_core::ports::MetadataFieldRepository>,
     pub metadata_options: Arc<dyn folio_core::ports::MetadataOptionRepository>,
     pub metadata_values: Arc<dyn folio_core::ports::MetadataValueRepository>,
@@ -213,6 +215,7 @@ impl Database {
                     )
                 };
                 Repositories {
+                    archival: Arc::new(self.clone()),
                     metadata_fields: Arc::new(
                         sqlite::SqliteMetadataFieldRepository::new(pool.clone())
                             .with_wake(wake.clone()),
@@ -276,6 +279,7 @@ impl Database {
                     )
                 };
                 Repositories {
+                    archival: Arc::new(self.clone()),
                     metadata_fields: Arc::new(
                         postgres::PostgresMetadataFieldRepository::new(pool.clone())
                             .with_wake(wake.clone()),
