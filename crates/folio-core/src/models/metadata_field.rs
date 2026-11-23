@@ -31,6 +31,7 @@ pub struct MetadataOption {
     pub vault_id: VaultId,
     pub field_id: uuid::Uuid,
     pub label: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = i64, minimum = 0, maximum = 4294967295u64))]
     pub position: u32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -67,6 +68,7 @@ impl MetadataFieldInput {
 pub struct MetadataOptionInput {
     pub label: String,
     #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = i64, minimum = 0, maximum = 4294967295u64))]
     pub position: u32,
 }
 
