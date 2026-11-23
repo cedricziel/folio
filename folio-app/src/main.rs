@@ -22,7 +22,9 @@ use folio_core::services::{
     OutboxDispatcher, VaultService, WorkflowEngine,
 };
 use folio_core::EventBroadcaster;
+use folio_infra::archival::{ArchiveConverter, ToolPaths};
 use folio_infra::push::ConfiguredPush;
+use folio_infra::queue::ArchiveService;
 use folio_infra::{
     build_store, telemetry, Config, Database, DatabaseHealthCheck, DynamicEmbeddingService,
     DynamicOcrService, PipelineContext, SourceFactory, StorageFileMetadata, ThumbnailService,
@@ -212,6 +214,20 @@ async fn main() -> Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut background = JoinSet::new();
 
+    let archive_service = Arc::new(ArchiveService::new(
+        database.clone(),
+        repos.archival.clone(),
+        store.clone(),
+        ArchiveConverter::with_tools(
+            config.archival.languages.clone(),
+            ToolPaths {
+                verapdf: config.archival.verapdf.clone(),
+                ..ToolPaths::default()
+            },
+        ),
+        config.archival.automatic,
+    ));
+
     // Start background worker
     let worker = Worker::new(
         job_queue.clone(),
@@ -225,7 +241,8 @@ async fn main() -> Result<()> {
         WorkerConfig::default(),
         outbox.clone(),
     )
-    .with_workflow_runner(workflow_runner);
+    .with_workflow_runner(workflow_runner)
+    .with_archive_service(archive_service);
 
     background.spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
 

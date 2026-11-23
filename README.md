@@ -7,6 +7,7 @@ It runs as one binary with SQLite and local storage by default.
 - OCR with local Tesseract or a vision model ([pipeline](docs/pipeline.md))
 - Semantic search over embeddings
 - Automatic ingestion from a watched folder or IMAP mailboxes ([ingestion](docs/ingestion.md))
+- Validated searchable PDF/A copies of PDF and image originals ([archival generation](docs/archival.md))
 - Workflows that call webhooks on document events ([workflows](docs/workflows.md))
 - An MCP server for AI clients ([mcp](docs/mcp.md))
 - Sign-in with passwords, OpenID Connect or forward auth ([auth](docs/auth.md))

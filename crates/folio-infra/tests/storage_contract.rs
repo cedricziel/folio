@@ -157,6 +157,33 @@ async fn local_directory_satisfies_the_contract() {
 }
 
 #[tokio::test]
+async fn local_create_cleanup_refuses_symlinked_parent_directories() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let store = ObjectStoreDocumentStore::local(root.path().to_str().unwrap())
+        .await
+        .unwrap();
+    let key = keys::revision_artifact(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let final_name = std::path::Path::new(&key)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let final_path = outside.path().join(final_name);
+    let staged_path = outside.path().join(format!("{final_name}#1"));
+    let parent = root.path().join(&key).parent().unwrap().to_owned();
+    std::fs::create_dir_all(parent.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(outside.path(), parent).unwrap();
+    std::fs::write(&final_path, b"outside final").unwrap();
+    std::fs::write(&staged_path, b"outside staging").unwrap();
+
+    assert!(store.discard_create(&key, true).await.is_err());
+
+    assert_eq!(std::fs::read(final_path).unwrap(), b"outside final");
+    assert_eq!(std::fs::read(staged_path).unwrap(), b"outside staging");
+}
+
+#[tokio::test]
 async fn local_store_has_no_presigned_urls() {
     let store = ObjectStoreDocumentStore::in_memory();
     assert!(store
@@ -238,4 +265,38 @@ async fn s3_satisfies_the_contract_on_minio() {
     assert!(url.contains("tenant-a"), "{url}");
     let body = reqwest::get(&url).await.unwrap().bytes().await.unwrap();
     assert_eq!(&body[..], b"scoped");
+}
+
+#[tokio::test]
+async fn s3_create_only_does_not_replay_after_a_gateway_error() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/folio-test/tenant-a/documents/artifact"))
+        .and(header("if-none-match", "*"))
+        .respond_with(ResponseTemplate::new(502))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let store = ObjectStoreDocumentStore::s3(&S3Config {
+        bucket: Some("folio-test".into()),
+        endpoint: Some(server.uri()),
+        access_key_id: Some("test-access-key".into()),
+        secret_access_key: Some("test-secret-key".into()),
+        region: Some("us-east-1".into()),
+        path_style: Some(true),
+        allow_http: true,
+        prefix: Some("tenant-a".into()),
+    })
+    .unwrap();
+
+    assert!(matches!(
+        store
+            .put_if_absent("documents/artifact", Bytes::from_static(b"artifact"))
+            .await,
+        Err(Error::Storage(_))
+    ));
+    server.verify().await;
 }
