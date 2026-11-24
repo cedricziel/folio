@@ -677,6 +677,7 @@ async fn expired_workflow_job_settles_run_with_outcome(db: &Database) {
                 name: "Recover a workflow run".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUploaded,
+                triggers: Vec::new(),
                 cadence: None,
                 conditions: Default::default(),
                 actions: vec![WorkflowAction::Webhook {
