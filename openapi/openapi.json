@@ -8960,6 +8960,15 @@
         "operationId": "listWorkflowTriggers",
         "parameters": [
           {
+            "name": "include_extended",
+            "in": "query",
+            "description": "Include newer trigger IDs. Omit this parameter for the original picker catalog.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "X-Folio-Vault",
             "in": "header",
             "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
@@ -8979,6 +8988,16 @@
                   "items": {
                     "$ref": "#/components/schemas/WorkflowTriggerDefinition"
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

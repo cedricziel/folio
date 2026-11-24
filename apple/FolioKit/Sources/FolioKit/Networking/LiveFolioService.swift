@@ -948,8 +948,10 @@ extension LiveFolioService: WorkflowTriggerEditingService {
     public func workflowTriggerChoices(vaultID: UUID) async throws -> [WorkflowTriggerChoice] {
         let scoped = scopedClient(to: vaultID)
         return try await scoped.call("workflows.list_triggers") {
-            let definitions = try await scoped.client.listWorkflowTriggers().ok.body.json
-            return try definitions.map { definition in
+            let definitions = try await scoped.client.listWorkflowTriggers(query: .init(includeExtended: true))
+                .ok.body.json
+            return try definitions.compactMap { definition -> WorkflowTriggerChoice? in
+                guard Components.Schemas.WorkflowTrigger(rawValue: definition.eventType) != nil else { return nil }
                 guard let target = WorkflowTriggerChoice.Target(rawValue: definition.target.rawValue) else {
                     throw FolioError.unreadableResponse
                 }

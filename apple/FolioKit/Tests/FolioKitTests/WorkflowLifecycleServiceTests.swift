@@ -92,6 +92,26 @@ import Testing
         }
     }
 
+    @Test func expandedCatalogReturnsOnlyTriggersThisPickerCanSave() async throws {
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            #expect(request.url?.path == "/folio/api/workflows/triggers")
+            #expect(request.url?.query == "include_extended=true")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
+            return (
+                200,
+                """
+                [{"event_type":"saved_view.updated","label":"When a shared saved view is updated",
+                "subject_type":"saved_view","target":"event","condition_fields":[]},
+                {"event_type":"future.event","label":"When a future event happens",
+                "subject_type":"future","target":"event","condition_fields":[]}]
+                """
+            )
+        }
+        let choices = try await service().workflowTriggerChoices(vaultID: vaultID)
+        #expect(choices.map(\.id) == ["saved_view.updated"])
+    }
+
     @Test func generatedCatalogAndUpdateRoundTripEntryAndIngestionChoices() async throws {
         let entryIDs = [
             "document_note.created", "document_note.updated", "document_note.deleted",
