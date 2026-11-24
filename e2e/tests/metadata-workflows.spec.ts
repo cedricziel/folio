@@ -82,6 +82,8 @@ test("shows and saves the condition fields for the selected document event", asy
   const fileType = alternatives.getByRole("textbox", { name: "File type", exact: true });
   await fileType.fill("application/pdf");
 
+  await page.getByRole("combobox", { name: "Action to add" }).selectOption("webhook");
+  await page.getByRole("button", { name: "Add action", exact: true }).click();
   await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
   await page.getByRole("button", { name: "Save workflow", exact: true }).click();
   await expect(page.getByLabel("Revision source", { exact: true })).toHaveValue("restoration");
