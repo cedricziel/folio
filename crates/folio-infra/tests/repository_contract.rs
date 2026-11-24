@@ -1339,6 +1339,7 @@ async fn concurrent_dequeue_contract(r: &Repositories) {
 
 fn workflow_input(name: &str, trigger: WorkflowTrigger) -> WorkflowInput {
     WorkflowInput {
+        cadence: None,
         name: name.to_string(),
         enabled: true,
         trigger,
