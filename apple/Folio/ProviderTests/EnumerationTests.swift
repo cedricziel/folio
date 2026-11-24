@@ -268,4 +268,34 @@ final class EnumerationTests: XCTestCase {
             deleted,
             [FolioItemID.document(document.id, in: .scoped(MockFolioService.defaultVault.id, .all)).providerIdentifier])
     }
+
+    func testFailedInitialCaptureKeepsTheNewerChangesSnapshot() async throws {
+        let service = MockFolioService()
+        let catalog = FolioCatalog(service: service)
+        let folder = FolioItemID.Folder.scoped(MockFolioService.defaultVault.id, .all)
+        let previous = FolioSyncState(catalog: catalog, container: folder, directory: directory)
+        let previousAnchor = try await previous.initialSnapshot().anchor
+        let current = FolioSyncState(catalog: catalog, container: folder, directory: directory)
+
+        await service.suspendDocuments()
+        let initial = Task { try await current.initialSnapshot() }
+        await service.waitForDocumentRequest()
+
+        await service.stopSuspendingDocuments()
+        let document = Document(title: "New")
+        await service.setDocuments([document])
+        let (changes, _, _) = try await current.changes(from: previousAnchor)
+        await service.releaseDocuments(throwing: .unreachable)
+        do {
+            _ = try await initial.value
+            XCTFail("The earlier request should fail")
+        } catch {
+            XCTAssertEqual(error as? FolioError, .unreachable)
+        }
+
+        await service.setDocuments([])
+        let snapshot = try await current.initialSnapshot()
+        XCTAssertEqual(snapshot.anchor, changes.anchor)
+        XCTAssertEqual(snapshot.nodes.map(\.id), [.document(document.id, in: folder)])
+    }
 }

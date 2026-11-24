@@ -67,7 +67,9 @@ actor FolioSyncState {
         do {
             return try await task.value
         } catch {
-            initial = nil
+            if initial == task {
+                initial = nil
+            }
             throw error
         }
     }
@@ -100,7 +102,8 @@ actor FolioSyncState {
         let versions = Dictionary(
             uniqueKeysWithValues: nodes.map {
                 ($0.id.rawValue, Self.metadataVersion($0, local: localMetadata.metadata(for: $0.id.providerIdentifier)))
-            })
+            }
+        )
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let data = try encoder.encode(versions)
