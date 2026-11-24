@@ -191,13 +191,13 @@ async fn list_page(
         rows.push(WorkflowRow {
             lifecycle_summary: lifecycle_summary(&workflow),
             id: workflow.id.to_string(),
-            name: workflow.name,
-            enabled: workflow.enabled,
             trigger_labels: workflow
-                .triggers
+                .selected_triggers()
                 .iter()
                 .map(WorkflowTrigger::label)
                 .collect(),
+            name: workflow.name,
+            enabled: workflow.enabled,
             last_run,
         });
     }
@@ -242,7 +242,7 @@ struct HistoryTemplate {
     deleted: bool,
     can_manage: bool,
     lifecycle_summary: String,
-    trigger: &'static str,
+    trigger_labels: Vec<&'static str>,
     enabled: bool,
     action_count: usize,
     runs: Vec<RunView>,
@@ -267,7 +267,11 @@ async fn history(
         deleted: workflow.deleted_at.is_some(),
         can_manage,
         lifecycle_summary: lifecycle_summary(&workflow),
-        trigger: workflow.trigger.label(),
+        trigger_labels: workflow
+            .selected_triggers()
+            .iter()
+            .map(WorkflowTrigger::label)
+            .collect(),
         enabled: workflow.enabled,
         action_count: workflow.actions.len(),
         name: workflow.name,

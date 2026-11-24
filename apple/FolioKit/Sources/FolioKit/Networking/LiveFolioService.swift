@@ -839,13 +839,15 @@ extension LiveFolioService: WorkflowMemberReadService {
         return try await scoped.call("workflows.list_summaries") {
             let rows = try await scoped.client.listWorkflowSummaries().ok.body.json
             return try rows.map { row in
+                let triggers = row.triggerSelection.map { $0.eventType.rawValue }
                 guard try Self.uuid(row.vaultId) == vaultID,
-                    let count = Int(exactly: row.actionCount), count >= 0
+                    let count = Int(exactly: row.actionCount), count >= 0,
+                    triggers.first == row.trigger.rawValue, Set(triggers).count == triggers.count
                 else { throw FolioError.unreadableResponse }
                 return try WorkflowConfigurationSummary(
                     id: Self.uuid(row.id), vaultID: vaultID, name: row.name, enabled: row.enabled,
                     trigger: row.trigger.rawValue, createdAt: row.createdAt, updatedAt: row.updatedAt,
-                    actionCount: count
+                    triggers: triggers, actionCount: count, triggerLabels: row.triggerSelection.map(\.label)
                 )
             }
         }

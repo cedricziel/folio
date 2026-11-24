@@ -16,7 +16,7 @@
             {% else %}<a href="{{ "/workflows"|vault_url }}/{{ id }}" class="f-btn">Edit workflow</a>{% endif %}{% endif %}
         </div>
         {% if can_manage %}<p class="f-meta lifecycle-meta">{{ lifecycle_summary }}</p>{% else %}
-        <p class="f-meta">{{ trigger }} · {% if enabled %}On{% else %}Off{% endif %} · {{ action_count }} {% if action_count == 1 %}action{% else %}actions{% endif %}</p>
+        <p class="f-meta">{% for label in trigger_labels %}{% if !loop.first %} · {% endif %}{{ label }}{% endfor %} · {% if enabled %}On{% else %}Off{% endif %} · {{ action_count }} {% if action_count == 1 %}action{% else %}actions{% endif %}</p>
         {% endif %}
         {% if deleted %}<p class="lede">Pending runs were stopped when this workflow was deleted. Restoring preserves history and resumes enabled workflows for future events.</p>{% endif %}
     </header>

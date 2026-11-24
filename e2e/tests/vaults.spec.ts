@@ -130,7 +130,7 @@ with sqlite3.connect(sys.argv[1]) as db:
       {
         data: {
           name: "Notify reference intake",
-          trigger: "document.uploaded",
+          triggers: ["document.processed", "document.uploaded"],
           enabled: false,
           actions: [{
             type: "webhook",
@@ -180,17 +180,20 @@ for (const viewport of [
   }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     const workflows = `/vaults/${reference.id}/workflows`;
+    const triggerLabels = "When a document has been read · When a document is added";
     for (const theme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: theme });
       await page.goto(workflows);
       await expect(page.getByRole("heading", { name: "Workflows", exact: true })).toBeVisible();
       await expect(page.getByText(referenceWorkflow.name, { exact: true })).toBeVisible();
+      await expect(page.getByText(triggerLabels, { exact: true })).toBeVisible();
       await expect(page.getByRole("link", { name: "New workflow" })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Turn on" })).toHaveCount(0);
       await capture(page, testInfo, `viewer-workflows-${viewport.name}-${theme}.png`);
       await page.getByRole("link", { name: "Run history" }).click();
       await expect(page).toHaveURL(`${process.env.FOLIO_BASE_URL}${workflows}/${referenceWorkflow.id}/history`);
       await expect(page.getByRole("heading", { name: `${referenceWorkflow.name} history` })).toBeVisible();
+      await expect(page.getByText(`${triggerLabels} · Off · 1 action`, { exact: true })).toBeVisible();
       await expect(page.getByText("No runs yet.", { exact: true })).toBeVisible();
       await expect(page.getByRole("link", { name: "Edit workflow" })).toHaveCount(0);
       await expect(page.locator("main")).not.toContainText("reference-fixture.invalid");

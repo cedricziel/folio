@@ -1307,7 +1307,7 @@ async fn workflow_members_read_summaries_without_owner_data_or_controls() {
         .create(
             owner.vault,
             serde_json::from_value::<WorkflowInput>(serde_json::json!({
-                "name": "Notify intake", "trigger": "document.uploaded",
+                "name": "Notify intake", "triggers": ["document.processed", "document.uploaded"],
                 "conditions": {"filename_glob": "sensitive-filter"},
                 "actions": [{"type":"webhook", "method":"POST", "url":"https://receiver.test/private",
                     "secret":"private-signature", "headers":{"Authorization":"sensitive-header"}}]
@@ -1374,6 +1374,20 @@ async fn workflow_members_read_summaries_without_owner_data_or_controls() {
         assert_eq!(response.status(), StatusCode::OK, "{url}");
         let body = text(response).await;
         assert!(body.contains(marker), "{url}: {body}");
+        if url == &summary {
+            let rows: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(rows[0]["trigger"], "document.processed");
+            assert_eq!(
+                rows[0]["trigger_selection"],
+                serde_json::json!([
+                    {"event_type":"document.processed","label":"When a document has been read"},
+                    {"event_type":"document.uploaded","label":"When a document is added"}
+                ])
+            );
+        }
+        if url == &path || url == &history {
+            assert!(body.contains("When a document has been read · When a document is added"));
+        }
         for hidden in [
             "receiver.test",
             "private-signature",

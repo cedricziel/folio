@@ -462,7 +462,9 @@ import Testing
                     200,
                     """
                     [{"id":"\(workflowID)","vault_id":"\(vaultID)","name":"File invoices","enabled":true,
-                    "trigger":"document.uploaded","action_count":2,
+                    "trigger":"document.processed","action_count":2,"trigger_selection":[
+                    {"event_type":"document.processed","label":"When a document has been read"},
+                    {"event_type":"saved_view.updated","label":"When a shared saved view is updated"}],
                     "created_at":"2026-11-02T12:34:56Z","updated_at":"2026-11-02T12:35:00Z"}]
                     """
                 )
@@ -490,6 +492,10 @@ import Testing
         let summary = try #require(list.workflows.first)
         #expect(summary.id == workflowID)
         #expect(summary.actionCount == 2)
+        #expect(summary.selectedTriggers == ["document.processed", "saved_view.updated"])
+        #expect(
+            list.triggerTitle(for: summary)
+                == "When a document has been read · When a shared saved view is updated")
         #expect(summary.createdBy == nil)
         #expect(!(await list.moveToTrash(summary)))
         await list.load(deleted: true)

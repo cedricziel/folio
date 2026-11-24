@@ -15052,6 +15052,7 @@
           "name",
           "enabled",
           "trigger",
+          "trigger_selection",
           "action_count",
           "created_at",
           "updated_at"
@@ -15079,6 +15080,12 @@
           "trigger": {
             "$ref": "#/components/schemas/WorkflowTrigger"
           },
+          "trigger_selection": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowSummaryTrigger"
+            }
+          },
           "updated_at": {
             "type": "string",
             "format": "date-time"
@@ -15086,6 +15093,21 @@
           "vault_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "WorkflowSummaryTrigger": {
+        "type": "object",
+        "required": [
+          "event_type",
+          "label"
+        ],
+        "properties": {
+          "event_type": {
+            "$ref": "#/components/schemas/WorkflowTrigger"
+          },
+          "label": {
+            "type": "string"
           }
         }
       },

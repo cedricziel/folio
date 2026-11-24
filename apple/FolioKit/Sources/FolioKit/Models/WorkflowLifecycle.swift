@@ -11,6 +11,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
     public let triggers: [String]?
     public let cadence: Components.Schemas.WorkflowCadence?
     public let actionCount: Int?
+    let triggerLabels: [String]?
     public let createdAt: Date
     public let updatedAt: Date
     public let revision: Int64?
@@ -22,6 +23,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         case id, name, enabled, trigger, triggers, revision, cadence
         case vaultID = "vault_id"
         case actionCount = "action_count"
+        case triggerLabels = "trigger_labels"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case deletedAt = "deleted_at"
@@ -33,7 +35,8 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         id: UUID, vaultID: UUID, name: String, enabled: Bool, trigger: String,
         createdAt: Date, updatedAt: Date, deletedAt: Date? = nil,
         createdBy: String? = nil, updatedBy: String? = nil, revision: Int64? = nil,
-        cadence: Components.Schemas.WorkflowCadence? = nil, triggers: [String]? = nil, actionCount: Int? = nil
+        cadence: Components.Schemas.WorkflowCadence? = nil, triggers: [String]? = nil, actionCount: Int? = nil,
+        triggerLabels: [String]? = nil
     ) {
         self.id = id
         self.vaultID = vaultID
@@ -43,6 +46,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         self.triggers = triggers
         self.cadence = cadence
         self.actionCount = actionCount
+        self.triggerLabels = triggerLabels
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.revision = revision

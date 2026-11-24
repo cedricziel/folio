@@ -322,9 +322,16 @@ pub(crate) struct WorkflowSummary {
     name: String,
     enabled: bool,
     trigger: WorkflowTrigger,
+    trigger_selection: Vec<WorkflowSummaryTrigger>,
     action_count: u64,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, ToSchema)]
+struct WorkflowSummaryTrigger {
+    event_type: WorkflowTrigger,
+    label: &'static str,
 }
 
 impl From<Workflow> for WorkflowSummary {
@@ -332,6 +339,14 @@ impl From<Workflow> for WorkflowSummary {
         Self {
             id: workflow.id,
             vault_id: workflow.vault_id,
+            trigger_selection: workflow
+                .selected_triggers()
+                .iter()
+                .map(|&trigger| WorkflowSummaryTrigger {
+                    event_type: trigger,
+                    label: trigger.label(),
+                })
+                .collect(),
             name: workflow.name,
             enabled: workflow.enabled,
             trigger: workflow.trigger,

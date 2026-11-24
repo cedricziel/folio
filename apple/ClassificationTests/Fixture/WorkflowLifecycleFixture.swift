@@ -390,7 +390,9 @@ private final class WorkflowMemberFixtureProtocol: URLProtocol, @unchecked Senda
                 200,
                 """
                 [{"id":"\(id)","vault_id":"\(vault)","name":"Invoice notifications","enabled":true,
-                  "trigger":"document.uploaded","action_count":2,
+                  "trigger":"document.processed","action_count":2,"trigger_selection":[
+                  {"event_type":"document.processed","label":"When a document has been read"},
+                  {"event_type":"saved_view.updated","label":"When a shared saved view is updated"}],
                   "created_at":"2026-11-02T12:34:56Z","updated_at":"2026-11-02T12:35:00Z"}]
                 """
             )

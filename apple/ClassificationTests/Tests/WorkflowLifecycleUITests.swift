@@ -342,6 +342,8 @@ import XCTest
         openWorkflow(app)
         let actions = app.staticTexts["Actions, 2"]
         guard actions.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        let labels = "When a document has been read · When a shared saved view is updated"
+        XCTAssertTrue(app.staticTexts[labels].exists, app.debugDescription)
         let failed = app.staticTexts["Failed"]
         guard scroll(app, until: failed) else { return XCTFail(app.debugDescription) }
         XCTAssertFalse(app.buttons["Move workflow to Trash"].exists)
