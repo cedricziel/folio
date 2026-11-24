@@ -32,7 +32,7 @@ public struct WorkflowTriggerChoice: Identifiable, Equatable, Sendable {
     }
 
     var requiresSingleSelection: Bool {
-        target == .ingestCandidate || WorkflowCadenceDraft.Trigger(rawValue: id) != nil
+        target == .ingestCandidate || id == "document.date_offset" || WorkflowCadenceDraft.Trigger(rawValue: id) != nil
     }
 
     static func matching(_ ids: [String], in catalog: [Self]) -> Self? {
