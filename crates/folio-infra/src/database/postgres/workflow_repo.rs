@@ -420,7 +420,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         }
         let actor = folio_core::mutation::current_actor();
         let now = Utc::now();
-        let cursor = resumed_clock_cursor(&existing, stored_cursor.as_deref(), now)?;
+        let cursor = resumed_clock_cursor(existing.cadence, stored_cursor.as_deref(), now)?;
         let row = sqlx::query_as::<_, WorkflowRow>(
             "UPDATE workflows SET revision = revision + 1, deleted_at = $1, updated_at = $2, updated_by = $3, next_run_at = $4 WHERE id = $5 AND vault_id = $6 RETURNING *",
         )

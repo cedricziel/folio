@@ -46,6 +46,12 @@
                 <label for="cadence-interval">Repeat every (seconds)</label>
                 <input class="input" type="number" id="cadence-interval" name="cadence_interval" value="{{ values.cadence_interval }}" min="1" step="1"{% if values.cadence_mode != "recurring" %} disabled{% endif %}>
             </div>
+            {% if has_saved_root_filters %}
+            <label class="check"><input type="checkbox" name="clear_clock_filters" value="on"{% if values.clear_clock_filters.is_some() %} checked{% endif %}> Remove saved filters outside groups</label>
+            {% endif %}
+            {% if has_saved_non_webhook_actions %}
+            <label class="check"><input type="checkbox" name="clear_clock_actions" value="on"{% if values.clear_clock_actions.is_some() %} checked{% endif %}> Remove saved actions other than webhooks</label>
+            {% endif %}
         </fieldset>
 
         <fieldset class="field" data-workflow-form-target="documentFilter">

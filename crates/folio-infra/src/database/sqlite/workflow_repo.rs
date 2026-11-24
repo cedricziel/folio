@@ -393,7 +393,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         }
         let actor = folio_core::mutation::current_actor();
         let now = Utc::now();
-        let cursor = resumed_clock_cursor(&existing, stored_cursor.as_deref(), now)?;
+        let cursor = resumed_clock_cursor(existing.cadence, stored_cursor.as_deref(), now)?;
         let row = sqlx::query(
             "UPDATE workflows SET revision = revision + 1, deleted_at = ?, updated_at = ?, updated_by = ?, next_run_at = ? WHERE id = ? AND vault_id = ? RETURNING *",
         )

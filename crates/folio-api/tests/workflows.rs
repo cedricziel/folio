@@ -1423,6 +1423,57 @@ async fn web_editor_roundtrips_a_clock_schedule_when_editing_and_toggling() {
 }
 
 #[tokio::test]
+async fn converting_to_a_clock_clears_only_the_explicitly_selected_sections() {
+    let app = test_app().await;
+    let (status, tag) =
+        json_request(&app, "POST", "/api/tags", Some(json!({"name": "Invoices"}))).await;
+    assert_eq!(status, StatusCode::OK, "{tag}");
+    let (status, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Clock conversion",
+            "trigger": "document.uploaded",
+            "conditions": {"mime_type": "application/pdf"},
+            "actions": [
+                {"type": "add_tags", "tag_ids": [tag["id"]]},
+                {"type": "webhook", "url": "https://example.com/clock"},
+                {"type": "webhook", "url": "https://example.com/second"}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let path = format!("/workflows/{}", created["id"].as_str().unwrap());
+    let form = "name=Clock+conversion&trigger=workflow.scheduled&enabled=on&cadence_mode=once&cadence_start=2040-03-01T09%3A00%3A00Z&webhook_url=https%3A%2F%2Fexample.com%2Fclock";
+
+    for missing in ["", "&clear_clock_filters=on", "&clear_clock_actions=on"] {
+        let (status, _) = post_form(&app, &path, format!("{form}{missing}")).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, unchanged) = json_request(&app, "GET", &format!("/api{path}"), None).await;
+        assert_eq!(unchanged["trigger"], "document.uploaded");
+        assert_eq!(unchanged["conditions"], created["conditions"]);
+        assert_eq!(unchanged["actions"], created["actions"]);
+    }
+
+    let (status, html) = post_form(
+        &app,
+        &path,
+        format!("{form}&clear_clock_filters=on&clear_clock_actions=on"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{html}");
+    let (_, saved) = json_request(&app, "GET", &format!("/api{path}"), None).await;
+    assert_eq!(saved["trigger"], "workflow.scheduled");
+    assert_eq!(saved["conditions"], json!({}));
+    assert_eq!(
+        saved["actions"].as_array().unwrap(),
+        &created["actions"].as_array().unwrap()[1..]
+    );
+}
+
+#[tokio::test]
 async fn clock_schedule_api_rejects_document_actions() {
     let app = test_app().await;
     let (status, _) = json_request(

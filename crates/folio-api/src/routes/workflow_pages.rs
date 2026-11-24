@@ -227,6 +227,8 @@ struct FormValues {
     cadence_mode: String,
     cadence_start: String,
     cadence_interval: String,
+    clear_clock_filters: Option<String>,
+    clear_clock_actions: Option<String>,
     enabled: Option<String>,
     condition_groups: Option<String>,
     mime_type: String,
@@ -712,8 +714,14 @@ impl FormValues {
                 .map(|v| Uuid::parse_str(&v).map_err(|_| format!("The {what} is not valid.")))
                 .transpose()
         };
-        let processing = processing_condition(&self, existing, trigger)?;
+        let clear_clock_filters = cadence.is_some() && self.clear_clock_filters.is_some();
+        let processing = if clear_clock_filters {
+            None
+        } else {
+            processing_condition(&self, existing, trigger)?
+        };
         let mut event = match self.event_actor.as_deref() {
+            _ if clear_clock_filters => None,
             None if trigger == WorkflowTrigger::IngestReceived => None,
             None => existing.and_then(|workflow| workflow.conditions.event.clone()),
             Some(mode) => {
@@ -783,7 +791,14 @@ impl FormValues {
         let mut conditions = existing
             .map(|workflow| workflow.conditions.clone())
             .unwrap_or_default();
-        if cadence.is_none() {
+        if clear_clock_filters {
+            conditions = WorkflowConditions {
+                all: conditions.all,
+                any: conditions.any,
+                none: conditions.none,
+                ..WorkflowConditions::default()
+            };
+        } else if cadence.is_none() {
             conditions.event = event;
         }
         if let Some(groups) = &self.condition_groups {
@@ -889,7 +904,9 @@ impl FormValues {
         // The form edits one action of each kind: it replaces the first stored
         // one, or removes it when the section was emptied. Anything else stays.
         let mut actions = existing.map(|w| w.actions.clone()).unwrap_or_default();
-        if cadence.is_none() {
+        if cadence.is_some() && self.clear_clock_actions.is_some() {
+            actions.retain(WorkflowAction::is_webhook);
+        } else if cadence.is_none() {
             set_action(
                 &mut actions,
                 |a| matches!(a, WorkflowAction::AddTags { .. }),
@@ -1007,6 +1024,8 @@ struct FormTemplate {
     secret_mask: &'static str,
     triggers: Vec<TriggerChoice>,
     processing_fields: Vec<ProcessingControl>,
+    has_saved_root_filters: bool,
+    has_saved_non_webhook_actions: bool,
     condition_groups: String,
     metadata_fields: Vec<Choice>,
     metadata_kinds: Vec<Choice>,
@@ -1086,8 +1105,17 @@ async fn build_form(
         .map_err(|error| ApiError::internal(error.to_string()))?,
     };
 
+    let has_saved_root_filters = workflow.is_some_and(|workflow| {
+        let mut root = workflow.conditions.clone();
+        ConditionGroups::default().apply(&mut root);
+        root != WorkflowConditions::default()
+    });
+    let has_saved_non_webhook_actions =
+        workflow.is_some_and(|workflow| workflow.actions.iter().any(|action| !action.is_webhook()));
     Ok(FormTemplate {
         condition_groups,
+        has_saved_root_filters,
+        has_saved_non_webhook_actions,
         sidebar: Sidebar::load(state, vault, Nav::Workflows).await?,
         title: format!(
             "{} - Folio",

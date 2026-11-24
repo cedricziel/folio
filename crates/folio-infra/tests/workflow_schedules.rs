@@ -69,6 +69,45 @@ async fn contract(url: &str) {
     );
     repos.workflows.delete(vault, paused.id).await.unwrap();
 
+    let disabled = repos
+        .workflows
+        .create(
+            vault,
+            WorkflowInput {
+                enabled: false,
+                ..configuration(WorkflowCadence::Once {
+                    at: now - Duration::minutes(30),
+                })
+            },
+        )
+        .await
+        .unwrap();
+    repos
+        .workflows
+        .update(
+            vault,
+            disabled.id,
+            configuration(WorkflowCadence::Recurring {
+                first_at: now - Duration::minutes(90),
+                interval_seconds: 3600,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repos.workflows.enqueue_due_schedules(now, 8).await.unwrap(),
+        0
+    );
+    assert_eq!(
+        repos
+            .workflows
+            .enqueue_due_schedules(now + Duration::minutes(30), 8)
+            .await
+            .unwrap(),
+        1
+    );
+    repos.workflows.delete(vault, disabled.id).await.unwrap();
+
     let at = now + Duration::hours(1);
     let once = configuration(WorkflowCadence::Once { at });
     let workflow = repos.workflows.create(vault, once.clone()).await.unwrap();

@@ -16,7 +16,7 @@ pub enum WorkflowCadence {
         at: DateTime<Utc>,
     },
     Recurring {
-        /// RFC 3339 UTC instant, with up to nine fractional digits.
+        /// RFC 3339 UTC instant with up to nine fractional digits. Leap seconds are unsupported for recurring clocks.
         #[cfg_attr(feature = "openapi", schema(value_type = String, example = "2026-12-01T09:00:00Z"))]
         first_at: DateTime<Utc>,
         #[cfg_attr(feature = "openapi", schema(value_type = i64, minimum = 1, maximum = 4294967295_i64))]
@@ -53,6 +53,12 @@ impl WorkflowCadence {
         ) {
             return Err(Error::Validation(
                 "A recurring interval must be positive".into(),
+            ));
+        }
+        if matches!(self, Self::Recurring { first_at, .. } if first_at.timestamp_subsec_nanos() >= 1_000_000_000)
+        {
+            return Err(Error::Validation(
+                "Recurring clocks cannot start during a leap second".into(),
             ));
         }
         Ok(())
@@ -160,6 +166,18 @@ mod tests {
             .unwrap()
             .due
             .is_empty());
+    }
+
+    #[test]
+    fn leap_seconds_are_allowed_for_one_time_clocks_only() {
+        let at = utc("2016-12-31T23:59:60Z");
+        let once = WorkflowCadence::Once { at };
+        assert_eq!(once.claim_window(Some(at), at).unwrap().due, [at]);
+        let recurring = WorkflowCadence::Recurring {
+            first_at: at,
+            interval_seconds: 3600,
+        };
+        assert!(recurring.validate().is_err());
     }
 
     #[test]

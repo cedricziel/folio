@@ -35,21 +35,23 @@ pub(crate) fn edited_clock_cursor(
     current: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
-    if workflow.cadence != input.cadence {
-        return Ok(input.cadence.map(|cadence| clock_time(cadence.first_at())));
-    }
+    let cursor = if workflow.cadence != input.cadence {
+        input.cadence.map(|cadence| clock_time(cadence.first_at()))
+    } else {
+        current.map(str::to_owned)
+    };
     if !workflow.enabled && input.enabled {
-        return resumed_clock_cursor(workflow, current, now);
+        return resumed_clock_cursor(input.cadence, cursor.as_deref(), now);
     }
-    Ok(current.map(str::to_owned))
+    Ok(cursor)
 }
 
 pub(crate) fn resumed_clock_cursor(
-    workflow: &Workflow,
+    cadence: Option<WorkflowCadence>,
     current: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
-    let Some(cadence) = workflow.cadence else {
+    let Some(cadence) = cadence else {
         return Ok(None);
     };
     let cursor = clock_cursor(current)?;

@@ -5,6 +5,7 @@ import Testing
 struct WorkflowCadenceTests {
     @Test(arguments: [
         #"{"type":"once","at":"2030-01-03T09:00:00.123456789Z"}"#,
+        #"{"type":"once","at":"2016-12-31T23:59:60Z"}"#,
         #"{"type":"recurring","first_at":"2030-01-03T09:00:00.123456789Z","interval_seconds":4294967295}"#,
     ])
     func generatedClientPreservesTheClockInstant(cadence: String) throws {

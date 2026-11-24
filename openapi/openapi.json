@@ -13139,7 +13139,7 @@
             "properties": {
               "first_at": {
                 "type": "string",
-                "description": "RFC 3339 UTC instant, with up to nine fractional digits.",
+                "description": "RFC 3339 UTC instant with up to nine fractional digits. Leap seconds are unsupported for recurring clocks.",
                 "example": "2026-12-01T09:00:00Z"
               },
               "interval_seconds": {
