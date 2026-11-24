@@ -810,6 +810,7 @@ impl FormValues {
             && trigger.entry_transition().is_none()
             && !trigger.is_ingest_outcome()
             && !trigger.is_custom_metadata()
+            && !trigger.is_saved_view()
         {
             conditions.mime_type = optional(&self.mime_type);
             conditions.tag_id = id(&self.tag_id, "tag")?;
@@ -830,6 +831,7 @@ impl FormValues {
                 workflow.trigger.entry_transition().is_none()
                     && !workflow.trigger.is_ingest_outcome()
                     && !workflow.trigger.is_custom_metadata()
+                    && !workflow.trigger.is_saved_view()
             })
         {
             conditions.mime_type = None;

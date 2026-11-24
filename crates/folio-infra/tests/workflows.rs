@@ -5,6 +5,9 @@ mod common;
 #[path = "workflows/document_lifecycle.rs"]
 mod document_lifecycle;
 
+#[path = "workflows/saved_view_events.rs"]
+mod saved_view_events;
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

@@ -27,6 +27,8 @@ pub trait SavedViewRepository: Send + Sync {
         access: &SavedViewAccess,
         id: Id,
     ) -> Result<Option<SavedView>>;
+    /// Check the current visibility of a scoped live view or retained deletion for workflow delivery.
+    async fn is_shared_for_workflow(&self, vault: VaultId, id: Id, deleted: bool) -> Result<bool>;
     /// Create a view owned by the authenticated member, deriving lifecycle metadata.
     async fn create(
         &self,

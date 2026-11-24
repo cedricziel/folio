@@ -192,7 +192,8 @@ async fn main() -> Result<()> {
             workflow_document_repo,
             webhook_client.clone(),
         )
-        .with_ingest_access(ingest_workflow_access.clone()),
+        .with_ingest_access(ingest_workflow_access.clone())
+        .with_saved_views(repos.saved_views.clone()),
     );
     let workflow_engine = Arc::new(
         WorkflowEngine::new(
@@ -203,7 +204,8 @@ async fn main() -> Result<()> {
             Arc::new(StorageFileMetadata::new(store.clone())),
             public_url.clone(),
         )
-        .with_ingest_access(ingest_workflow_access),
+        .with_ingest_access(ingest_workflow_access)
+        .with_saved_views(repos.saved_views.clone()),
     );
 
     let source_factory = Arc::new(SourceFactory::new(ledger.clone()));
