@@ -25,6 +25,9 @@ public protocol FolioService: DocumentEntryService {
     func restoreDocument(id: Document.ID) async throws -> Document
     /// Downloads the original file to a temporary location whose extension matches the file type.
     func downloadFile(for document: Document) async throws -> URL
+    /// Nil when the server does not expose file history.
+    func fileRevisions(for documentID: Document.ID, before: Int64?) async throws -> DocumentFileRevisionPage?
+    func downloadFile(for documentID: Document.ID, revision: DocumentFileRevision) async throws -> URL
     /// Returns a bounded JPEG preview, or nil when the document or thumbnail is unavailable.
     func thumbnail(id: Document.ID) async throws -> Data?
     func upload(_ file: UploadFile) async throws -> Document
@@ -193,6 +196,14 @@ public struct NoToken: BearerTokenProvider {
 }
 
 public extension FolioService {
+    func fileRevisions(for documentID: Document.ID, before: Int64?) async throws -> DocumentFileRevisionPage? {
+        nil
+    }
+
+    func downloadFile(for documentID: Document.ID, revision: DocumentFileRevision) async throws -> URL {
+        throw FolioError.server(status: 501, message: "File history is unavailable.")
+    }
+
     func documentIDs(filter: DocumentFilter) async throws -> [Document.ID] {
         try await documents(filter: filter).map(\.id)
     }

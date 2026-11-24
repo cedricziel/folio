@@ -11,6 +11,7 @@ struct DocumentDetailView: View {
     @State private var model: DocumentDetailViewModel
     @State private var showingDiscussion = false
     @State private var showingCustomFields = false
+    @State private var showingFileHistory = false
     private let service: any FolioService
     private let openLinkedDocument: (UUID) -> Void
     @State private var editingDate = false
@@ -66,6 +67,9 @@ struct DocumentDetailView: View {
             }
         }
         .sheet(isPresented: $showingDiscussion) { DocumentDiscussionView(model: model.discussion) }
+        .sheet(isPresented: $showingFileHistory) {
+            DocumentFileHistoryView(documentID: model.document.id, service: service)
+        }
         .sheet(isPresented: $editingDate) {
             DocumentDateEditor(documentDate: model.document.documentDate) { date in
                 try await model.saveDocumentDate(date)
@@ -151,6 +155,7 @@ struct DocumentDetailView: View {
                 }
                 DocumentProcessingView(document: model.document)
                 Button("Notes and comments", systemImage: "text.bubble") { showingDiscussion = true }
+                Button("File history", systemImage: "clock.arrow.circlepath") { showingFileHistory = true }
                 if model.canClassify {
                     Button("Classify", systemImage: "tag") { classifying = true }
                     if let failure = model.classificationFailure, !classifying {

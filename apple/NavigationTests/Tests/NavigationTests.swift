@@ -224,6 +224,22 @@ import XCTest
         XCTAssertTrue(app.buttons["share-document"].waitForExistence(timeout: 5), app.debugDescription)
     }
 
+    func testFileHistoryReturnsToDocumentOnOlderServers() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launch()
+        let first = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "First fixture")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
+        first.tap()
+        let history = app.buttons["File history"]
+        XCTAssertTrue(history.waitForExistence(timeout: 5), app.debugDescription)
+        history.tap()
+        let unavailable = app.staticTexts["This server does not support file history."]
+        XCTAssertTrue(unavailable.waitForExistence(timeout: 5), app.debugDescription)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["First fixture"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
     func testWideWindowKeepsDocumentListBesidePreview() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = XCUIApplication()
