@@ -182,16 +182,30 @@ import XCTest
     func testALateSavedViewResponseDoesNotOverrideALaterChoice() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
+        let savedViewID = UUID()
+        app.launchEnvironment["FOLIO_FIXTURE_SAVED_VIEW_ID"] = savedViewID.uuidString
         app.launchArguments = ["--saved-views", "--slow-saved-view"]
         app.launch()
         try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
         XCTAssertTrue(app.navigationBars["All documents"].waitForExistence(timeout: 10), app.debugDescription)
         returnToSidebar(in: app)
-        let view = app.buttons["Saved fixture"]
+        let view = app.buttons["workspace-saved-view-\(savedViewID)"]
         XCTAssertTrue(view.waitForExistence(timeout: 5), "The sidebar must show the seeded saved view.")
         view.tap()
-        returnToSidebar(in: app)
-        app.buttons["workspace-destination-inbox"].tap()
+        let inbox = app.buttons["workspace-destination-inbox"]
+        if !inbox.isHittable {
+            let back = app.buttons["BackButton"]
+            if back.isHittable {
+                back.tap()
+            } else {
+                swipeBack(in: app)
+            }
+        }
+        guard inbox.waitForExistence(timeout: 5) else {
+            XCTFail("Inbox must be available while the saved view loads.")
+            return
+        }
+        inbox.tap()
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertFalse(
             app.navigationBars["Saved fixture"].waitForExistence(timeout: 14),
@@ -369,6 +383,10 @@ import XCTest
             back.tap()
             return
         }
+        swipeBack(in: app)
+    }
+
+    private func swipeBack(in app: XCUIApplication) {
         let window = app.windows.firstMatch
         let edge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
         edge.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
