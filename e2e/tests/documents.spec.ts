@@ -409,6 +409,60 @@ test("replacement and restoration publish immutable files and reprocess the curr
   }
 });
 
+test("a replacement replay returns its revision after another publication advances history", async ({ request }) => {
+  const upload = await request.post("/api/documents/upload", {
+    multipart: {
+      title: uniqueTitle("revision-replay"),
+      file: { name: "first.pdf", mimeType: "application/pdf", buffer: blankPdf(1) },
+    },
+  });
+  await expect(upload).toBeOK();
+  const { id, vault_id } = await upload.json();
+  const document = `/api/documents/${id}`;
+  const history = `/api/vaults/${vault_id}/documents/${id}/revisions`;
+  try {
+    const firstPage = await request.get(history);
+    await expect(firstPage).toBeOK();
+    const { publication_enabled, revisions: [first] } = await firstPage.json();
+    expect(publication_enabled).toBe(true);
+
+    const replacementKey = randomUUID();
+    const replace = (key: string) => request.post(history, {
+      headers: { "Idempotency-Key": key },
+      multipart: {
+        expected_current_revision_id: first.id,
+        file: { name: "replacement.pdf", mimeType: "application/pdf", buffer: blankPdf(2) },
+      },
+    });
+    const replacementResponse = await replace(replacementKey);
+    expect(replacementResponse.status()).toBe(201);
+    const replacement = await replacementResponse.json();
+
+    const restoredResponse = await request.post(`${history}/${first.id}/restore`, {
+      headers: { "Idempotency-Key": randomUUID() },
+      data: { expected_current_revision_id: replacement.id },
+    });
+    expect(restoredResponse.status()).toBe(201);
+    const restored = await restoredResponse.json();
+
+    const replay = await replace(replacementKey);
+    expect(replay.status()).toBe(200);
+    expect(await replay.json()).toMatchObject({ id: replacement.id, number: 2, is_current: false });
+    expect((await replace(randomUUID())).status()).toBe(409);
+
+    const finalPage = await request.get(history);
+    await expect(finalPage).toBeOK();
+    expect((await finalPage.json()).revisions).toMatchObject([
+      { id: restored.id, is_current: true },
+      { id: replacement.id, is_current: false },
+      { id: first.id, is_current: false },
+    ]);
+  } finally {
+    await request.delete(document);
+    await request.delete(`${document}/purge`);
+  }
+});
+
 test("a long PDF offers the previewed pages and the original for the rest", async ({ page, request }) => {
   const title = uniqueTitle("long-pdf");
   const upload = await request.post("/api/documents/upload", {
