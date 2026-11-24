@@ -166,6 +166,7 @@ pub trait DocumentRepository: Send + Sync {
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document>;
 
     /// Commit a local action and its progress. Returns true if this call committed run success.
+    /// Call through the workflow repository binding so mutations use workflow event origin.
     /// A completed step is a no-op for a pending, current run. Stopped or stale runs return a conflict.
     async fn apply_workflow_document_action(&self, run: &WorkflowRun, index: u32) -> Result<bool>;
 

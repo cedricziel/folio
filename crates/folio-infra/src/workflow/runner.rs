@@ -89,13 +89,13 @@ impl WorkflowRunner {
 
         let vault = run.vault_id;
         if self.active_definition(&run).await?.is_none() {
-            self.finish(
-                &mut run,
-                RunStatus::Failed,
-                Some("Workflow definition is no longer active".into()),
-            )
-            .await?;
-            return Ok(RunOutcome::Failed);
+            return self
+                .finish(
+                    &mut run,
+                    RunStatus::Failed,
+                    Some("Workflow definition is no longer active".into()),
+                )
+                .await;
         }
 
         let ingest = if run.event.is_ingest_outcome() {
@@ -103,13 +103,13 @@ impl WorkflowRunner {
                 Error::Repository(format!("Invalid ingestion workflow payload: {error}"))
             })?;
             let Some(ingest) = payload.ingest.filter(|_| payload.event == run.event) else {
-                self.finish(
-                    &mut run,
-                    RunStatus::Failed,
-                    Some("Missing ingestion workflow context".into()),
-                )
-                .await?;
-                return Ok(RunOutcome::Failed);
+                return self
+                    .finish(
+                        &mut run,
+                        RunStatus::Failed,
+                        Some("Missing ingestion workflow context".into()),
+                    )
+                    .await;
             };
             Some(ingest)
         } else {
@@ -137,24 +137,24 @@ impl WorkflowRunner {
                 continue;
             }
             let Some(workflow) = self.active_definition(&run).await? else {
-                self.finish(
-                    &mut run,
-                    RunStatus::Failed,
-                    Some("Workflow definition is no longer active".into()),
-                )
-                .await?;
-                return Ok(RunOutcome::Failed);
+                return self
+                    .finish(
+                        &mut run,
+                        RunStatus::Failed,
+                        Some("Workflow definition is no longer active".into()),
+                    )
+                    .await;
             };
             if action.is_webhook() && run.event.target() == WorkflowTarget::Document {
                 if let Some(document_id) = run.document_id {
                     if self.documents.locate(document_id).await? != Some(vault) {
-                        self.finish(
-                            &mut run,
-                            RunStatus::Failed,
-                            Some(DOCUMENT_UNAVAILABLE.into()),
-                        )
-                        .await?;
-                        return Ok(RunOutcome::Failed);
+                        return self
+                            .finish(
+                                &mut run,
+                                RunStatus::Failed,
+                                Some(DOCUMENT_UNAVAILABLE.into()),
+                            )
+                            .await;
                     }
                 }
             }
@@ -170,13 +170,13 @@ impl WorkflowRunner {
                     false
                 };
                 if !allowed {
-                    self.finish(
-                        &mut run,
-                        RunStatus::Failed,
-                        Some("Source or workflow is no longer authorized".into()),
-                    )
-                    .await?;
-                    return Ok(RunOutcome::Failed);
+                    return self
+                        .finish(
+                            &mut run,
+                            RunStatus::Failed,
+                            Some("Source or workflow is no longer authorized".into()),
+                        )
+                        .await;
                 }
             }
             match with_actor(
@@ -188,8 +188,8 @@ impl WorkflowRunner {
                 Ok(ActionProgress::Webhook(response_status)) => {
                     run.completed_actions = index as u32 + 1;
                     run.response_status = response_status.or(run.response_status);
-                    if !self.save(&run).await? {
-                        return Ok(RunOutcome::Failed);
+                    if let Some(outcome) = self.save(&run).await? {
+                        return Ok(outcome);
                     }
                 }
                 Ok(ActionProgress::Document { run_finished }) => {
@@ -222,27 +222,27 @@ impl WorkflowRunner {
                     run.response_status = failure.response_status;
                     let give_up = !failure.retryable || run.attempts >= MAX_ATTEMPTS;
                     if give_up {
-                        self.finish(&mut run, RunStatus::Failed, Some(failure.message))
-                            .await?;
-                        return Ok(RunOutcome::Failed);
+                        return self
+                            .finish(&mut run, RunStatus::Failed, Some(failure.message))
+                            .await;
                     }
                     run.last_error = Some(failure.message);
-                    if !self.save(&run).await? {
-                        return Ok(RunOutcome::Failed);
+                    if let Some(outcome) = self.save(&run).await? {
+                        return Ok(outcome);
                     }
                     return Ok(RunOutcome::Retry);
                 }
             }
         }
 
-        if !self.finish(&mut run, RunStatus::Succeeded, None).await? {
-            return Ok(RunOutcome::Failed);
+        let outcome = self.finish(&mut run, RunStatus::Succeeded, None).await?;
+        if outcome == RunOutcome::Succeeded {
+            info!(
+                "Workflow run {} succeeded after {} attempt(s)",
+                run.id, run.attempts
+            );
         }
-        info!(
-            "Workflow run {} succeeded after {} attempt(s)",
-            run.id, run.attempts
-        );
-        Ok(RunOutcome::Succeeded)
+        Ok(outcome)
     }
 
     /// Mark a run failed because its job gave up, unless it already ended
@@ -278,18 +278,28 @@ impl WorkflowRunner {
         run: &mut WorkflowRun,
         status: RunStatus,
         error: Option<String>,
-    ) -> folio_core::Result<bool> {
+    ) -> folio_core::Result<RunOutcome> {
         run.status = status;
         run.last_error = error;
         run.finished_at = Some(Utc::now());
-        self.save(run).await
+        Ok(self.save(run).await?.unwrap_or(match status {
+            RunStatus::Pending => RunOutcome::Retry,
+            RunStatus::Succeeded => RunOutcome::Succeeded,
+            RunStatus::Failed => RunOutcome::Failed,
+        }))
     }
 
-    /// Persists progress; false when the run was stopped elsewhere, such as by deleting its workflow
-    async fn save(&self, run: &WorkflowRun) -> folio_core::Result<bool> {
+    async fn save(&self, run: &WorkflowRun) -> folio_core::Result<Option<RunOutcome>> {
         match self.workflows.update_run(run).await {
-            Ok(()) => Ok(true),
-            Err(folio_core::Error::Conflict(_)) => Ok(false),
+            Ok(()) => Ok(None),
+            Err(folio_core::Error::Conflict(_)) => {
+                let stored = self.workflows.find_run(run.id).await?;
+                Ok(Some(match stored.map(|run| run.status) {
+                    Some(RunStatus::Pending) => RunOutcome::Retry,
+                    Some(RunStatus::Succeeded) => RunOutcome::Succeeded,
+                    Some(RunStatus::Failed) | None => RunOutcome::Failed,
+                }))
+            }
             Err(error) => Err(error),
         }
     }

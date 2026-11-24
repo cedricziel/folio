@@ -497,6 +497,69 @@ async fn contract(db: Database) {
             .completed_actions,
         0
     );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let interrupted = queue(
+        repos.workflows.as_ref(),
+        vault,
+        document.id,
+        vec![
+            WorkflowAction::Webhook {
+                url,
+                method: Default::default(),
+                headers: Default::default(),
+                secret: None,
+            },
+            WorkflowAction::RenameDocument {
+                title: "Resumed after the saved webhook".into(),
+            },
+        ],
+    )
+    .await;
+    let mut newer = interrupted.clone();
+    newer.attempts = 2;
+    newer.completed_actions = 1;
+    let workflows = repos.workflows.clone();
+    let server = tokio::spawn(async move {
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(move || {
+                let (workflows, newer) = (workflows.clone(), newer.clone());
+                async move {
+                    workflows.update_run(&newer).await.unwrap();
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE
+                }
+            }),
+        );
+        axum::serve(listener, app).await.unwrap();
+    });
+    let outcome = runner.execute(interrupted.id).await.unwrap();
+    server.abort();
+    assert_eq!(outcome, RunOutcome::Retry);
+    let retained = repos
+        .workflows
+        .find_run(interrupted.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.status, RunStatus::Pending);
+    assert_eq!(retained.completed_actions, 1);
+    assert_eq!(retained.attempts, 2);
+    assert_eq!(
+        runner.execute(interrupted.id).await.unwrap(),
+        RunOutcome::Succeeded
+    );
+    assert_eq!(
+        repos
+            .documents
+            .find_by_id(vault, document.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .title,
+        "Resumed after the saved webhook"
+    );
 }
 
 #[tokio::test]
