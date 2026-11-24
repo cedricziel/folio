@@ -52,11 +52,19 @@ typealias Document = FolioKit.Document
 
 extension FixtureApp {
     private static func makeService(arguments: [String]) -> MockFolioService {
+        let savedViewID = ProcessInfo.processInfo.environment["FOLIO_FIXTURE_SAVED_VIEW_ID"]
+            .flatMap(UUID.init(uuidString:))
+        if arguments.contains("--slow-saved-view") {
+            let view = SavedView(
+                id: savedViewID ?? UUID(), vaultID: MockFolioService.defaultVault.id, ownerID: "test-user",
+                name: "Saved fixture", query: .init(), createdAt: .distantPast, updatedAt: .distantPast,
+                createdBy: "test-user", updatedBy: "test-user")
+            return MockFolioService(savedViews: [view], savedViewDelay: .seconds(12), documents: documents)
+        }
         guard arguments.contains("--classification") else {
             return MockFolioService(
                 documents: documents, loseFirstEntryResponse: arguments.contains("--discussion-save-failure"),
-                nextSavedViewID: ProcessInfo.processInfo.environment["FOLIO_FIXTURE_SAVED_VIEW_ID"]
-                    .flatMap(UUID.init(uuidString:)))
+                nextSavedViewID: savedViewID)
         }
         let correspondent = Correspondent(name: "City utilities")
         let type = DocumentType(name: "Invoice")
@@ -151,10 +159,6 @@ private struct SavedViewsFixture: View {
             serverURL: URL(string: "https://unused.invalid")!, service: service, onSignOut: {}, workspace: workspace
         )
         .task {
-            if ProcessInfo.processInfo.arguments.contains("--slow-saved-view"), let mock = service as? MockFolioService
-            {
-                await mock.delaySavedViewResponses(by: .seconds(12))
-            }
             await workspace.loadVaults()
             workspace.destination = .all
         }
