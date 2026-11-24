@@ -58,7 +58,8 @@ pub struct WebhookDocument {
     /// Archive serial number; always null until Folio supports serial numbers
     pub asn: Option<i64>,
     /// How the document entered Folio, with folder or email details when known
-    pub source: DocumentSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<DocumentSource>,
     pub created_at: DateTime<Utc>,
     pub urls: WebhookUrls,
 }
@@ -126,6 +127,24 @@ pub struct WebhookMetadata {
     pub data: serde_json::Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookProcessing {
+    pub payload_version: u32,
+    pub stage: crate::processing_events::ProcessingEventStage,
+    pub outcome: String,
+    pub run_id: uuid::Uuid,
+    pub revision_id: Option<uuid::Uuid>,
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::processing_events::ProcessingReason, required = false))]
+    pub reason_code: Option<crate::processing_events::ProcessingReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_text: Option<bool>,
+}
+
 /// Body of every webhook delivery
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -145,6 +164,9 @@ pub struct WebhookPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<WebhookMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WebhookProcessing, required = false))]
+    pub processing: Option<WebhookProcessing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_event: Option<WorkflowEventIdentity>,
 }
 
@@ -162,6 +184,7 @@ impl WebhookPayload {
             entry: None,
             ingest: None,
             metadata: None,
+            processing: None,
             source_event: None,
         }
     }
@@ -180,6 +203,7 @@ impl WebhookPayload {
             entry: Some(entry),
             ingest: None,
             metadata: None,
+            processing: None,
             source_event,
         }
     }
@@ -198,6 +222,7 @@ impl WebhookPayload {
             entry: None,
             ingest: Some(ingest),
             metadata: None,
+            processing: None,
             source_event,
         }
     }
@@ -216,12 +241,30 @@ impl WebhookPayload {
             entry: None,
             ingest: None,
             metadata: Some(metadata),
+            processing: None,
             source_event,
+        }
+    }
+
+    pub fn for_clock(occurred_at: DateTime<Utc>) -> Self {
+        Self {
+            event: WorkflowTrigger::Scheduled,
+            version: PAYLOAD_VERSION,
+            occurred_at,
+            document: None,
+            entry: None,
+            ingest: None,
+            metadata: None,
+            processing: None,
+            source_event: None,
         }
     }
 
     /// A payload with made-up content, for the "send test" action
     pub fn sample(event: WorkflowTrigger, base_url: &str) -> Self {
+        if event == WorkflowTrigger::Scheduled {
+            return Self::for_clock(Utc::now());
+        }
         if event.is_custom_metadata() {
             let id = Id::nil();
             let data = match event.as_str().split('.').next() {
@@ -314,7 +357,42 @@ impl WebhookPayload {
             Some(48_213),
             base_url,
         );
-        Self::new(event, Utc::now(), document)
+        let now = Utc::now();
+        let mut payload = Self::new(event, now, document);
+        if let Some((stage, outcome)) = event
+            .as_str()
+            .strip_prefix("document.processing.")
+            .and_then(|name| name.split_once('.'))
+        {
+            use crate::processing_events::{ProcessingEventStage, ProcessingReason};
+            let stage = match stage {
+                "ocr" => ProcessingEventStage::Ocr,
+                "embedding" => ProcessingEventStage::Embedding,
+                "thumbnail" => ProcessingEventStage::Thumbnail,
+                _ => return payload,
+            };
+            let reason_code = match outcome {
+                "failed" | "retry_scheduled" => Some(ProcessingReason::ProviderFailed),
+                "skipped" => Some(ProcessingReason::ProviderDisabled),
+                _ => None,
+            };
+            if let Some(document) = &mut payload.document {
+                document.source = None;
+            }
+            payload.processing = Some(WebhookProcessing {
+                payload_version: 1,
+                stage,
+                outcome: outcome.into(),
+                run_id: Id::nil(),
+                revision_id: None,
+                attempt: 1,
+                reason_code,
+                retry_at: (outcome == "retry_scheduled").then_some(now),
+                has_text: (stage == ProcessingEventStage::Ocr && outcome == "completed")
+                    .then_some(true),
+            });
+        }
+        payload
     }
 }
 
@@ -395,7 +473,7 @@ impl WebhookDocument {
                 })
                 .collect(),
             asn: None,
-            source: document.source.clone(),
+            source: Some(document.source.clone()),
             created_at: document.created_at,
             urls: WebhookUrls::for_document(base_url, id),
         }

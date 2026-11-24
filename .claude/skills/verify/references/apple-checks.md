@@ -206,6 +206,18 @@ exact decimal without rounding. Use the field manager in a disposable account to
 create a field, rename an option, and retire and restore it. Select a different vault
 and confirm the first vault’s fields are gone from the manager.
 
+## Verify custom field workflows
+
+Run the isolated FolioKit test
+`metadataWorkflowUsesTheCatalogAndSendsTypedOccurrenceConditions` to check the
+generated client’s trigger catalog, vault scope, and exact condition encoding.
+Run `CustomMetadataWorkflowUITests` in the isolated NavigationTests fixture.
+Open the editor from Workflows, choose a field lifecycle trigger, switch to a
+document value trigger, and save an exact decimal condition. Choose Any type
+after enabling a comparison and verify the workflow saves without that
+comparison. The fixture records each draft in memory and returns the created
+workflow to the list.
+
 ## Apple workflow lifecycle
 
 Run the isolated package suite with `--filter 'WorkflowLifecycleTests|WorkflowLifecycleServiceTests'`.

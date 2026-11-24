@@ -74,6 +74,7 @@ struct DocumentClassificationView: View {
                 Text(failure).foregroundStyle(Color.danger)
                 if model.canRetryClassification {
                     Button("Retry save") { Task { await model.retryClassification() } }
+                        .accessibilityIdentifier("classification-retry-save")
                 }
             }
         }

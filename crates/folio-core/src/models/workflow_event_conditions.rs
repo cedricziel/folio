@@ -1,9 +1,11 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
     Id, IngestResult, MetadataKind, MetadataValue, SourceKind, UserId, WebhookIngest,
-    WorkflowTrigger,
+    WebhookProcessing, WorkflowTrigger, WorkflowTriggerRegistry,
 };
+use crate::processing_events::{ProcessingEventStage, ProcessingReason};
 use crate::{DomainEventEnvelope, Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +220,93 @@ impl WorkflowMetadataConditions {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WorkflowProcessingConditions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = ProcessingEventStage, required = false))]
+    pub stage: Option<ProcessingEventStage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = ProcessingReason, required = false))]
+    pub reason_code: Option<ProcessingReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_text: Option<bool>,
+}
+
+impl WorkflowProcessingConditions {
+    pub fn validate_trigger(&self, trigger: WorkflowTrigger) -> Result<()> {
+        let definition = WorkflowTriggerRegistry::built_in().get(trigger.as_str());
+        let supported = |key: &str| {
+            trigger.is_processing_outcome()
+                && definition.is_some_and(|definition| {
+                    definition
+                        .condition_fields
+                        .iter()
+                        .any(|field| field.key == key)
+                })
+        };
+        if [
+            (self.stage.is_some(), "data.stage"),
+            (self.outcome.is_some(), "data.outcome"),
+            (self.run_id.is_some(), "data.run_id"),
+            (self.revision_id.is_some(), "data.revision_id"),
+            (self.attempt.is_some(), "data.attempt"),
+            (self.reason_code.is_some(), "data.reason_code"),
+            (self.retry_at.is_some(), "data.retry_at"),
+            (self.has_text.is_some(), "data.has_text"),
+        ]
+        .iter()
+        .any(|(present, key)| *present && !supported(key))
+        {
+            return Err(Error::Validation(
+                "These processing conditions are unavailable for the selected trigger".into(),
+            ));
+        }
+        if !trigger.is_processing_outcome() {
+            return Err(Error::Validation(
+                "Processing conditions require a processing trigger".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn matches(&self, event: &DomainEventEnvelope) -> bool {
+        let Ok(processing) = WebhookProcessing::deserialize(event.data()) else {
+            return false;
+        };
+        self.stage.is_none_or(|value| processing.stage == value)
+            && self
+                .outcome
+                .as_ref()
+                .is_none_or(|value| processing.outcome == *value)
+            && self.run_id.is_none_or(|value| processing.run_id == value)
+            && self
+                .revision_id
+                .is_none_or(|value| processing.revision_id == Some(value))
+            && self.attempt.is_none_or(|value| processing.attempt == value)
+            && self
+                .reason_code
+                .is_none_or(|value| processing.reason_code == Some(value))
+            && self
+                .retry_at
+                .is_none_or(|value| processing.retry_at == Some(value))
+            && self
+                .has_text
+                .is_none_or(|value| processing.has_text == Some(value))
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WorkflowEventConditions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
@@ -229,6 +318,9 @@ pub struct WorkflowEventConditions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(value_type = WorkflowMetadataConditions, required = false))]
     pub metadata: Option<WorkflowMetadataConditions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WorkflowProcessingConditions, required = false))]
+    pub processing: Option<WorkflowProcessingConditions>,
 }
 
 impl WorkflowEventConditions {
@@ -252,6 +344,10 @@ impl WorkflowEventConditions {
                 .is_none_or(|condition| condition.matches(event))
             && self
                 .metadata
+                .as_ref()
+                .is_none_or(|condition| condition.matches(event))
+            && self
+                .processing
                 .as_ref()
                 .is_none_or(|condition| condition.matches(event))
             && match &self.actor {

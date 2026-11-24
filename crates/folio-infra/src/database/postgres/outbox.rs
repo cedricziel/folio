@@ -60,7 +60,10 @@ pub(crate) async fn capture_document(
             original_filename: row.get("original_filename"),
             mime_type: row.get("mime_type"),
             file_path: row.get("file_path"),
-            source: DocumentSource::from_stored(&source_type, source_meta.as_deref()),
+            source: Some(DocumentSource::from_stored(
+                &source_type,
+                source_meta.as_deref(),
+            )),
             created_at: row.get("created_at"),
             correspondent_id: row.get("correspondent_id"),
             correspondent_name: row.get("correspondent_name"),

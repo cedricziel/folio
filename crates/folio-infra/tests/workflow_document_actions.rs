@@ -24,6 +24,7 @@ async fn queue(
         .create(
             vault,
             WorkflowInput {
+                cadence: None,
                 name: "File invoice".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUploaded,

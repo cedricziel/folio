@@ -3,10 +3,16 @@ import SwiftUI
 public struct WorkflowLifecycleView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model: WorkflowLifecycleViewModel
+    @State private var creating = false
     private let service: any WorkflowLifecycleService
+    private let metadata: (definitions: any CustomMetadataService, workflows: any CustomMetadataWorkflowService)?
 
-    public init(vaultID: UUID, service: any WorkflowLifecycleService, canManage: Bool) {
+    public init(
+        vaultID: UUID, service: any WorkflowLifecycleService, canManage: Bool,
+        metadata: (definitions: any CustomMetadataService, workflows: any CustomMetadataWorkflowService)? = nil
+    ) {
         self.service = service
+        self.metadata = metadata
         _model = State(
             initialValue: WorkflowLifecycleViewModel(vaultID: vaultID, service: service, canManage: canManage)
         )
@@ -42,7 +48,9 @@ public struct WorkflowLifecycleView: View {
                             description: Text(
                                 model.deleted
                                     ? "Removed configurations and their run history appear here."
-                                    : "Create a workflow in the web settings to see its configuration and run history here."
+                                    : metadata == nil
+                                        ? "Create a workflow in the web settings to see its configuration and run history here."
+                                        : "Create a custom field workflow here, or use web settings for more triggers."
                             )
                         )
                     }
@@ -68,7 +76,19 @@ public struct WorkflowLifecycleView: View {
                 }
             }
             .navigationTitle("Workflows")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                if model.canManage && !model.accessDenied && !model.deleted && metadata != nil {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("New custom field workflow", systemImage: "plus") { creating = true }
+                    }
+                }
+            }
+            .sheet(isPresented: $creating, onDismiss: { Task { await model.load() } }) {
+                if let metadata {
+                    CustomMetadataWorkflowEditor(workflows: metadata.workflows, metadata: metadata.definitions)
+                }
+            }
             .refreshable { await model.load() }
             .task {
                 if !model.hasLoaded {

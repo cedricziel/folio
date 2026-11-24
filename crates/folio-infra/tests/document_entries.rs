@@ -181,6 +181,7 @@ async fn contract(r: &Repositories, kind: EntryKind, other_kind: EntryKind, pref
             .create(
                 vault,
                 WorkflowInput {
+                    cadence: None,
                     name: transition.event_type().into(),
                     enabled: true,
                     trigger,
