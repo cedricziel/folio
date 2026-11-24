@@ -61,7 +61,7 @@ public struct WorkflowLifecycleView: View {
                             VStack(alignment: .leading, spacing: FolioTheme.Spacing.space1) {
                                 Text(workflow.name).foregroundStyle(Color.ink)
                                 Text(workflow.stateTitle).foregroundStyle(Color.inkMuted)
-                                Text(workflow.triggerTitle).foregroundStyle(Color.inkMuted)
+                                Text(model.triggerTitle(for: workflow)).foregroundStyle(Color.inkMuted)
                                     .font(FolioTheme.Typography.bodySm)
                                 Text(workflow.deletedAt ?? workflow.updatedAt, format: .dateTime.year().month().day())
                                     .font(FolioTheme.Typography.meta).foregroundStyle(Color.inkMuted)
@@ -101,8 +101,10 @@ public struct WorkflowLifecycleView: View {
 
 private struct WorkflowLifecycleDetail: View {
     @Environment(\.dismiss) private var dismiss
-    let workflow: WorkflowConfigurationSummary
+    @State private var workflow: WorkflowConfigurationSummary
     let lifecycle: WorkflowLifecycleViewModel
+    private let editingService: (any WorkflowTriggerEditingService)?
+    @State private var showingTriggerEditor = false
     @State private var history: WorkflowHistoryViewModel
     @State private var confirmingTrash = false
 
@@ -110,8 +112,9 @@ private struct WorkflowLifecycleDetail: View {
         workflow: WorkflowConfigurationSummary, lifecycle: WorkflowLifecycleViewModel,
         service: any WorkflowLifecycleService
     ) {
-        self.workflow = workflow
+        _workflow = State(initialValue: workflow)
         self.lifecycle = lifecycle
+        editingService = service as? any WorkflowTriggerEditingService
         _history = State(
             initialValue: WorkflowHistoryViewModel(
                 vaultID: workflow.vaultID, workflowID: workflow.id, service: service, canManage: lifecycle.canManage
@@ -135,7 +138,11 @@ private struct WorkflowLifecycleDetail: View {
             } else {
                 Section("Configuration") {
                     LabeledContent("State", value: workflow.stateTitle)
-                    Text(workflow.triggerTitle)
+                    Text(lifecycle.triggerTitle(for: workflow))
+                    if editingService != nil && workflow.deletedAt == nil && workflow.revision != nil {
+                        Button("Edit trigger") { showingTriggerEditor = true }
+                            .disabled(lifecycle.isMutating || !lifecycle.canManage)
+                    }
                     LabeledContent("Created") {
                         Text(workflow.createdAt, format: .dateTime.year().month().day().hour().minute())
                     }
@@ -220,6 +227,15 @@ private struct WorkflowLifecycleDetail: View {
             lifecycle.dismissMutationError()
             if !history.hasLoaded {
                 await history.load()
+            }
+        }
+        .sheet(isPresented: $showingTriggerEditor) {
+            if let editingService {
+                WorkflowTriggerEditor(workflow: workflow, service: editingService) { saved, choice in
+                    let current = lifecycle.applyTriggerUpdate(saved, choice: choice)
+                    if let current { workflow = current }
+                    return current
+                }
             }
         }
         .confirmationDialog("Move workflow to Trash?", isPresented: $confirmingTrash) {

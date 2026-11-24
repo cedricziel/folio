@@ -6,7 +6,8 @@ use std::sync::Arc;
 use base64::Engine;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use folio_core::models::{
-    Document, DocumentSource, Id, SourceKind, Tag, UserId, VaultAction, VaultId, VaultRole,
+    Document, DocumentRevision, DocumentSource, Id, OriginalVerification, SourceKind, Tag, UserId,
+    VaultAction, VaultId, VaultRole,
 };
 use folio_core::ports::ProcessingStatus;
 use folio_core::services::{
@@ -242,6 +243,65 @@ struct DocumentOutput {
     resource_uri: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct FileRevisionsArgs {
+    /// Logical document ID
+    id: String,
+    /// Exclusive upper bound on the revision number. Pass next_before to read older revisions.
+    before: Option<i64>,
+    /// Page size from 1 to 100. Defaults to 25.
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct FileRevisionsOutput {
+    revisions: Vec<FileRevisionOutput>,
+    next_before: Option<i64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct FileRevisionOutput {
+    id: String,
+    number: i64,
+    is_current: bool,
+    created_at: String,
+    created_by: Option<String>,
+    restored_from_revision_id: Option<String>,
+    filename: Option<String>,
+    mime_type: String,
+    verification: &'static str,
+    sha256: Option<String>,
+    byte_size: Option<u64>,
+    /// Read the original as a binary resource, up to 5 MiB.
+    resource_uri: Option<String>,
+}
+
+impl FileRevisionOutput {
+    fn from_revision(id: Id, revision: DocumentRevision) -> Self {
+        let original = revision.original;
+        let verification = match original.verification {
+            OriginalVerification::Pending => "pending",
+            OriginalVerification::Verified => "verified",
+            OriginalVerification::Unavailable => "unavailable",
+        };
+        Self {
+            id: revision.id.to_string(),
+            number: revision.number,
+            is_current: revision.is_current,
+            created_at: revision.created_at.to_rfc3339(),
+            created_by: revision.created_by.map(|user| user.0),
+            restored_from_revision_id: revision.restored_from_revision_id.map(|id| id.to_string()),
+            filename: original.filename,
+            mime_type: original.mime_type,
+            verification,
+            sha256: original.sha256,
+            byte_size: original.byte_size,
+            resource_uri: (original.verification != OriginalVerification::Unavailable)
+                .then(|| format!("{DOCUMENT_URI_PREFIX}{id}/revisions/{}/file", revision.id)),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 struct NamedItem {
     id: String,
@@ -450,6 +510,39 @@ impl FolioMcp {
             total_chars: page.total_chars,
             next_cursor: page.next_cursor.map(|c| c.to_string()),
             resource_uri: format!("{DOCUMENT_URI_PREFIX}{}", doc.id),
+        }))
+    }
+
+    #[tool(
+        description = "List a document's file revisions, newest first. Pass next_before as before to continue and read resource_uri for the original bytes when available.",
+        annotations(
+            title = "List file revisions",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_file_revisions(
+        &self,
+        Parameters(args): Parameters<FileRevisionsArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult<FileRevisionsOutput> {
+        require_scope(&ctx, SCOPE_READ)?;
+        let vault = self.vault(&ctx).await?;
+        let id = parse_id(&args.id)?;
+        let page = self
+            .library
+            .revision_page(vault, id, args.before, args.limit)
+            .await
+            .map_err(tool_error)?;
+        Ok(Json(FileRevisionsOutput {
+            revisions: page
+                .revisions
+                .into_iter()
+                .map(|revision| FileRevisionOutput::from_revision(id, revision))
+                .collect(),
+            next_before: page.next_before,
         }))
     }
 
@@ -914,6 +1007,11 @@ impl ServerHandler for FolioMcp {
                 .with_mime_type("text/plain"),
             ResourceTemplate::new("folio://documents/{id}/file", "document-file")
                 .with_description("The original file of a document, base64 encoded (up to 5 MiB)"),
+            ResourceTemplate::new(
+                "folio://documents/{id}/revisions/{revision_id}/file",
+                "document-revision-file",
+            )
+            .with_description("The original file of one revision, base64 encoded (up to 5 MiB)"),
         ]))
     }
 
@@ -934,6 +1032,23 @@ impl ServerHandler for FolioMcp {
             .ok_or_else(|| {
                 ErrorData::resource_not_found(format!("unknown resource {}", request.uri), None)
             })?;
+        if let Some((document, revision)) = rest
+            .strip_suffix("/file")
+            .and_then(|path| path.split_once("/revisions/"))
+        {
+            let id = parse_id(document).map_err(|e| ErrorData::invalid_params(e, None))?;
+            let revision_id = parse_id(revision).map_err(|e| ErrorData::invalid_params(e, None))?;
+            let (original, data) = self
+                .library
+                .read_revision_file(vault, id, revision_id, MAX_BLOB_BYTES)
+                .await
+                .map_err(resource_error)?;
+            let blob = base64::engine::general_purpose::STANDARD.encode(data);
+            return Ok(ReadResourceResult::new(vec![
+                ResourceContents::blob(blob, request.uri).with_mime_type(original.mime_type)
+            ])
+            .into());
+        }
         let (id, want_file) = match rest.strip_suffix("/file") {
             Some(id) => (id, true),
             None => (rest, false),

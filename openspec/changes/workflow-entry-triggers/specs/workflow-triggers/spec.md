@@ -19,3 +19,13 @@ Workflows SHALL support vault-visible create, update, and delete occurrences for
 - **WHEN** the user who created an entry workflow loses access to the vault
 - **THEN** that user can no longer read or edit the workflow or view its runs
 - **AND** matching occurrences can still run while both the workflow and its parent document are active in the originating vault
+
+### Requirement: Revision-checked native trigger edits
+
+When an Apple workflow trigger is changed, the API SHALL require the revision returned with the workflow and SHALL reject stale revisions with HTTP 409. The edit SHALL retain the workflow's other settings. After a conflict, the editor SHALL allow reloading the current configuration before retrying.
+
+#### Scenario: Another client turns the workflow off
+
+- **WHEN** a vault owner saves a trigger after another client has turned the workflow off
+- **THEN** the stale edit is rejected and the editor offers to reload the workflow
+- **AND** saving the trigger after reloading leaves the workflow off

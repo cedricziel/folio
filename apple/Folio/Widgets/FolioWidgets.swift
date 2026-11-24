@@ -8,9 +8,7 @@ struct FolioWidgets: WidgetBundle {
     var body: some Widget {
         InboxWidget()
         LatestDocumentWidget()
-        if #available(iOS 18.0, macOS 26.0, *) {
-            ScanControl()
-        }
+        ScanControl()
     }
 }
 

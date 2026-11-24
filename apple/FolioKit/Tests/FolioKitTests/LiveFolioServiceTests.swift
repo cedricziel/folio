@@ -1088,6 +1088,63 @@ private let documentJSON = """
         #expect(document.originalFilename == "bill.pdf")
     }
 
+    @Test func revisionHistoryAndDownloadKeepTheSelectedVaultAndRevision() async throws {
+        let id = UUID()
+        let vault = UUID()
+        let revisionID = UUID()
+        let path = "/api/documents/\(id.uuidString.lowercased())/revisions"
+        let service = makeService(token: FixedToken(value: "token")).scoped(to: vault)
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.httpMethod == "GET")
+            #expect(request.url?.path == path)
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer token")
+            #expect(request.url?.query?.contains("before=3") == true)
+            let json = """
+                {"revisions":[{"id":"\(revisionID.uuidString)","number":2,"is_current":false,
+                "created_at":"2026-11-22T19:35:00.123456789Z","created_by":"editor",
+                "original":{"filename":"../../older.pdf","mime_type":"application/pdf",
+                "verification":"verified","byte_size":17}}],"next_before":2}
+                """
+            return .init(body: Data(json.utf8))
+        }
+        let history = try await service.fileRevisions(for: id, before: 3)
+        let page = try #require(history)
+        let revision = try #require(page.revisions.first)
+        #expect(page.nextBefore == 2)
+        #expect(revision.id == revisionID)
+        #expect(revision.number == 2)
+        #expect(!revision.isCurrent)
+        #expect(revision.verification == .verified)
+        #expect(revision.createdBy == "editor")
+        #expect(revision.byteSize == 17)
+
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "\(path)/\(revisionID.uuidString.lowercased())/download")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer token")
+            return .init(contentType: "application/pdf", body: Data("original revision".utf8))
+        }
+        let file = try await service.downloadFile(for: id, revision: revision)
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        #expect(file.lastPathComponent == "older.pdf")
+        #expect(try Data(contentsOf: file) == Data("original revision".utf8))
+    }
+
+    @Test func revisionHistoryTreatsAnAbsentEndpointAsUnsupported() async throws {
+        StubURLProtocol.handler = { _, _ in .init(status: 404, contentType: "text/plain") }
+        let service = makeService().scoped(to: UUID())
+        let page = try await service.fileRevisions(for: UUID(), before: nil)
+        #expect(page == nil)
+
+        StubURLProtocol.handler = { _, _ in
+            .init(status: 404, body: Data(#"{"error":"Document not found"}"#.utf8))
+        }
+        await #expect(throws: FolioError.server(status: 404, message: "Document not found")) {
+            _ = try await service.fileRevisions(for: UUID(), before: nil)
+        }
+    }
+
     @Test func repeatedDownloadsKeepEarlierContentsReadable() async throws {
         let document = Document(title: "Bill", originalFilename: "bill.pdf", mimeType: "application/pdf")
         let service = makeService()

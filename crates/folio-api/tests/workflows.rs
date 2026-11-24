@@ -363,6 +363,79 @@ async fn receiver(status: u16) -> (String, Arc<Mutex<Vec<(HeaderMap, String)>>>)
 }
 
 #[tokio::test]
+async fn trigger_edit_rejects_a_stale_revision_and_keeps_the_current_definition() {
+    let app = test_app().await;
+    let mut original = workflow_body("https://example.com/first");
+    original["trigger"] = json!("document.processing.ocr.retry_scheduled");
+    let (status, created) =
+        json_request(&app, "POST", "/api/workflows", Some(original.clone())).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = created["id"].as_str().unwrap();
+    let uri = format!("/api/workflows/{id}");
+    let trigger_uri = format!("{uri}/trigger");
+
+    let mut newer = original;
+    newer["enabled"] = json!(false);
+    newer["name"] = json!("Disabled on the web");
+    newer["conditions"] = json!({"any": [{"event": {"processing": {"attempt": u32::MAX}}}]});
+    newer["actions"][0]["secret"] = json!("rotated");
+    newer["actions"][0]["headers"]["X-Source"] = json!("new value");
+    let (status, disabled) = json_request(&app, "PUT", &uri, Some(newer)).await;
+    assert_eq!(status, StatusCode::OK);
+    for trigger in [
+        "document.processing.ocr.retry_scheduled",
+        "document.processing.ocr.failed",
+    ] {
+        let (status, conflict) = json_request(
+            &app,
+            "PATCH",
+            &trigger_uri,
+            Some(json!({"trigger": trigger, "expected_revision": 1})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+    }
+    let (_, unchanged) = json_request(&app, "GET", &uri, None).await;
+    assert_eq!(unchanged, disabled);
+
+    let (status, saved) = json_request(
+        &app,
+        "PATCH",
+        &trigger_uri,
+        Some(json!({"trigger": "document.processing.ocr.failed", "expected_revision": unchanged["revision"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(created["revision"], 1);
+    assert_eq!(disabled["revision"], 2);
+    assert_eq!(saved["revision"], 3);
+    assert_eq!(saved["trigger"], "document.processing.ocr.failed");
+    assert_eq!(saved["enabled"], false);
+    assert_eq!(saved["name"], disabled["name"]);
+    assert_eq!(saved["conditions"], disabled["conditions"]);
+    assert_eq!(saved["actions"], disabled["actions"]);
+    let actual = app
+        .state
+        .workflow_repo
+        .find_by_id(app.vault, id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    match &actual.actions[0] {
+        WorkflowAction::Webhook {
+            secret, headers, ..
+        } => {
+            assert_eq!(secret.as_deref(), Some("rotated"));
+            assert_eq!(
+                headers.get("X-Source").map(String::as_str),
+                Some("new value")
+            );
+        }
+        other => panic!("expected a webhook, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn crud_round_trip() {
     let app = test_app().await;
 
@@ -911,6 +984,15 @@ async fn workflows_sit_behind_authentication() {
         "POST",
         "/api/workflows",
         Some(workflow_body("http://localhost/x")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        &format!("/api/workflows/{}/trigger", Uuid::new_v4()),
+        Some(json!({"trigger": "document.processed", "expected_revision": 1})),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -1547,6 +1629,63 @@ async fn converting_to_a_clock_clears_only_the_explicitly_selected_sections() {
         saved["actions"].as_array().unwrap(),
         &created["actions"].as_array().unwrap()[1..]
     );
+}
+
+#[tokio::test]
+async fn trigger_only_edit_cannot_remove_or_invent_a_clock_schedule() {
+    let app = test_app().await;
+    let cadence = json!({
+        "type": "recurring",
+        "first_at": "2040-01-03T09:00:00.000000001Z",
+        "interval_seconds": 3600,
+    });
+    let (status, clock) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Recurring clock",
+            "trigger": "workflow.scheduled",
+            "cadence": cadence,
+            "actions": [
+                {"type": "webhook", "url": "https://example.test/first"},
+                {"type": "webhook", "url": "https://example.test/second"}
+            ],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{clock}");
+    let clock_uri = format!("/api/workflows/{}", clock["id"].as_str().unwrap());
+    let (status, _) = json_request(
+        &app,
+        "PATCH",
+        &format!("{clock_uri}/trigger"),
+        Some(json!({"trigger": "document.uploaded", "expected_revision": clock["revision"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, stored) = json_request(&app, "GET", &clock_uri, None).await;
+    assert_eq!(stored, clock);
+
+    let (status, document) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(workflow_body("https://example.test/event")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{document}");
+    let document_uri = format!("/api/workflows/{}", document["id"].as_str().unwrap());
+    let (status, _) = json_request(
+        &app,
+        "PATCH",
+        &format!("{document_uri}/trigger"),
+        Some(json!({"trigger": "workflow.scheduled", "expected_revision": document["revision"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, stored) = json_request(&app, "GET", &document_uri, None).await;
+    assert_eq!(stored, document);
 }
 
 #[tokio::test]

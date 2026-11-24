@@ -50,6 +50,58 @@ import XCTest
         XCTAssertTrue(app.staticTexts["No workflows"].waitForExistence(timeout: 5), app.debugDescription)
     }
 
+    func testCatalogTriggerCanBeChangedAndReopened() {
+        let app = launch()
+        openWorkflow(app)
+        let edit = app.buttons["Edit trigger"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5), app.debugDescription)
+        edit.tap()
+        let note = app.buttons["When a note is created"]
+        XCTAssertTrue(note.waitForExistence(timeout: 5), app.debugDescription)
+        note.tap()
+        capture(app, name: "Workflow trigger selected from catalog")
+        let save = app.buttons["Save"]
+        XCTAssertTrue(save.isEnabled, app.debugDescription)
+        save.tap()
+        XCTAssertTrue(save.waitForNonExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["When a note is created"].waitForExistence(timeout: 5), app.debugDescription)
+        edit.tap()
+        let source = app.buttons["When a source becomes unavailable"]
+        XCTAssertTrue(source.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(note.isSelected, app.debugDescription)
+        XCTAssertFalse(save.isEnabled, app.debugDescription)
+        source.tap()
+        save.tap()
+        XCTAssertTrue(save.waitForNonExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(
+            app.staticTexts["When a source becomes unavailable"].waitForExistence(timeout: 5), app.debugDescription)
+        capture(app, name: "Saved ingestion trigger on workflow")
+    }
+
+    func testTriggerConflictCanReloadAndSaveWithoutReenablingTheWorkflow() {
+        let app = launch(arguments: ["--concurrent-workflow-edit"])
+        openWorkflow(app)
+        let edit = app.buttons["Edit trigger"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 5), app.debugDescription)
+        edit.tap()
+        let note = app.buttons["When a note is created"]
+        XCTAssertTrue(note.waitForExistence(timeout: 5), app.debugDescription)
+        note.tap()
+        let save = app.buttons["Save"]
+        save.tap()
+        let reload = app.buttons["Reload workflow"]
+        XCTAssertTrue(reload.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(save.isEnabled, app.debugDescription)
+        reload.tap()
+        XCTAssertTrue(reload.waitForNonExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(save.isEnabled, app.debugDescription)
+        note.tap()
+        save.tap()
+        XCTAssertTrue(save.waitForNonExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["State, Off"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["When a note is created"].exists, app.debugDescription)
+    }
+
     func testNonOwnersCannotReadWorkflowConfigurationOrUseLifecycleActions() {
         let app = launch(arguments: ["--read-only"])
         XCTAssertTrue(app.staticTexts["Owner access required"].waitForExistence(timeout: 10), app.debugDescription)
