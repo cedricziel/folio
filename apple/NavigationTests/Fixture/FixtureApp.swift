@@ -24,6 +24,8 @@ typealias Document = FolioKit.Document
                 HandoffFixture(service: service, documentID: Self.firstDocumentID)
             } else if ProcessInfo.processInfo.arguments.contains("--processing-state") {
                 ProcessingStateFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--custom-metadata-workflow") {
+                CustomMetadataWorkflowFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--custom-metadata") {
                 CustomMetadataFixture(
                     documents: service,

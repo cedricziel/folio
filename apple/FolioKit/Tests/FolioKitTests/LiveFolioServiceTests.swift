@@ -155,6 +155,58 @@ private let documentJSON = """
         }
     }
 
+    @Test func metadataWorkflowUsesTheCatalogAndSendsTypedOccurrenceConditions() async throws {
+        let vault = UUID()
+        let field = UUID()
+        let service = try #require(makeService().scoped(to: vault) as? any CustomMetadataWorkflowService)
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/workflows/triggers")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            return .init(
+                body: Data(
+                    """
+                    [{"event_type":"document.metadata.changed","label":"Custom fields changed",
+                      "subject_type":"document","target":"document","condition_fields":[
+                        {"key":"event.metadata.field_id","label":"Field","value_type":"identifier"},
+                        {"key":"event.metadata.after","label":"New value","value_type":"metadata_value"}]},
+                     {"event_type":"document.updated","label":"Document changed","subject_type":"document",
+                      "target":"document","condition_fields":[]}]
+                    """.utf8))
+        }
+        let catalog = try await service.customMetadataWorkflowTriggers()
+        #expect(catalog.count == 1)
+        let trigger = try #require(catalog.first)
+        #expect(trigger.id == "document.metadata.changed")
+        #expect(trigger.supportsValues)
+        StubURLProtocol.handler = { request, body in
+            #expect(request.url?.path == "/api/workflows")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let payload = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            #expect(payload?["trigger"] as? String == trigger.id)
+            let conditions = payload?["conditions"] as? [String: Any]
+            let event = conditions?["event"] as? [String: Any]
+            let metadata = event?["metadata"] as? [String: Any]
+            #expect(metadata?["field_id"] as? String == field.uuidString.lowercased())
+            #expect(metadata?["state"] as? String == "set")
+            #expect(metadata?["after"] as? [String: String] == ["kind": "decimal", "value": "9007199254740993.01"])
+            return .init(
+                status: 201,
+                body: Data(
+                    """
+                    {"id":"\(UUID())","vault_id":"\(vault)","name":"Invoice amount",
+                      "trigger":"document.metadata.changed","enabled":true,"actions":[
+                        {"type":"webhook","url":"http://127.0.0.1:9/unused"}],"conditions":{},
+                      "created_at":"2026-11-01T12:00:00Z","updated_at":"2026-11-01T12:00:00Z"}
+                    """.utf8)
+            )
+        }
+        try await service.createCustomMetadataWorkflow(
+            .init(
+                name: "Invoice amount", trigger: trigger.id, fieldID: field, kind: .decimal, state: .set,
+                after: .decimal("9007199254740993.01"), webhook: "http://127.0.0.1:9/unused", enabled: true
+            ))
+    }
+
     @Test func customMetadataUsesExactValuesAndExplicitNullsThroughTheGeneratedClient() async throws {
         let vault = UUID()
         let document = UUID()

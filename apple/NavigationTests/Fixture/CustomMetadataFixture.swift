@@ -83,3 +83,67 @@ struct CustomMetadataFixture: View {
         }
     }
 }
+
+@MainActor
+private final class MetadataWorkflowFixtureService: CustomMetadataWorkflowService, WorkflowLifecycleService {
+    let vaultID = UUID()
+    private var created: WorkflowConfigurationSummary?
+
+    func customMetadataWorkflowTriggers() async throws -> [CustomMetadataWorkflowTrigger] {
+        [
+            .init(id: "metadata_field.created", label: "When a custom field is created", supportsValues: false),
+            .init(
+                id: "document.metadata.changed", label: "When custom field values change",
+                supportsValues: true
+            ),
+        ]
+    }
+
+    func createCustomMetadataWorkflow(_ draft: CustomMetadataWorkflowDraft) async throws {
+        guard draft.trigger == "document.metadata.changed", draft.before == nil else {
+            throw FolioError.unreadableResponse
+        }
+        switch draft.name {
+        case "Invoice amount":
+            guard draft.after == .decimal("9007199254740993.01"), draft.kind == .decimal, draft.fieldID != nil else {
+                throw FolioError.unreadableResponse
+            }
+        case "Any field change":
+            guard draft.after == nil, draft.kind == nil, draft.fieldID == nil else {
+                throw FolioError.unreadableResponse
+            }
+        default:
+            throw FolioError.unreadableResponse
+        }
+        let now = Date()
+        created = .init(
+            id: UUID(), vaultID: vaultID, name: draft.name, enabled: draft.enabled, trigger: draft.trigger,
+            createdAt: now, updatedAt: now
+        )
+    }
+
+    func workflowConfigurations(vaultID: UUID, deleted: Bool) async throws -> [WorkflowConfigurationSummary] {
+        guard vaultID == self.vaultID else { throw FolioError.unreadableResponse }
+        return deleted ? [] : created.map { [$0] } ?? []
+    }
+
+    func workflowHistory(vaultID: UUID, workflowID: UUID) async throws -> [WorkflowExecutionSummary] { [] }
+
+    func deleteWorkflow(vaultID: UUID, workflowID: UUID) async throws { throw FolioError.unreadableResponse }
+
+    func restoreWorkflow(vaultID: UUID, workflowID: UUID) async throws -> WorkflowConfigurationSummary {
+        throw FolioError.unreadableResponse
+    }
+}
+
+struct CustomMetadataWorkflowFixture: View {
+    @State private var metadata = MetadataFixtureService()
+    @State private var workflows = MetadataWorkflowFixtureService()
+
+    var body: some View {
+        WorkflowLifecycleView(
+            vaultID: workflows.vaultID, service: workflows, canManage: true,
+            metadata: (definitions: metadata, workflows: workflows)
+        )
+    }
+}

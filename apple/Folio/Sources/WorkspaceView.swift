@@ -178,7 +178,12 @@ struct WorkspaceView: View {
         }
         .sheet(item: $workflowVault) { vault in
             if let workflowService = service as? any WorkflowLifecycleService {
-                WorkflowLifecycleView(vaultID: vault.id, service: workflowService, canManage: vault.role == .owner)
+                let metadata =
+                    service.scoped(to: vault.id) as? (any CustomMetadataService & CustomMetadataWorkflowService)
+                WorkflowLifecycleView(
+                    vaultID: vault.id, service: workflowService, canManage: vault.role == .owner,
+                    metadata: metadata.map { (definitions: $0, workflows: $0) }
+                )
             }
         }
         .sheet(item: $activityVault) { vault in
