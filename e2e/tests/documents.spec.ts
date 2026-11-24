@@ -318,6 +318,13 @@ test("replacement and restoration publish immutable files and reprocess the curr
   const pages = async (count: number) => {
     await expect.poll(async () => (await read()).page_count, { timeout: 20_000 }).toBe(count);
   };
+  const verifyProcessingStages = async (revisionId: string) => {
+    const stages: { revision_id: string | null }[] = (await read()).processing_stages;
+    expect(stages).toContainEqual(expect.objectContaining({
+      stage: "thumbnail", state: "completed", revision_id: revisionId,
+    }));
+    expect([...new Set(stages.map(stage => stage.revision_id))]).toEqual([revisionId]);
+  };
   const list = async () => {
     const response = await request.get(history);
     await expect(response).toBeOK();
@@ -366,6 +373,7 @@ test("replacement and restoration publish immutable files and reprocess the curr
     expect((await list()).map((revision: { id: string }) => revision.id)).toEqual([replacement.id, first.id]);
     expect(await read()).toMatchObject({ title, created_at, document_date: "2020-02-29", reviewed: false });
     await pages(winner.count);
+    await verifyProcessingStages(replacement.id);
     await download(`${document}/download`, winner.name, winner.bytes);
     await download(`${history}/${first.id}/download`, "first.pdf", original);
 
@@ -386,6 +394,7 @@ test("replacement and restoration publish immutable files and reprocess the curr
     expect((await restoreReplay.json()).id).toBe(restored.id);
     expect((await list()).map((revision: { id: string }) => revision.id)).toEqual([restored.id, replacement.id, first.id]);
     await pages(1);
+    await verifyProcessingStages(restored.id);
     await download(`${document}/download`, "first.pdf", original);
     await download(`${history}/${replacement.id}/download`, winner.name, winner.bytes);
 
