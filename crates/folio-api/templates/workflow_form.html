@@ -245,6 +245,79 @@
             </fieldset>
         </fieldset>
 
+        <fieldset class="field" data-workflow-form-target="titleFilter" hidden disabled>
+            <legend class="legend">Title conditions</legend>
+            <label class="check"><input type="checkbox" name="title_before_enabled" value="on"{% if values.title_before_enabled.is_some() %} checked{% endif %}> Match the previous title</label>
+            <label for="title-before">Previous title</label>
+            <input class="input" type="text" id="title-before" name="title_before" value="{{ values.title_before }}">
+            <label class="check"><input type="checkbox" name="title_after_enabled" value="on"{% if values.title_after_enabled.is_some() %} checked{% endif %}> Match the new title</label>
+            <label for="title-after">New title</label>
+            <input class="input" type="text" id="title-after" name="title_after" value="{{ values.title_after }}">
+        </fieldset>
+
+        <fieldset class="field" data-workflow-form-target="tagDeltaFilter" hidden disabled>
+            <legend class="legend">Tag change conditions</legend>
+            <label for="tag-change-state">Tag change</label>
+            <select class="select" id="tag-change-state" name="tag_change_state">
+                <option value="">Any change</option>
+                <option value="added"{% if values.tag_change_state == "added" %} selected{% endif %}>Added only</option>
+                <option value="removed"{% if values.tag_change_state == "removed" %} selected{% endif %}>Removed only</option>
+                <option value="replaced"{% if values.tag_change_state == "replaced" %} selected{% endif %}>Replaced</option>
+            </select>
+            <label for="added-tag-id">Added tag</label>
+            <select class="select" id="added-tag-id" name="added_tag_id">
+                <option value="">Any tag</option>
+                {% for item in added_tags %}<option value="{{ item.value }}"{% if item.selected %} selected{% endif %}>{{ item.label }}</option>{% endfor %}
+            </select>
+            <label for="removed-tag-id">Removed tag</label>
+            <select class="select" id="removed-tag-id" name="removed_tag_id">
+                <option value="">Any tag</option>
+                {% for item in removed_tags %}<option value="{{ item.value }}"{% if item.selected %} selected{% endif %}>{{ item.label }}</option>{% endfor %}
+            </select>
+        </fieldset>
+
+        <fieldset class="field" data-workflow-form-target="correspondentDeltaFilter" hidden disabled>
+            <legend class="legend">Correspondent change conditions</legend>
+            <label for="correspondent-change-state">Change</label>
+            <select class="select" id="correspondent-change-state" name="assignment_change_state">
+                <option value="">Any change</option>
+                <option value="set"{% if values.assignment_change_state == "set" %} selected{% endif %}>Assigned</option>
+                <option value="replaced"{% if values.assignment_change_state == "replaced" %} selected{% endif %}>Replaced</option>
+                <option value="cleared"{% if values.assignment_change_state == "cleared" %} selected{% endif %}>Cleared</option>
+            </select>
+            <label for="correspondent-before">Previous correspondent</label>
+            <select class="select" id="correspondent-before" name="assignment_before_id">
+                <option value="">Any</option>
+                {% for item in previous_correspondents %}<option value="{{ item.value }}"{% if item.selected %} selected{% endif %}>{{ item.label }}</option>{% endfor %}
+            </select>
+            <label for="correspondent-after">New correspondent</label>
+            <select class="select" id="correspondent-after" name="assignment_after_id">
+                <option value="">Any</option>
+                {% for item in new_correspondents %}<option value="{{ item.value }}"{% if item.selected %} selected{% endif %}>{{ item.label }}</option>{% endfor %}
+            </select>
+        </fieldset>
+
+        <fieldset class="field" data-workflow-form-target="typeDeltaFilter" hidden disabled>
+            <legend class="legend">Document type change conditions</legend>
+            <label for="document-type-change-state">Change</label>
+            <select class="select" id="document-type-change-state" name="assignment_change_state">
+                <option value="">Any change</option>
+                <option value="set"{% if values.assignment_change_state == "set" %} selected{% endif %}>Assigned</option>
+                <option value="replaced"{% if values.assignment_change_state == "replaced" %} selected{% endif %}>Replaced</option>
+                <option value="cleared"{% if values.assignment_change_state == "cleared" %} selected{% endif %}>Cleared</option>
+            </select>
+            <label for="document-type-before">Previous document type</label>
+            <select class="select" id="document-type-before" name="assignment_before_id">
+                <option value="">Any</option>
+                {% for item in previous_document_types %}<option value="{{ item.value }}"{% if item.selected %} selected{% endif %}>{{ item.label }}</option>{% endfor %}
+            </select>
+            <label for="document-type-after">New document type</label>
+            <select class="select" id="document-type-after" name="assignment_after_id">
+                <option value="">Any</option>
+                {% for item in new_document_types %}<option value="{{ item.value }}"{% if item.selected %} selected{% endif %}>{{ item.label }}</option>{% endfor %}
+            </select>
+        </fieldset>
+
         <fieldset class="field" data-workflow-form-target="dateFilter" hidden disabled>
             <legend class="legend">Document date conditions</legend>
             <label for="document-date-state">Date change</label>

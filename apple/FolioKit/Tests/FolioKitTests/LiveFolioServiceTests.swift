@@ -1173,12 +1173,13 @@ private let documentJSON = """
                 {"revisions":[{"id":"\(revisionID.uuidString)","number":2,"is_current":false,
                 "created_at":"2026-11-22T19:35:00.123456789Z","created_by":"editor",
                 "original":{"filename":"../../older.pdf","mime_type":"application/pdf",
-                "verification":"verified","byte_size":17}}],"next_before":2}
+                "verification":"verified","byte_size":17}}],"next_before":2,"publication_enabled":true}
                 """
             return .init(body: Data(json.utf8))
         }
         let history = try await service.fileRevisions(for: id, before: 3)
         let page = try #require(history)
+        #expect(page.publicationEnabled)
         let revision = try #require(page.revisions.first)
         #expect(page.nextBefore == 2)
         #expect(revision.id == revisionID)
@@ -1211,6 +1212,97 @@ private let documentJSON = """
         }
         await #expect(throws: FolioError.server(status: 404, message: "Document not found")) {
             _ = try await service.fileRevisions(for: UUID(), before: nil)
+        }
+    }
+
+    @Test func revisionHistoryFromAnOlderServerKeepsPublicationDisabled() async throws {
+        StubURLProtocol.handler = { _, _ in .init(body: Data(#"{"revisions":[]}"#.utf8)) }
+        let history = try await makeService().fileRevisions(for: UUID(), before: nil)
+        #expect(history?.publicationEnabled == false)
+    }
+
+    @Test func revisionPublicationSendsExpectedRevisionAndKeepsTheVaultAndRequestKey() async throws {
+        let document = UUID()
+        let vault = UUID()
+        let first = UUID()
+        let second = UUID()
+        let replacementKey = UUID()
+        let restoreKey = UUID()
+        let service = makeService(token: FixedToken(value: "token")).scoped(to: vault)
+        let prefix = "/api/documents/\(document.uuidString.lowercased())/revisions"
+        let replacement = UploadFile(
+            data: Data("%PDF-1.4".utf8), filename: "replacement.pdf", mimeType: "application/pdf",
+            title: "Must not replace the document title"
+        )
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url?.path == prefix)
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer token")
+            #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == replacementKey.uuidString.lowercased())
+            let data = String(decoding: body ?? Data(), as: UTF8.self)
+            #expect(data.contains("name=\"expected_current_revision_id\"\r\n\r\n" + first.uuidString.lowercased()))
+            #expect(data.contains("name=\"file\"; filename=\"replacement.pdf\""))
+            #expect(!data.contains("name=\"title\""))
+            #expect(data.contains("%PDF-1.4"))
+            return .init(
+                status: 201,
+                body: Data(
+                    """
+                    {"id":"\(second)","number":2,"is_current":true,"created_at":"2026-11-22T19:35:00Z",
+                    "original":{"filename":"replacement.pdf","mime_type":"application/pdf","verification":"verified"}}
+                    """.utf8))
+        }
+        let published = try await service.replaceDocumentFile(
+            replacement, for: document, expectedCurrentRevisionID: first, idempotencyKey: replacementKey
+        )
+        #expect(published.id == second)
+        #expect(published.filename == "replacement.pdf")
+
+        let restored = UUID()
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url?.path == "\(prefix)/\(first.uuidString.lowercased())/restore")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer token")
+            #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == restoreKey.uuidString.lowercased())
+            let data = (try? JSONSerialization.jsonObject(with: body ?? Data())) as? [String: String]
+            #expect(data == ["expected_current_revision_id": second.uuidString.lowercased()])
+            return .init(
+                status: 200,
+                body: Data(
+                    """
+                    {"id":"\(restored)","number":3,"is_current":true,"created_at":"2026-11-22T19:35:00Z",
+                    "restored_from_revision_id":"\(first)",
+                    "original":{"filename":"first.pdf","mime_type":"application/pdf","verification":"verified"}}
+                    """.utf8))
+        }
+        let replay = try await service.restoreDocumentFile(
+            first, for: document, expectedCurrentRevisionID: second, idempotencyKey: restoreKey
+        )
+        #expect(replay.id == restored)
+        #expect(replay.restoredFromRevisionID == first)
+        #expect(replay.number == 3)
+    }
+
+    @Test func revisionPublicationDistinguishesAnAbsentMethodFromAnUnavailableDocument() async {
+        let service = makeService()
+        let file = UploadFile(data: Data("%PDF-1.4".utf8), filename: "scan.pdf", mimeType: "application/pdf")
+        StubURLProtocol.handler = { _, _ in .init(status: 405, contentType: "text/plain") }
+        await #expect(
+            throws: FolioError.server(status: 501, message: "File replacement is unavailable on this server.")
+        ) {
+            _ = try await service.replaceDocumentFile(
+                file, for: UUID(), expectedCurrentRevisionID: UUID(), idempotencyKey: UUID()
+            )
+        }
+        StubURLProtocol.handler = { _, _ in
+            .init(status: 404, body: Data(#"{"error":"Document not found"}"#.utf8))
+        }
+        await #expect(throws: FolioError.server(status: 404, message: "Document not found")) {
+            _ = try await service.restoreDocumentFile(
+                UUID(), for: UUID(), expectedCurrentRevisionID: UUID(), idempotencyKey: UUID()
+            )
         }
     }
 
