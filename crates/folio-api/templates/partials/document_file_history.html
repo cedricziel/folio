@@ -1,4 +1,15 @@
 <turbo-frame id="document-file-history">
+    <div{% if editable_current_revision.is_some() %} data-controller="revision-publication"{% endif %}>
+    {% if let Some(current) = editable_current_revision %}
+    <form class="field" data-turbo="false" data-action="submit->revision-publication#submit"
+          action="{{ "/api/documents"|vault_url }}/{{ document_id }}/revisions" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="expected_current_revision_id" value="{{ current }}">
+        <label for="revision-replacement-file">Choose a replacement file</label>
+        <input class="input" id="revision-replacement-file" name="file" type="file" required data-action="change->revision-publication#fileChanged">
+        <button class="f-btn" type="submit">Replace file</button>
+    </form>
+    <p class="hint" role="status" data-revision-publication-target="status"></p>
+    {% endif %}
     {% if revisions.is_empty() %}
     <p class="hint">No file revisions yet.</p>
     {% else %}
@@ -26,6 +37,15 @@
             <div class="hint">Verified original</div>
             {% endif %}
             <div><a href="{{ "/api/documents"|vault_url }}/{{ document_id }}/revisions/{{ revision.id }}/download" download data-turbo="false">Download original</a></div>
+            {% if let Some(current) = editable_current_revision %}
+            {% if !revision.is_current && revision.original.verification == OriginalVerification::Verified %}
+            <form data-turbo="false" data-action="submit->revision-publication#submit" data-restore
+                  action="{{ "/api/documents"|vault_url }}/{{ document_id }}/revisions/{{ revision.id }}/restore" method="post">
+                <input type="hidden" name="expected_current_revision_id" value="{{ current }}">
+                <button class="f-btn" type="submit">Restore revision {{ revision.number }}</button>
+            </form>
+            {% endif %}
+            {% endif %}
             {% endif %}
         </dd>
         {% endfor %}
@@ -37,4 +57,5 @@
     {% if let Some(before) = next_before %}
     <a href="{{ "/documents"|vault_url }}/{{ document_id }}/file-history?before={{ before }}">Older revisions</a>
     {% endif %}
+    </div>
 </turbo-frame>

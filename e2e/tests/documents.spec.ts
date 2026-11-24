@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test, uniqueTitle, uploadViaUi, samplePdf } from "./fixtures";
@@ -182,6 +183,12 @@ test("file history downloads the original without leaving the document", async (
     await expect(history.getByText("Revision 1", { exact: true })).toBeVisible();
     await expect(history.getByText("Current", { exact: true })).toBeVisible();
     await expect(history.getByText("statement.pdf", { exact: true })).toBeVisible();
+    if (process.env.FOLIO_REVISION_PUBLICATION_TEST !== "1") {
+      const listing = await request.get(`/api/documents/${id}/revisions`);
+      await expect(listing).toBeOK();
+      expect((await listing.json()).publication_enabled).toBeUndefined();
+      await expect(history.getByRole("button", { name: "Replace file", exact: true })).toHaveCount(0);
+    }
 
     const downloaded = page.waitForEvent("download");
     await history.getByRole("link", { name: "Download original", exact: true }).click();
@@ -203,6 +210,99 @@ function blankPdf(pages: number): Buffer {
   }
   return Buffer.from(`${pdf}trailer << /Root 1 0 R >>\n%%EOF\n`, "latin1");
 }
+
+test("the file history publishes a replacement and restores an earlier original", async ({ page, request }) => {
+  test.skip(process.env.FOLIO_REVISION_PUBLICATION_TEST !== "1", "Requires the isolated publication build");
+  test.setTimeout(60_000);
+  const upload = await request.post("/api/documents/upload", {
+    multipart: {
+      title: uniqueTitle("file-history-publication"),
+      file: { name: "first.pdf", mimeType: "application/pdf", buffer: blankPdf(1) },
+    },
+  });
+  await expect(upload).toBeOK();
+  const { id } = await upload.json();
+  const document = `/api/documents/${id}`;
+  const history = page.locator("#document-file-history");
+  const openHistory = async () => {
+    await page.getByText("File history", { exact: true }).click();
+    await expect(history.getByRole("button", { name: "Replace file", exact: true })).toBeVisible();
+  };
+  try {
+    await page.goto(`/documents/${id}`);
+    await openHistory();
+    await history.getByLabel("Choose a replacement file").setInputFiles({
+      name: "second.pdf",
+      mimeType: "application/pdf",
+      buffer: blankPdf(2),
+    });
+    const publication = (status: number) => page.waitForResponse(response =>
+      response.request().method() === "POST"
+        && response.url().includes(`${document}/revisions`)
+        && response.status() === status,
+    );
+    await Promise.all([
+      page.waitForEvent("load"), publication(201),
+      history.getByRole("button", { name: "Replace file", exact: true }).click(),
+    ]);
+    await expect(page).toHaveURL(new RegExp(`/documents/${id}`));
+    await openHistory();
+    await expect(history.getByText("second.pdf", { exact: true })).toBeVisible();
+
+    await Promise.all([
+      page.waitForEvent("load"), publication(201),
+      history.getByRole("button", { name: "Restore revision 1", exact: true }).click(),
+    ]);
+    await openHistory();
+    await expect(history.getByText("Revision 3", { exact: true })).toBeVisible();
+    await expect(history.getByText("Restored from an earlier revision", { exact: true })).toBeVisible();
+    const current = await request.get(`${document}/download`);
+    await expect(current).toBeOK();
+    expect(await current.body()).toEqual(blankPdf(1));
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const pageResponse = await request.get(`${document}/revisions`);
+    await expect(pageResponse).toBeOK();
+    const { publication_enabled, revisions } = await pageResponse.json();
+    expect(publication_enabled).toBe(true);
+    const append = async (currentID: string, filename: string) => {
+      const response = await request.post(`${document}/revisions`, {
+        headers: { "Idempotency-Key": randomUUID() },
+        multipart: {
+          expected_current_revision_id: currentID,
+          file: { name: filename, mimeType: "application/pdf", buffer: blankPdf(3) },
+        },
+      });
+      await expect(response).toBeOK();
+      return (await response.json()).id as string;
+    };
+    let currentID = revisions[0].id;
+    for (let number = 4; number <= 7; number++) {
+      currentID = await append(currentID, `revision-${number}.pdf`);
+    }
+    await page.reload();
+    await openHistory();
+    await expect(history.getByText("Revision 7", { exact: true })).toBeVisible();
+    await append(currentID, "newer.pdf");
+    await Promise.all([
+      publication(409),
+      history.getByRole("button", { name: "Restore revision 1", exact: true }).click(),
+    ]);
+    const conflict = history.getByRole("status");
+    await expect(conflict).toContainText("The file changed while you were editing");
+    await expect(history.getByText("newer.pdf", { exact: true })).toBeVisible();
+    await expect(history.getByText("Revision 8", { exact: true })).toBeVisible();
+    await expect.poll(() => conflict.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      const toolbar = element.ownerDocument.querySelector(".topbar")?.getBoundingClientRect();
+      return rect.top >= (toolbar?.bottom ?? 0) && rect.bottom <= window.innerHeight;
+    })).toBe(true);
+    await expect(page).toHaveURL(new RegExp(`/documents/${id}`));
+  } finally {
+    await request.delete(document);
+    await request.delete(`${document}/purge`);
+  }
+});
 
 test("a long PDF offers the previewed pages and the original for the rest", async ({ page, request }) => {
   const title = uniqueTitle("long-pdf");

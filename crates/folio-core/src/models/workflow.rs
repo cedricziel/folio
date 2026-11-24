@@ -32,6 +32,16 @@ pub enum WorkflowTrigger {
     DocumentCorrespondentChanged,
     #[serde(rename = "document.document_type_changed")]
     DocumentTypeChanged,
+    #[serde(rename = "document.date_changed")]
+    DocumentDateChanged,
+    #[serde(rename = "document.reviewed")]
+    DocumentReviewed,
+    #[serde(rename = "document.unreviewed")]
+    DocumentUnreviewed,
+    #[serde(rename = "document.revision_created")]
+    DocumentRevisionCreated,
+    #[serde(rename = "document.revision_restored")]
+    DocumentRevisionRestored,
     #[serde(rename = "document_note.created")]
     DocumentNoteCreated,
     #[serde(rename = "document_note.updated")]
@@ -134,7 +144,7 @@ pub enum WorkflowTrigger {
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 55] = [
+    pub const ALL: [WorkflowTrigger; 60] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -142,6 +152,11 @@ impl WorkflowTrigger {
         Self::DocumentTagsChanged,
         Self::DocumentCorrespondentChanged,
         Self::DocumentTypeChanged,
+        Self::DocumentDateChanged,
+        Self::DocumentReviewed,
+        Self::DocumentUnreviewed,
+        Self::DocumentRevisionCreated,
+        Self::DocumentRevisionRestored,
         Self::DocumentNoteCreated,
         Self::DocumentNoteUpdated,
         Self::DocumentNoteDeleted,
@@ -202,6 +217,11 @@ impl WorkflowTrigger {
             Self::DocumentTagsChanged => "document.tags_changed",
             Self::DocumentCorrespondentChanged => "document.correspondent_changed",
             Self::DocumentTypeChanged => "document.document_type_changed",
+            Self::DocumentDateChanged => "document.date_changed",
+            Self::DocumentReviewed => "document.reviewed",
+            Self::DocumentUnreviewed => "document.unreviewed",
+            Self::DocumentRevisionCreated => "document.revision_created",
+            Self::DocumentRevisionRestored => "document.revision_restored",
             Self::DocumentNoteCreated => "document_note.created",
             Self::DocumentNoteUpdated => "document_note.updated",
             Self::DocumentNoteDeleted => "document_note.deleted",
@@ -267,6 +287,11 @@ impl WorkflowTrigger {
             Self::DocumentTagsChanged => "When document tags change",
             Self::DocumentCorrespondentChanged => "When a document correspondent changes",
             Self::DocumentTypeChanged => "When a document type changes",
+            Self::DocumentDateChanged => "When a document date changes",
+            Self::DocumentReviewed => "When a document is marked reviewed",
+            Self::DocumentUnreviewed => "When a document is marked unreviewed",
+            Self::DocumentRevisionCreated => "When a document file revision is created",
+            Self::DocumentRevisionRestored => "When a document file revision is restored",
             Self::DocumentNoteCreated => "When a note is created",
             Self::DocumentNoteUpdated => "When a note is updated",
             Self::DocumentNoteDeleted => "When a note is deleted",
@@ -327,6 +352,11 @@ impl WorkflowTrigger {
             | Self::DocumentTagsChanged
             | Self::DocumentCorrespondentChanged
             | Self::DocumentTypeChanged
+            | Self::DocumentDateChanged
+            | Self::DocumentReviewed
+            | Self::DocumentUnreviewed
+            | Self::DocumentRevisionCreated
+            | Self::DocumentRevisionRestored
             | Self::DocumentNoteCreated
             | Self::DocumentNoteUpdated
             | Self::DocumentNoteDeleted
@@ -659,6 +689,9 @@ impl WorkflowConditions {
             }
             if let Some(processing) = &event.processing {
                 processing.validate_trigger(trigger)?;
+            }
+            if let Some(document_change) = &event.document_change {
+                document_change.validate_trigger(trigger)?;
             }
         }
         for child in self

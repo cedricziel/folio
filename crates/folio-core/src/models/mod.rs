@@ -31,6 +31,7 @@ mod tag;
 mod vault;
 mod webhook;
 mod workflow;
+mod workflow_document_conditions;
 mod workflow_event_conditions;
 mod workflow_schedule;
 mod workflow_trigger;
@@ -118,6 +119,9 @@ pub use workflow::{
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 
+pub use workflow_document_conditions::{
+    WorkflowDocumentConditions, WorkflowRevisionSource, WorkflowUnreviewReason,
+};
 pub use workflow_event_conditions::{
     MetadataChangeState, WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
     WorkflowMetadataConditions, WorkflowProcessingConditions,
