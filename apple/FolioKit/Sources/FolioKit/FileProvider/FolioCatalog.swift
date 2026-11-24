@@ -102,6 +102,54 @@ public struct FolioCatalog: Sendable {
         try await listing(of: folder, maxAge: .zero)
     }
 
+    /// Searches the vaults currently visible at the provider root and returns their All documents aliases.
+    public func search(_ query: String, limit: Int) async throws -> [FolioNode] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let limit = min(limit, 50)
+        guard !query.isEmpty, limit > 0 else { return [] }
+        try Task.checkCancellation()
+        let roots = try await service.vaults().vaults.map(\.id).sorted { $0.uuidString < $1.uuidString }
+        let concurrentVaults = 4
+        var ranked: [(rank: Int, vault: Int, node: FolioNode)] = []
+        for start in stride(from: 0, to: roots.count, by: concurrentVaults) {
+            try Task.checkCancellation()
+            ranked = try await withThrowingTaskGroup(of: (Int, [FolioNode]).self) { group in
+                for index in start..<min(start + concurrentVaults, roots.count) {
+                    group.addTask {
+                        (index, try await search(query, in: roots[index], limit: limit))
+                    }
+                }
+                var best = ranked
+                for try await (index, nodes) in group {
+                    best.append(contentsOf: nodes.enumerated().map { ($0.offset, index, $0.element) })
+                    // The search API ranks each vault independently.
+                    best.sort { ($0.rank, $0.vault) < ($1.rank, $1.vault) }
+                    best = Array(best.prefix(limit))
+                }
+                return best
+            }
+        }
+        try Task.checkCancellation()
+        return ranked.map(\.node)
+    }
+
+    private func search(_ query: String, in vaultID: UUID, limit: Int) async throws -> [FolioNode] {
+        try Task.checkCancellation()
+        let folder = FolioItemID.Folder.scoped(vaultID, .all)
+        let matches: [Document]
+        do {
+            matches = try await service.scoped(to: vaultID).documents(matching: query)
+        } catch FolioError.server(status: 404, message: _) {
+            return []
+        }
+        try Task.checkCancellation()
+        var seen = Set<Document.ID>()
+        return matches.filter { seen.insert($0.id).inserted }.prefix(limit).map { document in
+            // The browse filename can depend on nonmatching siblings. Resolving the alias applies that name.
+            documentNode(document, in: folder, name: Self.sanitized(document.originalFilename ?? document.title))
+        }
+    }
+
     private func fetchChildren(of folder: FolioItemID.Folder, vaultAge: Duration) async throws -> [FolioNode] {
         if folder == .root {
             let catalog = try await vaultCatalog(maxAge: .zero)
@@ -261,12 +309,16 @@ public struct FolioCatalog: Sendable {
         return documents.sorted { $0.id.uuidString < $1.id.uuidString }.map { document in
             let name = Self.uniqueName(
                 Self.sanitized(document.originalFilename ?? document.title), id: document.id, taken: &taken)
-            return FolioNode(
-                id: .document(document.id, in: folder), parent: .folder(folder), name: name, isFolder: false,
-                modified: document.updatedAt, contentType: document.mimeType, document: document,
-                created: document.documentDate?.start() ?? document.createdAt
-            )
+            return documentNode(document, in: folder, name: name)
         }
+    }
+
+    private func documentNode(_ document: Document, in folder: FolioItemID.Folder, name: String) -> FolioNode {
+        FolioNode(
+            id: .document(document.id, in: folder), parent: .folder(folder), name: name, isFolder: false,
+            modified: document.updatedAt, contentType: document.mimeType, document: document,
+            created: document.documentDate?.start() ?? document.createdAt
+        )
     }
 
     private static func sanitized(_ name: String) -> String {
