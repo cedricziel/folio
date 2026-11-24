@@ -266,3 +266,16 @@ fn custom_workflow_conditions_preserve_generated_typed_values() {
             .is_none_or(|fields| { fields.iter().all(|field| field != property) }));
     }
 }
+
+#[test]
+fn saved_view_metadata_filter_is_an_optional_typed_reference() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let filter = &spec["components"]["schemas"]["DocumentFilter"];
+    assert_eq!(
+        filter["properties"]["metadata_exact"]["$ref"],
+        "#/components/schemas/MetadataExactFilter"
+    );
+    assert!(filter["required"]
+        .as_array()
+        .is_none_or(|required| { required.iter().all(|name| name != "metadata_exact") }));
+}

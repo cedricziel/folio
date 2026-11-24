@@ -3,7 +3,7 @@ use serde_json::json;
 
 #[test]
 fn rejects_unknown_query_version() {
-    let query: SavedViewQuery = serde_json::from_value(json!({"version": 2})).unwrap();
+    let query: SavedViewQuery = serde_json::from_value(json!({"version": 4})).unwrap();
     assert!(query.page(VaultId::new(), 50, None).is_err());
 }
 
@@ -28,17 +28,34 @@ fn rejects_unknown_filters_instead_of_broadening_results() {
 }
 
 #[test]
-fn older_saved_queries_reject_typed_metadata_they_cannot_restore() {
-    assert!(serde_json::from_value::<SavedViewQuery>(json!({
-        "version": 1,
-        "filters": {
-            "metadata_exact": {
-                "field_id": "74485eef-3736-4d2c-81ea-4a410901241e",
-                "value": {"kind": "boolean", "value": false}
-            }
+fn typed_metadata_requires_version_three_and_composes_with_inbox() {
+    let vault = VaultId::new();
+    let fields = json!({
+        "inbox_only": true,
+        "metadata_exact": {
+            "field_id": "74485eef-3736-4d2c-81ea-4a410901241e",
+            "value": {"kind": "boolean", "value": false}
         }
-    }))
-    .is_err());
+    });
+    for version in [1, 2] {
+        let query: SavedViewQuery =
+            serde_json::from_value(json!({"version": version, "filters": fields})).unwrap();
+        assert!(query.page(vault, 50, None).is_err());
+    }
+    let query: SavedViewQuery =
+        serde_json::from_value(json!({"version": 3, "filters": fields})).unwrap();
+    let page = query.page(vault, 50, None).unwrap();
+    assert!(page.filter.inbox_only);
+    let restored = SavedViewQuery::from_document_page(page);
+    assert_eq!(restored.version, 3);
+    assert_eq!(
+        serde_json::to_value(restored).unwrap()["filters"]["metadata_exact"],
+        fields["metadata_exact"]
+    );
+    let missing: SavedViewQuery = serde_json::from_value(json!({"version": 3})).unwrap();
+    assert!(missing.page(vault, 50, None).is_err());
+    let legacy = serde_json::to_value(SavedViewQuery::default()).unwrap();
+    assert!(legacy["filters"].get("metadata_exact").is_none());
 }
 
 #[test]

@@ -3,15 +3,17 @@ use axum::{
     Json,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use folio_core::models::{Access, DocumentPageQuery, DocumentSort, VaultAction, VaultId};
-use serde::Serialize;
+use folio_core::models::{
+    Access, DocumentPageQuery, DocumentSort, SavedViewQuery, VaultAction, VaultId,
+};
+use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::documents::{present, DocumentView, ListDocumentsQuery};
 use crate::{
     error::{ApiError, ApiResult},
-    extract::ApiPath,
+    extract::{ApiJson, ApiPath},
     state::AppState,
     vault::{DefaultVault, Uploader},
 };
@@ -75,13 +77,7 @@ pub(super) fn query(raw: Option<&str>) -> ApiResult<DocumentPageQuery> {
                 }
             }
             "cursor" => {
-                let bytes = URL_SAFE_NO_PAD
-                    .decode(value.as_bytes())
-                    .map_err(|_| ApiError::bad_request("Invalid cursor"))?;
-                query.cursor = Some(
-                    serde_json::from_slice(&bytes)
-                        .map_err(|_| ApiError::bad_request("Invalid cursor"))?,
-                );
+                query.cursor = Some(decode_cursor(&value)?);
             }
             _ => {}
         }
@@ -89,12 +85,19 @@ pub(super) fn query(raw: Option<&str>) -> ApiResult<DocumentPageQuery> {
     Ok(query)
 }
 
+fn decode_cursor(value: &str) -> ApiResult<folio_core::models::DocumentCursor> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(value.as_bytes())
+        .map_err(|_| ApiError::bad_request("Invalid cursor"))?;
+    serde_json::from_slice(&bytes).map_err(|_| ApiError::bad_request("Invalid cursor"))
+}
+
 async fn browse(
     state: AppState,
     default: VaultId,
     vault: VaultId,
     uploader: Uploader,
-    raw: Option<String>,
+    query: ApiResult<DocumentPageQuery>,
 ) -> ApiResult<Json<BrowseResponse>> {
     let visible = match uploader.0 {
         Some(user) => matches!(
@@ -106,10 +109,11 @@ async fn browse(
     if !visible {
         return Err(ApiError::not_found("Vault not found"));
     }
-    let page = state
-        .document_repo
-        .page(vault, query(raw.as_deref())?)
-        .await?;
+    let query = query?;
+    if let Some(exact) = &query.filter.metadata_exact {
+        super::saved_views::validate_metadata_filter(&state, vault, exact).await?;
+    }
+    let page = state.document_repo.page(vault, query).await?;
     let next_cursor = page
         .next_cursor
         .map(|cursor| serde_json::to_vec(&cursor).map(|bytes| URL_SAFE_NO_PAD.encode(bytes)))
@@ -133,7 +137,7 @@ pub(crate) async fn browse_default(
     State(state): State<AppState>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult<Json<BrowseResponse>> {
-    browse(state, vault, vault, uploader, raw).await
+    browse(state, vault, vault, uploader, query(raw.as_deref())).await
 }
 
 #[utoipa::path(get, path = "/api/vaults/{vault_id}/documents", operation_id = "browseVaultDocuments", tag = "documents",
@@ -147,5 +151,31 @@ pub(crate) async fn browse_vault(
     State(state): State<AppState>,
     RawQuery(raw): RawQuery,
 ) -> ApiResult<Json<BrowseResponse>> {
-    browse(state, default, VaultId(id), uploader, raw).await
+    browse(state, default, VaultId(id), uploader, query(raw.as_deref())).await
+}
+
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BrowseFilteredInput {
+    query: SavedViewQuery,
+    limit: Option<u32>,
+    cursor: Option<String>,
+}
+
+#[utoipa::path(post, path = "/api/documents/browse", operation_id = "browseFilteredDocuments", tag = "documents",
+    request_body = BrowseFilteredInput,
+    responses((status = 200, description = "One page matching the versioned query", body = BrowseResponse),
+        (status = 401, description = "Sign-in required"), crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::InternalError))]
+pub(crate) async fn browse_filtered(
+    DefaultVault(vault): DefaultVault,
+    uploader: Uploader,
+    State(state): State<AppState>,
+    ApiJson(input): ApiJson<BrowseFilteredInput>,
+) -> ApiResult<Json<BrowseResponse>> {
+    let cursor = input.cursor.as_deref().map(decode_cursor).transpose()?;
+    let query = input
+        .query
+        .page(vault, input.limit.unwrap_or(50), cursor)
+        .map_err(Into::into);
+    browse(state, vault, vault, uploader, query).await
 }
