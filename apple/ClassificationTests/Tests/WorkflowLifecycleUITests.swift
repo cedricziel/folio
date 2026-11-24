@@ -66,9 +66,20 @@ import XCTest
         XCTAssertTrue(save.waitForNonExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.staticTexts["When a note is created"].waitForExistence(timeout: 5), app.debugDescription)
         edit.tap()
+        let comment = app.buttons["When a comment is created"]
+        XCTAssertTrue(comment.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(note.isSelected, app.debugDescription)
+        XCTAssertFalse(save.isEnabled, app.debugDescription)
+        comment.tap()
+        XCTAssertTrue(save.isEnabled, app.debugDescription)
+        save.tap()
+        XCTAssertTrue(save.waitForNonExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["When a comment is created"].waitForExistence(timeout: 5), app.debugDescription)
+
+        edit.tap()
         let source = app.buttons["When a source becomes unavailable"]
         XCTAssertTrue(source.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertTrue(note.isSelected, app.debugDescription)
+        XCTAssertTrue(comment.isSelected, app.debugDescription)
         XCTAssertFalse(save.isEnabled, app.debugDescription)
         source.tap()
         save.tap()
