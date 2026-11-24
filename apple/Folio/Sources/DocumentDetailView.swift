@@ -68,7 +68,13 @@ struct DocumentDetailView: View {
         }
         .sheet(isPresented: $showingDiscussion) { DocumentDiscussionView(model: model.discussion) }
         .sheet(isPresented: $showingFileHistory) {
-            DocumentFileHistoryView(documentID: model.document.id, service: service)
+            DocumentFileHistoryView(
+                documentID: model.document.id, service: service, canEditFile: model.document.canEditDocumentDate
+            ) {
+                page = nil
+                pageRequest = nil
+                await model.refreshAfterFilePublication()
+            }
         }
         .sheet(isPresented: $editingDate) {
             DocumentDateEditor(documentDate: model.document.documentDate) { date in

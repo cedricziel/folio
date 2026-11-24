@@ -2,6 +2,8 @@
 
 mod common;
 
+#[path = "workflows/document_delta.rs"]
+mod document_delta;
 #[path = "workflows/document_lifecycle.rs"]
 mod document_lifecycle;
 

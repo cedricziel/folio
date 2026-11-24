@@ -3,6 +3,22 @@ import Foundation
 @testable import FolioKit
 
 actor MockFolioService: FolioService {
+    private var heldDownload: CheckedContinuation<Void, Never>?
+    private var downloadStarted: CheckedContinuation<Void, Never>?
+    private var holdNextDownload = false
+
+    func holdNextFileDownload() { holdNextDownload = true }
+
+    func waitForHeldFileDownload() async {
+        guard heldDownload == nil else { return }
+        await withCheckedContinuation { downloadStarted = $0 }
+    }
+
+    func releaseHeldFileDownload() {
+        heldDownload?.resume()
+        heldDownload = nil
+    }
+
     private var savedViewValues: [SavedView] = []
     private var nextSavedViewID: UUID?
     private var savedViewsGate: CheckedContinuation<Void, Never>?
@@ -488,6 +504,14 @@ actor MockFolioService: FolioService {
     func downloadFile(for document: Document) async throws -> URL {
         try Task.checkCancellation()
         downloads += 1
+        if holdNextDownload {
+            holdNextDownload = false
+            await withCheckedContinuation {
+                heldDownload = $0
+                downloadStarted?.resume()
+                downloadStarted = nil
+            }
+        }
         if let failure {
             throw failure
         }

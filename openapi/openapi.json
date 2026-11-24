@@ -14696,6 +14696,101 @@
             ],
             "properties": {
               "after": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "title"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "added_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "removed_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "state": {
+                "$ref": "#/components/schemas/WorkflowTagChangeState"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "tags"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "after_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "before_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "state": {
+                "$ref": "#/components/schemas/MetadataChangeState"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "correspondent"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "after_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "before_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "state": {
+                "$ref": "#/components/schemas/MetadataChangeState"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "document_type"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "after": {
                 "type": "string",
                 "format": "date"
               },
@@ -15194,6 +15289,14 @@
             "type": "string"
           }
         }
+      },
+      "WorkflowTagChangeState": {
+        "type": "string",
+        "enum": [
+          "added",
+          "removed",
+          "replaced"
+        ]
       },
       "WorkflowTarget": {
         "type": "string",

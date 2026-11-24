@@ -23,10 +23,60 @@ pub enum WorkflowRevisionSource {
     Restoration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub enum WorkflowTagChangeState {
+    Added,
+    Removed,
+    Replaced,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum WorkflowDocumentConditions {
+    Title {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = String, required = false))]
+        before: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = String, required = false))]
+        after: Option<String>,
+    },
+    Tags {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid, required = false))]
+        added_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid, required = false))]
+        removed_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = WorkflowTagChangeState, required = false))]
+        state: Option<WorkflowTagChangeState>,
+    },
+    Correspondent {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid, required = false))]
+        before_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid, required = false))]
+        after_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = MetadataChangeState, required = false))]
+        state: Option<MetadataChangeState>,
+    },
+    DocumentType {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid, required = false))]
+        before_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid, required = false))]
+        after_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "openapi", schema(value_type = MetadataChangeState, required = false))]
+        state: Option<MetadataChangeState>,
+    },
     Date {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "openapi", schema(value_type = String, format = Date, required = false))]
@@ -60,6 +110,30 @@ impl WorkflowDocumentConditions {
     pub fn validate_trigger(&self, trigger: WorkflowTrigger) -> Result<()> {
         use WorkflowTrigger::*;
         let valid = match self {
+            Self::Title { .. } => trigger == DocumentTitleChanged,
+            Self::Tags {
+                added_id,
+                removed_id,
+                state,
+            } => {
+                trigger == DocumentTagsChanged
+                    && !(added_id.is_some() && *state == Some(WorkflowTagChangeState::Removed))
+                    && !(removed_id.is_some() && *state == Some(WorkflowTagChangeState::Added))
+                    && (added_id.is_none() || added_id != removed_id)
+            }
+            Self::Correspondent {
+                before_id,
+                after_id,
+                state,
+            } => {
+                trigger == DocumentCorrespondentChanged
+                    && valid_assignment(before_id, after_id, *state)
+            }
+            Self::DocumentType {
+                before_id,
+                after_id,
+                state,
+            } => trigger == DocumentTypeChanged && valid_assignment(before_id, after_id, *state),
             Self::Date {
                 before,
                 after,
@@ -99,6 +173,55 @@ impl WorkflowDocumentConditions {
         }
         let data = event.data();
         match self {
+            Self::Title { before, after } => {
+                let (Some(previous), Some(current)) =
+                    (field::<&str>(data, "before"), field::<&str>(data, "after"))
+                else {
+                    return false;
+                };
+                previous != current
+                    && before.as_deref().is_none_or(|value| previous == value)
+                    && after.as_deref().is_none_or(|value| current == value)
+            }
+            Self::Tags {
+                added_id,
+                removed_id,
+                state,
+            } => {
+                let (Some(added), Some(removed)) = (
+                    field::<Vec<Id>>(data, "added_ids"),
+                    field::<Vec<Id>>(data, "removed_ids"),
+                ) else {
+                    return false;
+                };
+                let change = match (added.is_empty(), removed.is_empty()) {
+                    (false, true) => WorkflowTagChangeState::Added,
+                    (true, false) => WorkflowTagChangeState::Removed,
+                    (false, false) => WorkflowTagChangeState::Replaced,
+                    (true, true) => return false,
+                };
+                added_id.is_none_or(|id| added.contains(&id))
+                    && removed_id.is_none_or(|id| removed.contains(&id))
+                    && state.is_none_or(|state| state == change)
+            }
+            Self::Correspondent {
+                before_id,
+                after_id,
+                state,
+            }
+            | Self::DocumentType {
+                before_id,
+                after_id,
+                state,
+            } => {
+                let (Some(previous), Some(current)) = (
+                    field::<Option<Id>>(data, "before_id"),
+                    field::<Option<Id>>(data, "after_id"),
+                ) else {
+                    return false;
+                };
+                matches_assignment(previous, current, *before_id, *after_id, *state)
+            }
             Self::Date {
                 before,
                 after,
@@ -111,15 +234,7 @@ impl WorkflowDocumentConditions {
                 let Some(current) = field::<Option<DocumentDate>>(data, "document_date") else {
                     return false;
                 };
-                let change = match (previous, current) {
-                    (None, Some(_)) => MetadataChangeState::Set,
-                    (Some(before), Some(after)) if before != after => MetadataChangeState::Replaced,
-                    (Some(_), None) => MetadataChangeState::Cleared,
-                    _ => return false,
-                };
-                before.is_none_or(|date| previous == Some(date))
-                    && after.is_none_or(|date| current == Some(date))
-                    && state.is_none_or(|state| state == change)
+                matches_assignment(previous, current, *before, *after, *state)
             }
             Self::Review { origin, reason } => {
                 let origin_field = if trigger == WorkflowTrigger::DocumentReviewed {
@@ -136,6 +251,34 @@ impl WorkflowDocumentConditions {
             }
         }
     }
+}
+
+fn valid_assignment<T: PartialEq>(
+    before: &Option<T>,
+    after: &Option<T>,
+    state: Option<MetadataChangeState>,
+) -> bool {
+    !(before.is_some() && state == Some(MetadataChangeState::Set)
+        || after.is_some() && state == Some(MetadataChangeState::Cleared)
+        || before.is_some() && before == after)
+}
+
+fn matches_assignment<T: Copy + PartialEq>(
+    previous: Option<T>,
+    current: Option<T>,
+    before: Option<T>,
+    after: Option<T>,
+    state: Option<MetadataChangeState>,
+) -> bool {
+    let change = match (previous, current) {
+        (None, Some(_)) => MetadataChangeState::Set,
+        (Some(before), Some(after)) if before != after => MetadataChangeState::Replaced,
+        (Some(_), None) => MetadataChangeState::Cleared,
+        _ => return false,
+    };
+    before.is_none_or(|value| previous == Some(value))
+        && after.is_none_or(|value| current == Some(value))
+        && state.is_none_or(|state| state == change)
 }
 
 fn field<'a, T: Deserialize<'a>>(data: &'a Value, key: &str) -> Option<T> {
@@ -174,6 +317,75 @@ mod tests {
             data,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn title_predicate_compares_exact_captured_text() {
+        let trigger = WorkflowTrigger::DocumentTitleChanged;
+        let condition = WorkflowDocumentConditions::Title {
+            before: Some("Invoice A".into()),
+            after: Some("Invoice B".into()),
+        };
+        assert!(condition.matches(&occurrence(
+            trigger,
+            json!({"before": "Invoice A", "after": "Invoice B"})
+        )));
+        assert!(!condition.matches(&occurrence(
+            trigger,
+            json!({"before": "invoice A", "after": "Invoice B"})
+        )));
+        assert!(!condition.matches(&occurrence(
+            WorkflowTrigger::DocumentUpdated,
+            json!({"before": "Invoice A", "after": "Invoice B"})
+        )));
+    }
+
+    #[test]
+    fn assignment_predicates_distinguish_setting_replacing_and_clearing() {
+        let old_id = Id::new_v4();
+        let new_id = Id::new_v4();
+        let correspondent = WorkflowTrigger::DocumentCorrespondentChanged;
+        let document_type = WorkflowTrigger::DocumentTypeChanged;
+        let assign = WorkflowDocumentConditions::Correspondent {
+            before_id: None,
+            after_id: Some(new_id),
+            state: Some(MetadataChangeState::Set),
+        };
+        assert!(assign.matches(&occurrence(
+            correspondent,
+            json!({"before_id": null, "after_id": new_id})
+        )));
+        assert!(!assign.matches(&occurrence(correspondent, json!({"after_id": new_id}))));
+        assert!(!assign.matches(&occurrence(
+            correspondent,
+            json!({"before_id": old_id, "after_id": new_id})
+        )));
+        let replace = WorkflowDocumentConditions::DocumentType {
+            before_id: Some(old_id),
+            after_id: Some(new_id),
+            state: Some(MetadataChangeState::Replaced),
+        };
+        assert!(replace.matches(&occurrence(
+            document_type,
+            json!({"before_id": old_id, "after_id": new_id})
+        )));
+        assert!(!replace.matches(&occurrence(
+            correspondent,
+            json!({"before_id": old_id, "after_id": new_id})
+        )));
+        let clear = WorkflowDocumentConditions::DocumentType {
+            before_id: Some(old_id),
+            after_id: None,
+            state: Some(MetadataChangeState::Cleared),
+        };
+        assert!(clear.matches(&occurrence(
+            document_type,
+            json!({"before_id": old_id, "after_id": null})
+        )));
+        assert!(!clear.matches(&occurrence(
+            document_type,
+            json!({"before_id": old_id, "after_id": old_id})
+        )));
     }
 
     #[test]

@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 struct DocumentFileHistoryView: View {
     let documentID: Document.ID
     let service: any FolioService
+    let canEditFile: Bool
+    let onPublication: @MainActor () async -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var revisions: [DocumentFileRevision] = []
@@ -17,6 +19,18 @@ struct DocumentFileHistoryView: View {
     @State private var requestedRevision: DocumentFileRevision?
     @State private var export: RevisionExport?
     @State private var showingExporter = false
+    @State private var publicationEnabled = false
+    @State private var showingImporter = false
+    @State private var readingReplacement = false
+    @State private var publishing = false
+    @State private var pendingPublication: Publication?
+    @State private var publicationFailure: String?
+    @State private var needsRefresh = false
+
+    private var editableCurrent: UUID? {
+        guard canEditFile, publicationEnabled, !needsRefresh else { return nil }
+        return revisions.first(where: { $0.isCurrent && $0.verification == .verified })?.id
+    }
 
     var body: some View {
         NavigationStack {
@@ -35,12 +49,29 @@ struct DocumentFileHistoryView: View {
                 if let downloadFailure {
                     Text(downloadFailure).foregroundStyle(Color.danger)
                 }
+                if editableCurrent != nil {
+                    Button("Choose a replacement file", systemImage: "arrow.trianglehead.clockwise") {
+                        showingImporter = true
+                    }
+                    .disabled(publishing || readingReplacement || loading)
+                }
+                if let publicationFailure {
+                    Text(publicationFailure).foregroundStyle(Color.danger)
+                    if needsRefresh {
+                        Button("Refresh file history") { Task { await load(before: nil) } }
+                            .disabled(loading || publishing)
+                    } else if pendingPublication != nil && !publishing && !readingReplacement {
+                        Button("Retry publication") { Task { await publish() } }
+                    }
+                }
+                if readingReplacement { ProgressView("Reading the selected file…") }
+                if publishing { ProgressView("Publishing the file…") }
                 ForEach(revisions) { revision in
                     revisionRow(revision)
                 }
                 if let nextBefore, loadFailure == nil {
                     Button("Older revisions") { Task { await load(before: nextBefore) } }
-                        .disabled(loading)
+                        .disabled(loading || publishing)
                 }
             }
             .scrollContentBackground(.hidden)
@@ -48,11 +79,12 @@ struct DocumentFileHistoryView: View {
             .navigationTitle("File history")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") { dismiss() }.disabled(publishing || readingReplacement)
                 }
             }
         }
         .frame(minWidth: 300, minHeight: 400)
+        .interactiveDismissDisabled(publishing || readingReplacement)
         .task { await load(before: nil) }
         .task(id: requestedRevision?.id) {
             guard let requestedRevision else { return }
@@ -65,6 +97,14 @@ struct DocumentFileHistoryView: View {
             discardExport()
         } onCancellation: {
             discardExport()
+        }
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.pdf, .image]) { result in
+            switch result {
+            case let .success(url):
+                Task { await prepareReplacement(url) }
+            case let .failure(error):
+                publicationFailure = error.localizedDescription
+            }
         }
     }
 
@@ -112,6 +152,14 @@ struct DocumentFileHistoryView: View {
                     .buttonStyle(.borderless)
                     .disabled(requestedRevision != nil || showingExporter)
                 }
+                if let current = editableCurrent, !revision.isCurrent, revision.verification == .verified {
+                    Button("Restore revision \(revision.number)", systemImage: "clock.arrow.circlepath") {
+                        pendingPublication = Publication(source: .restoration(revision.id), expected: current)
+                        Task { await publish() }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(publishing || readingReplacement || loading)
+                }
             }
         }
     }
@@ -127,14 +175,84 @@ struct DocumentFileHistoryView: View {
             if before == nil || unavailable { revisions = [] }
             revisions.append(contentsOf: page?.revisions ?? [])
             nextBefore = page?.nextBefore
+            publicationEnabled = page?.publicationEnabled == true
+            if before == nil {
+                needsRefresh = false
+                publicationFailure = nil
+            }
         } catch {
             guard !Task.isCancelled else { return }
             if case let FolioError.server(status, _) = error, status == 403 || status == 404 {
                 revisions = []
                 nextBefore = nil
+                publicationEnabled = false
             }
             loadFailure = error.localizedDescription
         }
+    }
+
+    private func prepareReplacement(_ url: URL) async {
+        guard let expected = editableCurrent, !publishing, !readingReplacement else { return }
+        pendingPublication = nil
+        publicationFailure = nil
+        readingReplacement = true
+        let (files, _) = await UploadFile.readDocuments([url])
+        readingReplacement = false
+        guard let file = files.first else {
+            publicationFailure = "Couldn’t read the selected file."
+            return
+        }
+        pendingPublication = Publication(source: .replacement(file), expected: expected)
+        await publish()
+    }
+
+    private func publish() async {
+        guard !publishing, let publication = pendingPublication else { return }
+        publishing = true
+        needsRefresh = false
+        publicationFailure = nil
+        defer { publishing = false }
+        do {
+            switch publication.source {
+            case let .replacement(file):
+                _ = try await service.replaceDocumentFile(
+                    file, for: documentID, expectedCurrentRevisionID: publication.expected,
+                    idempotencyKey: publication.key
+                )
+            case let .restoration(revision):
+                _ = try await service.restoreDocumentFile(
+                    revision, for: documentID, expectedCurrentRevisionID: publication.expected,
+                    idempotencyKey: publication.key
+                )
+            }
+            pendingPublication = nil
+            await load(before: nil)
+            await onPublication()
+        } catch FolioError.server(status: 409, message: _) {
+            pendingPublication = nil
+            needsRefresh = true
+            await load(before: nil)
+            if needsRefresh {
+                publicationFailure =
+                    "The file changed while you were editing. Refresh file history before trying again."
+            } else {
+                publicationFailure =
+                    "The file changed while you were editing. Review the current revision before trying again."
+                await onPublication()
+            }
+        } catch {
+            publicationFailure = error.localizedDescription
+        }
+    }
+
+    private struct Publication {
+        enum Source {
+            case replacement(UploadFile)
+            case restoration(UUID)
+        }
+        let source: Source
+        let expected: UUID
+        let key = UUID()
     }
 
     private func download(_ revision: DocumentFileRevision) async {
