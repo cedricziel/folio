@@ -245,6 +245,75 @@ import XCTest
         capture(app, name: "Saved one-time UTC schedule")
     }
 
+    func testIngestionConditionsSaveFalseAndReopenTheNestedBranch() {
+        let app = launch(arguments: ["--workflow-ingestion-conditions"])
+        openWorkflow(app)
+        let edit = app.buttons["Edit conditions"]
+        guard scroll(app, until: edit) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+        let branch = app.buttons["Condition 1"]
+        guard scroll(app, until: branch) else { return XCTFail(app.debugDescription) }
+        branch.tap()
+
+        let reason = app.textFields["Reason"]
+        guard scroll(app, until: reason) else { return XCTFail(app.debugDescription) }
+        reason.tap()
+        reason.typeText("unreadable_attachment")
+        let retry = app.buttons["workflow-condition-event.ingest.retryable"]
+        guard scroll(app, until: retry) else { return XCTFail(app.debugDescription) }
+        retry.tap()
+        let no = app.buttons["No"]
+        guard no.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        no.tap()
+
+        let back = app.navigationBars["Condition 1"].buttons.firstMatch
+        guard back.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        back.tap()
+        let save = app.navigationBars["Edit conditions"].buttons["Save"]
+        guard save.waitForExistence(timeout: 5), save.isEnabled else { return XCTFail(app.debugDescription) }
+        save.tap()
+        guard save.waitForNonExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+
+        edit.tap()
+        guard scroll(app, until: branch) else { return XCTFail(app.debugDescription) }
+        branch.tap()
+        guard scroll(app, until: reason) else { return XCTFail(app.debugDescription) }
+        XCTAssertEqual(reason.value as? String, "unreadable_attachment", app.debugDescription)
+        XCTAssertEqual(app.textFields["Source ID"].value as? String, "923553bf-9c39-4990-90ae-41250d12d03e")
+        guard scroll(app, until: retry) else { return XCTFail(app.debugDescription) }
+        retry.tap()
+        guard no.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        XCTAssertTrue(no.isSelected, app.debugDescription)
+
+    }
+
+    func testIngestionCreationOffersAllTriggersAndOnlyWebhook() {
+        let app = launch(arguments: ["--workflow-ingestion-conditions"])
+        let create = app.buttons["New workflow"]
+        guard create.waitForExistence(timeout: 10) else { return XCTFail(app.debugDescription) }
+        create.tap()
+        let trigger = app.buttons["workflow-new-trigger"]
+        guard scroll(app, until: trigger) else { return XCTFail(app.debugDescription) }
+        trigger.tap()
+        let failure = app.buttons["Item import failed"]
+        guard failure.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        for title in [
+            "Item imported", "Item skipped by a rule", "Duplicate item found", "Source became unavailable",
+            "Source recovered",
+        ] {
+            XCTAssertTrue(app.buttons[title].exists, app.debugDescription)
+        }
+        failure.tap()
+        let add = app.buttons["Add action"]
+        guard scroll(app, until: add) else { return XCTFail(app.debugDescription) }
+        add.tap()
+
+        guard app.buttons["Webhook"].waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        for incompatible in ["Skip import", "Add tags", "Rename document", "Move document to Trash"] {
+            XCTAssertFalse(app.buttons[incompatible].exists, app.debugDescription)
+        }
+    }
+
     func testDocumentDateActionCanBeAddedReorderedAndReopened() {
         let app = launch(arguments: ["--workflow-document-actions"])
         openWorkflow(app)

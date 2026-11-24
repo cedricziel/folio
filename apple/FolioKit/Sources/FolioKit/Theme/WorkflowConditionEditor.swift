@@ -112,15 +112,21 @@ private struct WorkflowConditionBranch: View {
             Section("Filters") {
                 ForEach(fields) { field in
                     if field.isSourceKind {
-                        WorkflowSourceKindPicker(title: field.title, selection: binding(for: field))
+                        WorkflowSourceKindPicker(
+                            title: field.title, selection: binding(for: field),
+                            kinds: field.ingestion == .sourceKind
+                                ? [.folder, .email] : Components.Schemas.SourceKind.allCases
+                        )
                     } else if field.isTextMatch {
                         WorkflowTextMatchFields(node: $node, field: field)
-                    } else if field.processing == .hasText {
+                    } else if field.isBoolean {
                         Picker(field.title, selection: binding(for: field)) {
                             Text("Any").tag("")
                             Text("Yes").tag("true")
                             Text("No").tag("false")
                         }
+                        .pickerStyle(.menu)
+                        .accessibilityIdentifier("workflow-condition-\(field.id)")
                     } else if field.processing == .retryTime {
                         TextField(field.title, text: binding(for: field), prompt: Text("2040-01-03T09:30:00Z"))
                             .autocorrectionDisabled()
@@ -195,14 +201,15 @@ private struct WorkflowConditionBranch: View {
 private struct WorkflowSourceKindPicker: View {
     let title: String
     @Binding var selection: String
+    let kinds: [Components.Schemas.SourceKind]
 
     var body: some View {
         Picker(title, selection: $selection) {
             Text("Any source").tag("")
-            if !selection.isEmpty, Components.Schemas.SourceKind(rawValue: selection) == nil {
+            if !selection.isEmpty, !kinds.contains(where: { $0.rawValue == selection }) {
                 Text("Saved source").tag(selection)
             }
-            ForEach(Components.Schemas.SourceKind.allCases, id: \.self) { kind in
+            ForEach(kinds, id: \.self) { kind in
                 Text(label(kind)).tag(kind.rawValue)
             }
         }

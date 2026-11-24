@@ -209,6 +209,73 @@ struct WorkflowConditionTreeTests {
         #expect(try tree.payload() == cleared.payload())
     }
 
+    @Test func ingestionAndProcessingConditionsStayInTheirOwnPayloadFamilies() throws {
+        let source = WorkflowTriggerChoice.ConditionField(
+            id: "data.source_id", title: "Source ID", valueType: "identifier")
+        let reason = WorkflowTriggerChoice.ConditionField(
+            id: "data.reason_code", title: "Reason", valueType: "text")
+        let failure = WorkflowTriggerChoice(
+            id: "ingest.failed", title: "Item import failed", target: .event,
+            conditionFields: [source, reason, .init(id: "data.retryable", title: "Retryable", valueType: "boolean")])
+        let recovery = WorkflowTriggerChoice(
+            id: "source.recovered", title: "Source recovered", target: .event, conditionFields: [source])
+        let processing = WorkflowTriggerChoice(
+            id: "document.processing.ocr.failed", title: "Text extraction failed", target: .document,
+            conditionFields: [reason])
+
+        let sourceChoices = try #require(
+            WorkflowTriggerChoice.matching([failure.id, recovery.id], in: [failure, recovery]))
+        #expect(WorkflowConditionTree.Field.available(for: sourceChoices).map(\.id) == ["event.ingest.source_id"])
+        for selection in [[failure.id, processing.id], [processing.id, failure.id]] {
+            let mixed = try #require(WorkflowTriggerChoice.matching(selection, in: [failure, processing]))
+            #expect(WorkflowConditionTree.Field.available(for: mixed).isEmpty)
+        }
+    }
+
+    @Test func editingIngestionPredicatesPreservesFalseAndUnrelatedNestedData() throws {
+        let choice = WorkflowTriggerChoice(
+            id: "ingest.failed", title: "Item import failed", target: .event,
+            conditionFields: [
+                .init(id: "data.source_id", title: "Source ID", valueType: "identifier"),
+                .init(id: "data.source_kind", title: "Source kind", valueType: "text"),
+                .init(id: "data.reason_code", title: "Reason", valueType: "text"),
+                .init(id: "data.retryable", title: "Retryable", valueType: "boolean"),
+            ]
+        )
+        let fields = WorkflowConditionTree.Field.available(for: choice)
+        let source = try #require(fields.first { $0.id == "event.ingest.source_id" })
+        let kind = try #require(fields.first { $0.id == "event.ingest.source_kind" })
+        let reason = try #require(fields.first { $0.id == "event.ingest.reason_code" })
+        let retry = try #require(fields.first { $0.id == "event.ingest.retryable" })
+        #expect(retry.isBoolean)
+        #expect(kind.isSourceKind)
+        let original = """
+            {"all":[{"event":{"ingest":{"source_kind":"email","outcome":"failed","retryable":true},
+            "actor":{"type":"system"}}}],"any":[]}
+            """
+        var tree = try decode(original)
+        var branch = try #require(tree[.all]?.first)
+        #expect(branch[kind] == "email")
+        #expect(branch[retry] == "true")
+        branch[source] = "unknown"
+        #expect(branch.validationMessage(fields: fields) == "Enter a valid UUID for Source ID.")
+        branch[source] = ""
+        branch[reason] = String(repeating: "é", count: 33)
+        #expect(branch.validationMessage(fields: fields) == "Use 64 bytes or fewer for the ingestion reason.")
+        branch[reason] = " unreadable_attachment "
+        branch[retry] = "false"
+        tree[.all]?[0] = branch
+        #expect(tree.validationMessage(fields: fields) == nil)
+        let expected = try decode(
+            """
+            {"all":[{"event":{"ingest":{"source_kind":"email","outcome":"failed","retryable":false,
+            "reason_code":"unreadable_attachment"},"actor":{"type":"system"}}}],"any":[]}
+            """)
+        #expect(try tree.payload() == expected.payload())
+        let reopened = try WorkflowConditionTree(tree.payload())
+        #expect(reopened[.all]?.first?[retry] == "false")
+    }
+
     @Test func processingRetryTimeKeepsTimestampPrecision() throws {
         let choice = WorkflowTriggerChoice(
             id: "document.processing.ocr.retry_scheduled", title: "Text extraction retry scheduled", target: .document,
