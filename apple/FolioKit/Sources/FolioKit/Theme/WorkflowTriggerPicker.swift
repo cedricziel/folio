@@ -143,7 +143,7 @@ struct WorkflowTriggerEditor: View {
                         WorkflowScheduleFields(triggerID: primaryTrigger, cadence: $cadence)
                             .disabled(isSaving || needsReload)
                     }
-                    if let conditions = documentConditions {
+                    if selectedChoice != nil, let conditions = documentConditions {
                         Section {
                             ForEach(conditions.fields) { field in
                                 conditionField(field)
@@ -209,18 +209,20 @@ struct WorkflowTriggerEditor: View {
     }
 
     private func updateDocumentConditions() {
-        if selections == workflow.selectedTriggers {
-            documentConditions = initialDocumentConditions
-            return
-        }
-        guard conditionService != nil, let choice = selectedChoice, choice.canEditDocumentConditions,
+        guard let choice = selectedChoice else { return }
+        guard conditionService != nil, choice.canEditDocumentConditions,
             var draft = WorkflowDocumentConditionDraft(choice)
         else {
             documentConditions = nil
             return
         }
-        if let previous = documentConditions ?? initialDocumentConditions, previous.type == draft.type {
-            if previous.triggerID == draft.triggerID, previous.fields == draft.fields { return }
+        let previous = [documentConditions, initialDocumentConditions].compactMap { $0 }
+            .first(where: { $0.type == draft.type })
+        if let previous {
+            if previous.triggerID == draft.triggerID, previous.fields == draft.fields {
+                documentConditions = previous
+                return
+            }
             if let value = previous.wireValue {
                 try? draft.load(value)
             }
