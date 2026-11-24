@@ -11,20 +11,15 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     NSFileProviderCustomAction
 {
     private let domain: NSFileProviderDomain
-    private let service: (any FolioService)?
     private let temporaryDirectory: (() throws -> URL)?
-    private let localMetadata: LocalItemMetadataStore
-    private let cache: FolioCatalogCache?
-    /// Shared by every provider instance in the extension process.
-    private static let catalogCaches = FolioCatalogCaches()
+    private let context: ProviderContext
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
-        service = nil
-        cache = nil
         temporaryDirectory = nil
-        localMetadata =
+        let localMetadata =
             (try? LocalItemMetadataStore.file(domain: domain)).map(LocalItemMetadataStore.shared(file:)) ?? .scratch()
+        context = ProviderContext(localMetadata: localMetadata, service: nil, cache: nil)
         super.init()
     }
 
@@ -33,39 +28,21 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         localMetadata: LocalItemMetadataStore = .scratch(), cache: FolioCatalogCache? = nil
     ) {
         self.domain = domain
-        self.service = service
-        self.cache = cache
         self.temporaryDirectory = temporaryDirectory
-        self.localMetadata = localMetadata
+        context = ProviderContext(localMetadata: localMetadata, service: service, cache: cache)
         super.init()
-    }
-
-    private func providerItem(_ node: FolioNode) -> FolioProviderItem {
-        FolioProviderItem(node, local: localMetadata.metadata(for: node.id.providerIdentifier))
     }
 
     func invalidate() {}
 
-    private func catalog(downloadDirectory: URL? = nil) throws -> (FolioCatalog, any FolioService) {
-        if let service {
-            return (FolioCatalog(service: service, cache: cache), service)
+    private func downloadStagingDirectory() throws -> URL {
+        if let temporaryDirectory {
+            return try temporaryDirectory()
         }
-        guard let server = SharedConfiguration.serverURL() else {
-            Self.catalogCaches.clear()
-            throw NSFileProviderError(.notAuthenticated)
+        guard let manager = NSFileProviderManager(for: domain) else {
+            throw NSFileProviderError(.providerNotFound)
         }
-        // One read of the server keeps the service and the cache it fills on the same server.
-        let service = SharedConfiguration.makeService(for: server, downloadDirectory: downloadDirectory)
-        let credentials: OAuthCredentials?
-        do {
-            credentials = try KeychainCredentialStore().load()
-        } catch {
-            // Lookups still work, uncached; requests report the keychain error themselves.
-            ProviderDiagnostics.failure(operation: "catalog", phase: "credentials", error: error)
-            credentials = nil
-        }
-        let cache = Self.catalogCaches.cache(for: server, credentials: credentials)
-        return (FolioCatalog(service: service, cache: cache), service)
+        return try manager.temporaryDirectoryURL()
     }
 
     func item(
@@ -73,20 +50,21 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         completionHandler: @escaping (NSFileProviderItem?, (any Error)?) -> Void
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
-        Task {
+        let reply = FileProviderCallback(completionHandler)
+        Task { [context] in
             defer {
                 progress.completedUnitCount = 1
                 FolioTelemetry.shared.flush()
             }
             do {
-                let (catalog, _) = try catalog()
+                let (catalog, _) = try context.catalog()
                 guard let id = FolioItemID(providerIdentifier: identifier),
                     let node = try await catalog.node(for: id)
-                else { return completionHandler(nil, NSFileProviderError(.noSuchItem)) }
-                completionHandler(providerItem(node), nil)
+                else { return reply(nil, NSFileProviderError(.noSuchItem)) }
+                reply(context.providerItem(node), nil)
             } catch {
                 ProviderDiagnostics.failure(operation: "item", phase: "lookup", error: error)
-                completionHandler(nil, error.providerError)
+                reply(nil, error.providerError)
             }
         }
         return progress
@@ -98,7 +76,9 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         completionHandler: @escaping (URL?, NSFileProviderItem?, (any Error)?) -> Void
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
-        let task = Task {
+        let stagingDirectory = Result { try downloadStagingDirectory() }
+        let reply = FileProviderCallback(completionHandler)
+        let task = Task { [context] in
             defer {
                 progress.completedUnitCount = 1
                 FolioTelemetry.shared.flush()
@@ -106,17 +86,9 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
             var phase = "staging"
             do {
                 try Task.checkCancellation()
-                let directory: URL
-                if let temporaryDirectory {
-                    directory = try temporaryDirectory()
-                } else {
-                    guard let manager = NSFileProviderManager(for: domain) else {
-                        throw NSFileProviderError(.providerNotFound)
-                    }
-                    directory = try manager.temporaryDirectoryURL()
-                }
+                let directory = try stagingDirectory.get()
                 phase = "lookup"
-                let (catalog, _) = try catalog(downloadDirectory: directory)
+                let (catalog, _) = try context.catalog(downloadDirectory: directory)
                 guard let id = FolioItemID(providerIdentifier: itemIdentifier),
                     let node = try await catalog.node(for: id), node.document != nil
                 else { throw NSFileProviderError(.noSuchItem) }
@@ -127,15 +99,17 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
                     try? FileManager.default.removeItem(at: url)
                     throw CancellationError()
                 }
-                completionHandler(url, providerItem(node), nil)
+                reply(url, context.providerItem(node), nil)
             } catch {
                 let failure = progress.isCancelled || Task.isCancelled ? CancellationError() : error
                 ProviderDiagnostics.failure(operation: "fetchContents", phase: phase, error: failure)
-                completionHandler(nil, nil, failure.providerError)
+                reply(nil, nil, failure.providerError)
             }
         }
         progress.cancellationHandler = { task.cancel() }
-        if progress.isCancelled { task.cancel() }
+        if progress.isCancelled {
+            task.cancel()
+        }
         return progress
     }
 
@@ -146,8 +120,10 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     ) -> Progress {
         let progress = Progress(totalUnitCount: Int64(itemIdentifiers.count))
         let batch = ThumbnailBatch(
-            progress: progress, perThumbnail: perThumbnailCompletionHandler, completion: completionHandler)
-        let task = Task {
+            progress: progress, perThumbnail: FileProviderCallback(perThumbnailCompletionHandler),
+            completion: FileProviderCallback(completionHandler)
+        )
+        let task = Task { [context] in
             defer { FolioTelemetry.shared.flush() }
             var source: (any FolioService)?
             for identifier in itemIdentifiers {
@@ -157,25 +133,25 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
                         throw NSFileProviderError(.noSuchItem)
                     }
                     guard case let .document(documentID, folder) = item, let vaultID = folder.vaultID else {
-                        batch.deliver(identifier, data: nil, error: nil)
+                        await batch.deliver(identifier, data: nil, error: nil)
                         continue
                     }
-                    let service = try source ?? catalog().1
+                    let service = try source ?? context.catalog().1
                     source = service
                     let data = try await service.scoped(to: vaultID).thumbnail(id: documentID)
                     try Task.checkCancellation()
-                    batch.deliver(identifier, data: data, error: nil)
+                    await batch.deliver(identifier, data: data, error: nil)
                 } catch {
                     if Task.isCancelled {
-                        batch.finish(CancellationError().providerError)
+                        await batch.finish(CancellationError().providerError)
                         return
                     }
-                    batch.deliver(identifier, data: nil, error: error.providerError)
+                    await batch.deliver(identifier, data: nil, error: error.providerError)
                 }
             }
-            batch.finish(nil)
+            await batch.finish(nil)
         }
-        batch.bind(task)
+        Task { await batch.bind(task) }
         return progress
     }
 
@@ -194,28 +170,29 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
             return progress
         }
         let filename = itemTemplate.filename
-        Task {
+        let edit = LocalItemMetadataEdit(item: itemTemplate, fields: fields)
+        let reply = FileProviderCallback(completionHandler)
+        Task { [context] in
             defer {
                 progress.completedUnitCount = 1
                 FolioTelemetry.shared.flush()
             }
             do {
-                let (catalog, _) = try catalog()
+                let (catalog, _) = try context.catalog()
                 var file = try UploadFile(contentsOf: url)
                 file.filename = filename
                 let node = try await catalog.upload(file, to: destination)
                 // The upload already happened, so failing here would make the system upload it again
                 let local: LocalItemMetadata
                 do {
-                    local = try localMetadata.update(
-                        with: itemTemplate, fields: fields, for: node.id.providerIdentifier)
+                    local = try context.localMetadata.update(with: edit, for: node.id.providerIdentifier)
                 } catch {
                     ProviderDiagnostics.failure(operation: "createItem", phase: "local-metadata", error: error)
-                    local = localMetadata.metadata(for: node.id.providerIdentifier)
+                    local = context.localMetadata.metadata(for: node.id.providerIdentifier)
                 }
-                completionHandler(FolioProviderItem(node, local: local), [], false, nil)
+                reply(FolioProviderItem(node, local: local), [], false, nil)
             } catch {
-                completionHandler(nil, [], false, error.providerError)
+                reply(nil, [], false, error.providerError)
             }
         }
         return progress
@@ -236,21 +213,24 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
             progress.completedUnitCount = 1
             return progress
         }
-        Task {
+        let identifier = item.itemIdentifier
+        let edit = LocalItemMetadataEdit(item: item, fields: changedFields)
+        let reply = FileProviderCallback(completionHandler)
+        Task { [context] in
             defer {
                 progress.completedUnitCount = 1
                 FolioTelemetry.shared.flush()
             }
             do {
-                let local = try localMetadata.update(with: item, fields: changedFields)
-                let (catalog, _) = try catalog()
-                guard let id = FolioItemID(providerIdentifier: item.itemIdentifier),
+                let local = try context.localMetadata.update(with: edit, for: identifier)
+                let (catalog, _) = try context.catalog()
+                guard let id = FolioItemID(providerIdentifier: identifier),
                     let node = try await catalog.node(for: id)
                 else { throw NSFileProviderError(.noSuchItem) }
-                completionHandler(FolioProviderItem(node, local: local), [], false, nil)
+                reply(FolioProviderItem(node, local: local), [], false, nil)
             } catch {
                 ProviderDiagnostics.failure(operation: "modifyItem", phase: "local-metadata", error: error)
-                completionHandler(nil, [], false, error.providerError)
+                reply(nil, [], false, error.providerError)
             }
         }
         return progress
@@ -268,12 +248,12 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     func enumerator(
         for containerItemIdentifier: NSFileProviderItemIdentifier, request _: NSFileProviderRequest
     ) throws -> any NSFileProviderEnumerator {
-        let (catalog, _) = try catalog()
+        let (catalog, _) = try context.catalog()
         if containerItemIdentifier == .workingSet {
             return try FolioEnumerator(
                 catalog: catalog, container: nil,
                 directory: FolioSyncState.directory(domain: domain, container: containerItemIdentifier),
-                localMetadata: localMetadata
+                localMetadata: context.localMetadata
             )
         }
         guard case let .folder(folder)? = FolioItemID(providerIdentifier: containerItemIdentifier) else {
@@ -282,7 +262,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         return try FolioEnumerator(
             catalog: catalog, container: folder,
             directory: FolioSyncState.directory(domain: domain, container: containerItemIdentifier),
-            localMetadata: localMetadata
+            localMetadata: context.localMetadata
         )
     }
 
@@ -303,7 +283,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
             return progress
         }
         do {
-            try localMetadata.setKeepDownloaded(keep, for: itemIdentifiers.filter { $0 != .rootContainer })
+            try context.localMetadata.setKeepDownloaded(keep, for: itemIdentifiers.filter { $0 != .rootContainer })
         } catch {
             ProviderDiagnostics.failure(operation: "performAction", phase: "local-metadata", error: error)
             completionHandler(error.providerError)
@@ -319,7 +299,40 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     }
 }
 
-final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
+private struct ProviderContext: Sendable {
+    let localMetadata: LocalItemMetadataStore
+    let service: (any FolioService)?
+    let cache: FolioCatalogCache?
+    private static let catalogCaches = FolioCatalogCaches()
+
+    func providerItem(_ node: FolioNode) -> FolioProviderItem {
+        FolioProviderItem(node, local: localMetadata.metadata(for: node.id.providerIdentifier))
+    }
+
+    func catalog(downloadDirectory: URL? = nil) throws -> (FolioCatalog, any FolioService) {
+        if let service {
+            return (FolioCatalog(service: service, cache: cache), service)
+        }
+        guard let server = SharedConfiguration.serverURL() else {
+            Self.catalogCaches.clear()
+            throw NSFileProviderError(.notAuthenticated)
+        }
+        // One read of the server keeps the service and the cache it fills on the same server.
+        let service = SharedConfiguration.makeService(for: server, downloadDirectory: downloadDirectory)
+        let credentials: OAuthCredentials?
+        do {
+            credentials = try KeychainCredentialStore().load()
+        } catch {
+            // Lookups still work, uncached; requests report the keychain error themselves.
+            ProviderDiagnostics.failure(operation: "catalog", phase: "credentials", error: error)
+            credentials = nil
+        }
+        let cache = Self.catalogCaches.cache(for: server, credentials: credentials)
+        return (FolioCatalog(service: service, cache: cache), service)
+    }
+}
+
+final class FolioEnumerator: NSObject, NSFileProviderEnumerator, Sendable {
     private let state: FolioSyncState
     private let localMetadata: LocalItemMetadataStore
 
@@ -328,7 +341,8 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
         localMetadata: LocalItemMetadataStore = .scratch()
     ) {
         state = FolioSyncState(
-            catalog: catalog, container: container, directory: directory, localMetadata: localMetadata)
+            catalog: catalog, container: container, directory: directory, localMetadata: localMetadata
+        )
         self.localMetadata = localMetadata
     }
 
@@ -339,40 +353,53 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
     func invalidate() {}
 
     func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt _: NSFileProviderPage) {
+        let notify = FileProviderCallback { (notification: @escaping (NSFileProviderEnumerationObserver) -> Void) in
+            notification(observer)
+        }
         Task {
             defer { FolioTelemetry.shared.flush() }
             do {
                 let snapshot = try await state.initialSnapshot()
-                observer.didEnumerate(snapshot.nodes.map(providerItem))
-                observer.finishEnumerating(upTo: nil)
+                let items = snapshot.nodes.map(providerItem)
+                notify { observer in
+                    observer.didEnumerate(items)
+                    observer.finishEnumerating(upTo: nil)
+                }
             } catch {
-                observer.finishEnumeratingWithError(error.providerError)
+                notify { $0.finishEnumeratingWithError(error.providerError) }
             }
         }
     }
 
     func enumerateChanges(for observer: NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
+        let notify = FileProviderCallback { (notification: @escaping (NSFileProviderChangeObserver) -> Void) in
+            notification(observer)
+        }
         Task {
             defer { FolioTelemetry.shared.flush() }
             do {
                 let (snapshot, updated, deleted) = try await state.changes(from: anchor)
-                observer.didUpdate(updated.map(providerItem))
-                observer.didDeleteItems(withIdentifiers: deleted)
-                observer.finishEnumeratingChanges(upTo: snapshot.anchor, moreComing: false)
+                let items = updated.map(providerItem)
+                notify { observer in
+                    observer.didUpdate(items)
+                    observer.didDeleteItems(withIdentifiers: deleted)
+                    observer.finishEnumeratingChanges(upTo: snapshot.anchor, moreComing: false)
+                }
             } catch {
-                observer.finishEnumeratingWithError(error.providerError)
+                notify { $0.finishEnumeratingWithError(error.providerError) }
             }
         }
     }
 
     func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
+        let reply = FileProviderCallback(completionHandler)
         Task {
-            completionHandler(try? await state.initialSnapshot().anchor)
+            reply(try? await state.initialSnapshot().anchor)
         }
     }
 }
 
-final class FolioProviderItem: NSObject, NSFileProviderItem {
+final class FolioProviderItem: NSObject, NSFileProviderItem, Sendable {
     private let node: FolioNode
     private let local: LocalItemMetadata
 
@@ -454,7 +481,8 @@ final class FolioProviderItem: NSObject, NSFileProviderItem {
     var itemVersion: NSFileProviderItemVersion {
         let stamp = Data(String(node.modified.timeIntervalSince1970).utf8)
         return NSFileProviderItemVersion(
-            contentVersion: stamp, metadataVersion: FolioSyncState.metadataVersion(node, local: local))
+            contentVersion: stamp, metadataVersion: FolioSyncState.metadataVersion(node, local: local)
+        )
     }
 }
 
@@ -472,17 +500,29 @@ extension FolioItemID {
     }
 }
 
-private final class ThumbnailBatch {
-    private let queue = DispatchQueue(label: "com.cedricziel.folio.thumbnail-callbacks")
+/// File Provider supplies these blocks and observers for asynchronous replies, but the SDK omits Sendable.
+private struct FileProviderCallback<each Argument>: @unchecked Sendable {
+    private let callback: (repeat each Argument) -> Void
+
+    init(_ callback: @escaping (repeat each Argument) -> Void) {
+        self.callback = callback
+    }
+
+    func callAsFunction(_ arguments: repeat each Argument) {
+        callback(repeat each arguments)
+    }
+}
+
+private actor ThumbnailBatch {
     private let progress: Progress
-    private let perThumbnail: (NSFileProviderItemIdentifier, Data?, (any Error)?) -> Void
-    private let completion: ((any Error)?) -> Void
+    private let perThumbnail: FileProviderCallback<NSFileProviderItemIdentifier, Data?, (any Error)?>
+    private let completion: FileProviderCallback<(any Error)?>
     private var finished = false
 
     init(
         progress: Progress,
-        perThumbnail: @escaping (NSFileProviderItemIdentifier, Data?, (any Error)?) -> Void,
-        completion: @escaping ((any Error)?) -> Void
+        perThumbnail: FileProviderCallback<NSFileProviderItemIdentifier, Data?, (any Error)?>,
+        completion: FileProviderCallback<(any Error)?>
     ) {
         self.progress = progress
         self.perThumbnail = perThumbnail
@@ -490,33 +530,27 @@ private final class ThumbnailBatch {
     }
 
     func bind(_ task: Task<Void, Never>) {
-        queue.async {
-            guard !self.finished else { return }
-            self.progress.cancellationHandler = {
-                task.cancel()
-                self.finish(CancellationError().providerError)
-            }
-            if self.progress.isCancelled {
-                task.cancel()
-                self.finish(CancellationError().providerError)
-            }
+        guard !finished else { return }
+        progress.cancellationHandler = {
+            task.cancel()
+            Task { await self.finish(CancellationError().providerError) }
+        }
+        if progress.isCancelled {
+            task.cancel()
+            finish(CancellationError().providerError)
         }
     }
 
     func deliver(_ identifier: NSFileProviderItemIdentifier, data: Data?, error: (any Error)?) {
-        queue.async {
-            guard !self.finished, !self.progress.isCancelled else { return }
-            self.progress.completedUnitCount += 1
-            self.perThumbnail(identifier, data, error)
-        }
+        guard !finished, !progress.isCancelled else { return }
+        progress.completedUnitCount += 1
+        perThumbnail(identifier, data, error)
     }
 
     func finish(_ error: (any Error)?) {
-        queue.async {
-            guard !self.finished else { return }
-            self.finished = true
-            self.progress.cancellationHandler = nil
-            self.completion(self.progress.isCancelled ? CancellationError().providerError : error)
-        }
+        guard !finished else { return }
+        finished = true
+        progress.cancellationHandler = nil
+        completion(progress.isCancelled ? CancellationError().providerError : error)
     }
 }

@@ -137,7 +137,7 @@ actor MockFolioService: FolioService {
     private(set) var downloads = 0
     /// When set, downloads write a real file into a fresh `folio-` folder here, as the live service does.
     private var downloadRoot: URL?
-    private var documentGate: CheckedContinuation<[Document], Never>?
+    private var documentGate: CheckedContinuation<[Document], any Error>?
     private var documentStarted: CheckedContinuation<Void, Never>?
     private var suspendDocumentRequests = false
     private var uploadGate: CheckedContinuation<Void, Never>?
@@ -231,9 +231,17 @@ actor MockFolioService: FolioService {
         await withCheckedContinuation { documentStarted = $0 }
     }
 
-    func releaseDocuments() {
+    func stopSuspendingDocuments() {
         suspendDocumentRequests = false
-        documentGate?.resume(returning: documentList)
+    }
+
+    func releaseDocuments(throwing error: FolioError? = nil) {
+        suspendDocumentRequests = false
+        if let error {
+            documentGate?.resume(throwing: error)
+        } else {
+            documentGate?.resume(returning: documentList)
+        }
         documentGate = nil
     }
 
@@ -392,7 +400,7 @@ actor MockFolioService: FolioService {
             throw failure
         }
         if suspendDocumentRequests {
-            return await withCheckedContinuation {
+            return try await withCheckedThrowingContinuation {
                 documentGate = $0
                 documentStarted?.resume()
                 documentStarted = nil

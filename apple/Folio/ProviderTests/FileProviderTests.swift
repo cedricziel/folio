@@ -58,10 +58,11 @@ final class FileProviderTests: XCTestCase {
         _ = provider.createItem(
             basedOn: template, fields: [.contents], contents: file, request: NSFileProviderRequest()
         ) {
-            item, _, _, error in
+            @Sendable item, _, _, error in
             XCTAssertNil(error)
             XCTAssertEqual(
-                item?.parentItemIdentifier, FolioItemID.folder(.scoped(shared.id, .inbox)).providerIdentifier)
+                item?.parentItemIdentifier, FolioItemID.folder(.scoped(shared.id, .inbox)).providerIdentifier
+            )
             completed.fulfill()
         }
         await sharedService.waitForUploadRequest()
@@ -88,7 +89,7 @@ final class FileProviderTests: XCTestCase {
         _ = provider.createItem(
             basedOn: template, fields: [], contents: URL(filePath: "/unused"), request: NSFileProviderRequest()
         ) {
-            item, _, _, error in
+            @Sendable item, _, _, error in
             XCTAssertNil(item)
             XCTAssertEqual((error as NSError?)?.code, NSFeatureUnsupportedError)
             completed.fulfill()
@@ -110,13 +111,14 @@ final class FileProviderTests: XCTestCase {
         _ = provider.createItem(
             basedOn: UploadTemplate(), fields: [.contents, .filename], contents: file,
             request: NSFileProviderRequest()
-        ) { item, pending, fetch, error in
+        ) { @Sendable item, pending, fetch, error in
             XCTAssertNil(error)
             XCTAssertNotNil(item)
             XCTAssertEqual(item?.filename, "scan.pdf")
             XCTAssertEqual(
                 item?.parentItemIdentifier,
-                FolioItemID.folder(.scoped(MockFolioService.defaultVault.id, .inbox)).providerIdentifier)
+                FolioItemID.folder(.scoped(MockFolioService.defaultVault.id, .inbox)).providerIdentifier
+            )
             XCTAssertTrue(pending.isEmpty)
             XCTAssertFalse(fetch)
             completed.fulfill()
@@ -126,9 +128,11 @@ final class FileProviderTests: XCTestCase {
         XCTAssertEqual(uploads.count, 1)
     }
 
-    private static let anyVersion = NSFileProviderItemVersion(contentVersion: Data(), metadataVersion: Data())
+    private static var anyVersion: NSFileProviderItemVersion {
+        NSFileProviderItemVersion(contentVersion: Data(), metadataVersion: Data())
+    }
 
-    func testLocalMetadataIsKeptAndReportedWithTheItem() async throws {
+    func testLocalMetadataIsKeptAndReportedWithTheItem() async {
         let document = Document(title: "Bill", originalFilename: "bill.pdf")
         let service = MockFolioService(documents: [document])
         let folder = FolioItemID.Folder.scoped(MockFolioService.defaultVault.id, .all)
@@ -137,10 +141,13 @@ final class FileProviderTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: file) }
         let domain = NSFileProviderDomain(identifier: .init("local-metadata-test"), displayName: "Test")
         let provider = FolioFileProvider(
-            domain: domain, service: service, localMetadata: LocalItemMetadataStore(file: file))
+            domain: domain, service: service, localMetadata: LocalItemMetadataStore(file: file)
+        )
         let edited = EditedItem(id, parent: .folder(folder))
-        edited.lastUsedDate = Date(timeIntervalSince1970: 1_750_000_000)
-        edited.tagData = Data("red".utf8)
+        let lastUsed = Date(timeIntervalSince1970: 1_750_000_000)
+        let tags = Data("red".utf8)
+        edited.lastUsedDate = lastUsed
+        edited.tagData = tags
         #if !os(macOS)
             edited.favoriteRank = NSNumber(value: UInt64(7))
         #endif
@@ -149,12 +156,12 @@ final class FileProviderTests: XCTestCase {
         _ = provider.modifyItem(
             edited, baseVersion: Self.anyVersion, changedFields: LocalItemMetadata.fields, contents: nil,
             request: NSFileProviderRequest()
-        ) { item, pending, fetch, error in
+        ) { @Sendable item, pending, fetch, error in
             XCTAssertNil(error)
-            XCTAssertEqual(item?.lastUsedDate ?? nil, edited.lastUsedDate)
-            XCTAssertEqual(item?.tagData ?? nil, edited.tagData)
+            XCTAssertEqual(item?.lastUsedDate ?? nil, lastUsed)
+            XCTAssertEqual(item?.tagData ?? nil, tags)
             #if !os(macOS)
-                XCTAssertEqual(item?.favoriteRank ?? nil, edited.favoriteRank)
+                XCTAssertEqual((item?.favoriteRank ?? nil)?.uint64Value, 7)
             #endif
             XCTAssertTrue(pending.isEmpty)
             XCTAssertFalse(fetch)
@@ -163,40 +170,49 @@ final class FileProviderTests: XCTestCase {
         await fulfillment(of: [modified], timeout: 5)
 
         let restarted = FolioFileProvider(
-            domain: domain, service: service, localMetadata: LocalItemMetadataStore(file: file))
+            domain: domain, service: service, localMetadata: LocalItemMetadataStore(file: file)
+        )
         let looked = expectation(description: "Item looked up")
-        _ = restarted.item(for: id.providerIdentifier, request: NSFileProviderRequest()) { item, error in
+        _ = restarted.item(for: id.providerIdentifier, request: NSFileProviderRequest()) { @Sendable item, error in
             XCTAssertNil(error)
-            XCTAssertEqual(item?.tagData ?? nil, Data("red".utf8))
-            XCTAssertEqual(item?.lastUsedDate ?? nil, edited.lastUsedDate)
+            XCTAssertEqual(item?.tagData ?? nil, tags)
+            XCTAssertEqual(item?.lastUsedDate ?? nil, lastUsed)
             looked.fulfill()
         }
         await fulfillment(of: [looked], timeout: 5)
     }
 
-    func testUploadKeepsTheTemplateTags() async throws {
+    func testUploadKeepsTheTagsSubmittedBeforeTheTemplateChanges() async throws {
         let service = MockFolioService()
-        let store = LocalItemMetadataStore.scratch()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalItemMetadataStore(file: directory.appendingPathComponent("metadata.json"))
         let provider = FolioFileProvider(
             domain: NSFileProviderDomain(identifier: .init("tagged-upload-test"), displayName: "Test"),
-            service: service, localMetadata: store)
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".pdf")
+            service: service, localMetadata: store
+        )
+        let file = directory.appendingPathComponent("upload.pdf")
         try Data("%PDF-1.4".utf8).write(to: file)
-        defer { try? FileManager.default.removeItem(at: file) }
         let template = TaggedUploadTemplate()
+        let submittedTag = template.tagData
+        await service.suspendUploads()
         let completed = expectation(description: "Tagged upload completes")
 
         _ = provider.createItem(
             basedOn: template, fields: [.contents, .filename, .tagData], contents: file,
             request: NSFileProviderRequest()
-        ) { item, _, _, error in
+        ) { @Sendable item, _, _, error in
             XCTAssertNil(error)
-            XCTAssertEqual(item?.tagData ?? nil, template.tagData)
+            XCTAssertEqual(item?.tagData ?? nil, submittedTag)
             if let id = item?.itemIdentifier {
-                XCTAssertEqual(store.metadata(for: id).tagData, template.tagData)
+                XCTAssertEqual(store.metadata(for: id).tagData, submittedTag)
             }
             completed.fulfill()
         }
+        await service.waitForUploadRequest()
+        template.tagData = Data("red".utf8)
+        await service.releaseUploads()
         await fulfillment(of: [completed], timeout: 5)
     }
 
@@ -205,7 +221,8 @@ final class FileProviderTests: XCTestCase {
         let folder = FolioItemID.Folder.scoped(MockFolioService.defaultVault.id, .all)
         let provider = FolioFileProvider(
             domain: NSFileProviderDomain(identifier: .init("rename-test"), displayName: "Test"),
-            service: MockFolioService(documents: [document]))
+            service: MockFolioService(documents: [document])
+        )
         let edited = EditedItem(.document(document.id, in: folder), parent: .folder(folder))
         edited.filename = "renamed.pdf"
         let refused = expectation(description: "Rename refused")
@@ -228,28 +245,30 @@ final class FileProviderTests: XCTestCase {
             let id = FolioItemID.document(document.id, in: folder).providerIdentifier
             let provider = FolioFileProvider(
                 domain: NSFileProviderDomain(identifier: .init("keep-downloaded-test"), displayName: "Test"),
-                service: MockFolioService(documents: [document]))
+                service: MockFolioService(documents: [document])
+            )
 
             let before = try await lookUp(id, in: provider)
             XCTAssertEqual(before.contentPolicy, .inherited)
-            XCTAssertEqual(before.userInfo??["keptDownloaded"] as? Bool, false)
+            XCTAssertEqual(before.keptDownloaded, false)
 
             try await perform(FolioProviderItem.keepDownloadedAction, on: [id], in: provider)
             let kept = try await lookUp(id, in: provider)
             XCTAssertEqual(kept.contentPolicy, .downloadEagerlyAndKeepDownloaded)
-            XCTAssertEqual(kept.userInfo??["keptDownloaded"] as? Bool, true)
-            XCTAssertNotEqual(kept.itemVersion?.metadataVersion, before.itemVersion?.metadataVersion)
+            XCTAssertEqual(kept.keptDownloaded, true)
+            XCTAssertNotEqual(kept.metadataVersion, before.metadataVersion)
 
             try await perform(FolioProviderItem.allowEvictionAction, on: [id], in: provider)
             let released = try await lookUp(id, in: provider)
             XCTAssertEqual(released.contentPolicy, .inherited)
-            XCTAssertEqual(released.itemVersion?.metadataVersion, before.itemVersion?.metadataVersion)
+            XCTAssertEqual(released.metadataVersion, before.metadataVersion)
         }
 
         func testUnknownActionsAreRefused() async {
             let provider = FolioFileProvider(
                 domain: NSFileProviderDomain(identifier: .init("unknown-action-test"), displayName: "Test"),
-                service: MockFolioService())
+                service: MockFolioService()
+            )
             do {
                 try await perform(.init("com.example.unknown"), on: [.rootContainer], in: provider)
                 XCTFail("Unknown action was performed")
@@ -258,13 +277,25 @@ final class FileProviderTests: XCTestCase {
             }
         }
 
-        private func lookUp(
-            _ id: NSFileProviderItemIdentifier, in provider: FolioFileProvider
-        ) async throws -> NSFileProviderItem {
+        private struct ReportedPolicy {
+            let contentPolicy: NSFileProviderContentPolicy?
+            let keptDownloaded: Bool?
+            let metadataVersion: Data?
+        }
+
+        private func lookUp(_ id: NSFileProviderItemIdentifier, in provider: FolioFileProvider) async throws
+            -> ReportedPolicy
+        {
             try await withCheckedThrowingContinuation { continuation in
-                _ = provider.item(for: id, request: NSFileProviderRequest()) { item, error in
+                _ = provider.item(for: id, request: NSFileProviderRequest()) { @Sendable item, error in
                     if let item {
-                        continuation.resume(returning: item)
+                        continuation.resume(
+                            returning: ReportedPolicy(
+                                contentPolicy: item.contentPolicy,
+                                keptDownloaded: item.userInfo??["keptDownloaded"] as? Bool,
+                                metadataVersion: item.itemVersion?.metadataVersion
+                            )
+                        )
                     } else {
                         continuation.resume(throwing: error ?? NSFileProviderError(.noSuchItem))
                     }
