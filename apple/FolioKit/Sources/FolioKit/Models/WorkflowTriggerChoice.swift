@@ -34,6 +34,7 @@ public struct WorkflowTriggerChoice: Identifiable, Equatable, Sendable {
 
 public protocol WorkflowTriggerEditingService: Sendable {
     func workflowTriggerChoices(vaultID: UUID) async throws -> [WorkflowTriggerChoice]
+    func workflowConfiguration(vaultID: UUID, workflowID: UUID) async throws -> WorkflowConfigurationSummary
     func changeWorkflowTrigger(_ workflow: WorkflowConfigurationSummary, to triggerID: String) async throws
         -> WorkflowConfigurationSummary
 }

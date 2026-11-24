@@ -20,6 +20,7 @@ import Testing
         #expect(rows.first?.updatedBy == "editor")
         #expect(rows.first?.stateTitle == "In Trash")
         #expect(rows.first?.deletedAt != nil)
+        #expect(rows.first?.revision == 1)
     }
 
     @Test func retainedHistoryUsesSelectedVaultAndMapsFailedRunDetails() async throws {
@@ -124,77 +125,83 @@ import Testing
         #expect(choices.map(\.target) == entryIDs.map { _ in .document } + ingestionIDs.map { _ in .event })
         #expect(choices.allSatisfy { $0.title == "Catalog label for \($0.id)" && $0.conditionFields == [field] })
 
-        let summary = WorkflowConfigurationSummary(
-            id: workflowID, vaultID: vaultID, name: "File invoices", enabled: true, trigger: "document.uploaded",
-            createdAt: try LenientDateTranscoder().decode("2026-11-02T12:34:56.123456789Z"),
-            updatedAt: try LenientDateTranscoder().decode("2026-11-02T12:35:00Z")
-        )
-        let old = workflowJSON(deleted: false)
-        let definition = try #require(JSONSerialization.jsonObject(with: Data(old.utf8)) as? [String: Any])
+        let path = "/folio/api/workflows/\(workflowID.uuidString.lowercased())"
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            #expect(request.url?.path == path)
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
+            return (200, workflowJSON(deleted: false))
+        }
+        let summary = try await live.workflowConfiguration(vaultID: vaultID, workflowID: workflowID)
+        #expect(summary.revision == 1)
+
         for choice in choices {
             LifecycleURLProtocol.handler = { request in
-                #expect(request.url?.path == "/folio/api/workflows/\(workflowID.uuidString.lowercased())")
+                #expect(request.httpMethod == "PATCH")
+                #expect(request.url?.path == path + "/trigger")
                 #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
-                if request.httpMethod == "GET" { return (200, old) }
-                #expect(request.httpMethod == "PUT")
                 guard let data = LifecycleURLProtocol.body(for: request),
                     let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 else { return (400, "{}") }
                 #expect(body["trigger"] as? String == choice.id)
-                #expect(body["name"] as? String == summary.name)
-                #expect(body["enabled"] as? Bool == true)
-                #expect(body["conditions"] as? NSDictionary == definition["conditions"] as? NSDictionary)
-                #expect(body["actions"] as? NSArray == definition["actions"] as? NSArray)
-                #expect(body["vault_id"] == nil)
-                return (200, workflowJSON(deleted: false, trigger: choice.id))
+                #expect(body["expected_revision"] as? Int64 == 1)
+                #expect(Set(body.keys) == ["trigger", "expected_revision"])
+                return (200, workflowJSON(deleted: false, trigger: choice.id, revision: 2))
             }
             let updated = try await live.changeWorkflowTrigger(summary, to: choice.id)
             #expect(updated.trigger == choice.id)
             #expect(updated.vaultID == vaultID)
+            #expect(updated.revision == 2)
         }
     }
 
-    @Test func editingAnOlderWorkflowSummaryDoesNotSendAReplacement() async throws {
+    @Test func aStaleTriggerEditCanReloadAndRetryTheNewRevision() async throws {
+        let live = service()
+        let path = "/folio/api/workflows/\(workflowID.uuidString.lowercased())"
+        LifecycleURLProtocol.handler = { _ in (200, workflowJSON(deleted: false)) }
+        let stale = try await live.workflowConfiguration(vaultID: vaultID, workflowID: workflowID)
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url?.path == path + "/trigger")
+            return (409, #"{"error":"Workflow changed. Reload it before editing."}"#)
+        }
+        await #expect(throws: FolioError.server(status: 409, message: "Workflow changed. Reload it before editing.")) {
+            try await live.changeWorkflowTrigger(stale, to: "document_note.created")
+        }
         LifecycleURLProtocol.handler = { request in
             #expect(request.httpMethod == "GET")
-            return (200, workflowJSON(deleted: false))
+            #expect(request.url?.path == path)
+            return (200, workflowJSON(deleted: false, revision: 2, enabled: false))
         }
-        let summary = WorkflowConfigurationSummary(
-            id: workflowID, vaultID: vaultID, name: "File invoices", enabled: true, trigger: "document.uploaded",
-            createdAt: .distantPast, updatedAt: .distantPast
-        )
-        await #expect(
-            throws: FolioError.server(status: 409, message: "The workflow changed. Reopen it before editing.")
-        ) {
-            try await service().changeWorkflowTrigger(summary, to: "document_note.created")
-        }
-    }
-
-    @Test func changingAProcessingTriggerKeepsNestedProcessingConditions() async throws {
-        let source = "document.processing.ocr.retry_scheduled"
-        let next = "document.processing.ocr.failed"
-        let conditions = #"{"any":[{"event":{"processing":{"attempt":4294967295}}}]}"#
-        let expected = try #require(JSONSerialization.jsonObject(with: Data(conditions.utf8)) as? NSDictionary)
-        let summary = WorkflowConfigurationSummary(
-            id: workflowID, vaultID: vaultID, name: "File invoices", enabled: true, trigger: source,
-            createdAt: try LenientDateTranscoder().decode("2026-11-02T12:34:56.123456789Z"),
-            updatedAt: try LenientDateTranscoder().decode("2026-11-02T12:35:00Z")
-        )
+        let latest = try await live.workflowConfiguration(vaultID: vaultID, workflowID: workflowID)
+        #expect(!latest.enabled)
+        #expect(latest.revision == 2)
         LifecycleURLProtocol.handler = { request in
-            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
-            if request.httpMethod == "GET" {
-                return (200, workflowJSON(deleted: false, trigger: source, conditions: conditions))
-            }
-            #expect(request.httpMethod == "PUT")
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url?.path == path + "/trigger")
             guard let data = LifecycleURLProtocol.body(for: request),
                 let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             else { return (400, "{}") }
-            #expect(body["trigger"] as? String == next)
-            #expect(body["conditions"] as? NSDictionary == expected)
-            return (200, workflowJSON(deleted: false, trigger: next, conditions: conditions))
+            #expect(body["expected_revision"] as? Int64 == 2)
+            #expect(body["enabled"] == nil)
+            return (200, workflowJSON(deleted: false, trigger: "document_note.created", revision: 3, enabled: false))
         }
-        let updated = try await service().changeWorkflowTrigger(summary, to: next)
-        #expect(updated.trigger == next)
+        let saved = try await live.changeWorkflowTrigger(latest, to: "document_note.created")
+        #expect(!saved.enabled)
+        #expect(saved.revision == 3)
+    }
+
+    @Test func anOlderServerKeepsTheListReadableWithoutOfferingUnconditionalTriggerEdits() async throws {
+        let live = service()
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            return (200, workflowJSON(deleted: false, revision: nil))
+        }
+        let workflow = try await live.workflowConfiguration(vaultID: vaultID, workflowID: workflowID)
+        #expect(workflow.revision == nil)
+        await #expect(throws: FolioError.unreadableResponse) {
+            try await live.changeWorkflowTrigger(workflow, to: "document_note.created")
+        }
     }
 
     private func service() -> LiveFolioService {
@@ -207,17 +214,12 @@ import Testing
     }
 
     private func workflowJSON(
-        deleted: Bool, trigger: String = "document.uploaded", conditions: String? = nil
+        deleted: Bool, trigger: String = "document.uploaded", revision: Int64? = 1, enabled: Bool = true
     ) -> String {
-        let predicates =
-            conditions
-                ?? """
-                {"any":[{"event":{"actor":{"type":"system"}}},
-                {"source":{"kind":"email","email_from":{"contains":"@example.test"}}}],"none":[]}
-                """
+        let revisionField = revision.map { "\"revision\":\($0)," } ?? ""
         return """
-            {"id":"\(workflowID)","vault_id":"\(vaultID)","name":"File invoices","enabled":true,
-            "trigger":"\(trigger)","conditions":\(predicates),
+            {"id":"\(workflowID)","vault_id":"\(vaultID)","name":"File invoices","enabled":\(enabled),\(revisionField)
+            "trigger":"\(trigger)","conditions":{"any":[{"event":{"actor":{"type":"system"}}}],"none":[]},
             "actions":[{"type":"webhook","url":"https://receiver.test/hook","method":"POST","secret":"********",
             "headers":{"Authorization":"********"}},{"type":"webhook","url":"https://receiver.test/hook","method":"POST",
             "headers":{"X-Custom-Credential":"********"}}],

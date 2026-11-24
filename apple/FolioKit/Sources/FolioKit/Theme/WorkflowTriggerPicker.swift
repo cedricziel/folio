@@ -29,17 +29,18 @@ struct WorkflowTriggerEditor: View {
     @State private var isSaving = false
     @State private var loadError: String?
     @State private var saveError: String?
-    private let workflow: WorkflowConfigurationSummary
+    @State private var needsReload = false
+    @State private var workflow: WorkflowConfigurationSummary
     private let service: any WorkflowTriggerEditingService
-    private let onSaved: (WorkflowConfigurationSummary, WorkflowTriggerChoice) -> Void
+    private let onUpdated: (WorkflowConfigurationSummary, WorkflowTriggerChoice?) -> Void
 
     init(
         workflow: WorkflowConfigurationSummary, service: any WorkflowTriggerEditingService,
-        onSaved: @escaping (WorkflowConfigurationSummary, WorkflowTriggerChoice) -> Void
+        onUpdated: @escaping (WorkflowConfigurationSummary, WorkflowTriggerChoice?) -> Void
     ) {
-        self.workflow = workflow
+        _workflow = State(initialValue: workflow)
         self.service = service
-        self.onSaved = onSaved
+        self.onUpdated = onUpdated
         _selection = State(initialValue: workflow.trigger)
     }
 
@@ -47,7 +48,7 @@ struct WorkflowTriggerEditor: View {
         NavigationStack {
             Form {
                 if isLoading {
-                    ProgressView("Loading triggers…")
+                    ProgressView(needsReload ? "Reloading workflow…" : "Loading triggers…")
                 } else if let loadError {
                     Text(loadError).foregroundStyle(Color.danger)
                     Button("Try again") { Task { await load() } }
@@ -56,10 +57,14 @@ struct WorkflowTriggerEditor: View {
                 } else {
                     WorkflowTriggerPicker(choices: choices, selection: $selection)
                         .pickerStyle(.inline)
-                        .disabled(isSaving)
+                        .disabled(isSaving || needsReload)
                 }
                 if let saveError {
                     Text(saveError).foregroundStyle(Color.danger)
+                }
+                if needsReload {
+                    Button("Reload workflow") { Task { await reloadWorkflow() } }
+                        .disabled(isLoading || isSaving)
                 }
                 if isSaving {
                     ProgressView("Saving trigger…")
@@ -68,18 +73,18 @@ struct WorkflowTriggerEditor: View {
             .navigationTitle("Edit trigger")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }.disabled(isSaving)
+                    Button("Cancel") { dismiss() }.disabled(isSaving || (isLoading && needsReload))
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
                         .disabled(
-                            isLoading || isSaving || selection == workflow.trigger
+                            isLoading || isSaving || needsReload || selection == workflow.trigger
                                 || !choices.contains(where: { $0.id == selection }))
                 }
             }
             .task { await load() }
         }
-        .interactiveDismissDisabled(isSaving)
+        .interactiveDismissDisabled(isSaving || (isLoading && needsReload))
     }
 
     private func load() async {
@@ -95,19 +100,38 @@ struct WorkflowTriggerEditor: View {
         }
     }
 
+    private func reloadWorkflow() async {
+        guard !isLoading, !isSaving, needsReload else { return }
+        isLoading = true
+        saveError = nil
+        defer { isLoading = false }
+        do {
+            let latest = try await service.workflowConfiguration(vaultID: workflow.vaultID, workflowID: workflow.id)
+            guard latest.revision != nil else { throw FolioError.unreadableResponse }
+            workflow = latest
+            selection = latest.trigger
+            needsReload = false
+            onUpdated(latest, choices.first(where: { $0.id == latest.trigger }))
+        } catch {
+            saveError = WorkflowLifecycleViewModel.message(error, fallback: "Couldn't reload the workflow. Try again.")
+        }
+    }
+
     private func save() async {
-        guard !isSaving, selection != workflow.trigger, let choice = choices.first(where: { $0.id == selection })
+        guard !isSaving, !needsReload, selection != workflow.trigger,
+            let choice = choices.first(where: { $0.id == selection })
         else { return }
         isSaving = true
         saveError = nil
         defer { isSaving = false }
         do {
-            onSaved(try await service.changeWorkflowTrigger(workflow, to: choice.id), choice)
+            onUpdated(try await service.changeWorkflowTrigger(workflow, to: choice.id), choice)
             dismiss()
         } catch FolioError.server(status: 400, message: _), FolioError.server(status: 422, message: _) {
             saveError = "Choose a trigger compatible with the workflow's conditions and actions."
         } catch FolioError.server(status: 409, message: _) {
-            saveError = "The workflow changed. Reopen it before editing."
+            needsReload = true
+            saveError = "The workflow changed. Reload it before editing."
         } catch {
             saveError = WorkflowLifecycleViewModel.message(error, fallback: "Couldn't save the trigger. Try again.")
         }

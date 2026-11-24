@@ -19,6 +19,9 @@ struct WorkflowLifecycleFixture: View {
     private let date = Date(timeIntervalSince1970: 1_793_620_800)
     private var deleted = false
     private var triggerID = "document.uploaded"
+    private var revision: Int64 = 1
+    private var enabled = true
+    private var concurrentEdit = ProcessInfo.processInfo.arguments.contains("--concurrent-workflow-edit")
     private var failList = ProcessInfo.processInfo.arguments.contains("--initial-load-error")
     private var failHistory = ProcessInfo.processInfo.arguments.contains("--workflow-history-error")
     private var failDelete = ProcessInfo.processInfo.arguments.contains("--workflow-delete-error")
@@ -67,21 +70,35 @@ struct WorkflowLifecycleFixture: View {
         ]
     }
 
+    func workflowConfiguration(vaultID: UUID, workflowID: UUID) async throws -> WorkflowConfigurationSummary {
+        guard vaultID == Self.vaultID, workflowID == Self.workflowID, !deleted else {
+            throw FolioError.unreadableResponse
+        }
+        return configuration
+    }
+
     func changeWorkflowTrigger(_ workflow: WorkflowConfigurationSummary, to triggerID: String) async throws
         -> WorkflowConfigurationSummary
     {
         guard workflow.vaultID == Self.vaultID, workflow.id == Self.workflowID, !deleted else {
             throw FolioError.unreadableResponse
         }
+        if concurrentEdit {
+            concurrentEdit = false
+            enabled = false
+            revision += 1
+        }
+        guard workflow.revision == revision else { throw FolioError.server(status: 409, message: nil) }
         self.triggerID = triggerID
+        revision += 1
         return configuration
     }
 
     private var configuration: WorkflowConfigurationSummary {
         WorkflowConfigurationSummary(
-            id: Self.workflowID, vaultID: Self.vaultID, name: "Invoice notifications", enabled: true,
+            id: Self.workflowID, vaultID: Self.vaultID, name: "Invoice notifications", enabled: enabled,
             trigger: triggerID, createdAt: date, updatedAt: date, deletedAt: deleted ? date : nil,
-            createdBy: "Taylor", updatedBy: "Morgan"
+            createdBy: "Taylor", updatedBy: "Morgan", revision: revision
         )
     }
 }

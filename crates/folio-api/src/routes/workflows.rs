@@ -3,7 +3,7 @@
 use axum::{
     extract::State,
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use folio_core::models::VaultId;
@@ -18,7 +18,7 @@ use folio_core::models::{
 use folio_core::ports::WorkflowRepository;
 use folio_infra::{workflow::WebhookRequest, WebhookClient};
 
-use crate::error::{ApiError, ApiResult};
+use crate::error::{ApiError, ApiResult, ErrorResponse};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::openapi::{BadRequest, InternalError, NotFound};
 use crate::state::AppState;
@@ -42,6 +42,7 @@ pub fn router() -> Router<AppState> {
                 .put(update_workflow)
                 .delete(delete_workflow),
         )
+        .route("/{id}/trigger", patch(update_workflow_trigger))
         .route("/{id}/test", post(test_workflow))
         .route("/{id}/restore", post(restore_workflow))
         .route("/{id}/runs", get(list_runs))
@@ -250,6 +251,56 @@ pub(crate) async fn update_workflow(
     let existing = find(vault, &*state.workflow_repo, id).await?;
     restore_secrets(&mut input, &existing)?;
     let workflow = state.workflow_repo.update(vault, id, input).await?;
+    Ok(Json(redact(workflow)))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct WorkflowTriggerUpdate {
+    /// Revision returned by the workflow read used to start editing.
+    #[schema(minimum = 1)]
+    expected_revision: i64,
+    trigger: WorkflowTrigger,
+}
+
+/// Change a workflow's trigger while retaining its other configuration.
+#[utoipa::path(
+    patch,
+    path = "/api/workflows/{id}/trigger",
+    operation_id = "updateWorkflowTrigger",
+    tag = "workflows",
+    params(("id" = Uuid, Path, description = "Workflow ID")),
+    request_body = WorkflowTriggerUpdate,
+    responses(
+        (status = 200, description = "The updated workflow; webhook secrets are masked", body = Workflow),
+        (status = 409, description = "The workflow changed after the revision was read", body = ErrorResponse),
+        BadRequest,
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn update_workflow_trigger(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiJson(input): ApiJson<WorkflowTriggerUpdate>,
+) -> ApiResult<Json<Workflow>> {
+    if input.expected_revision < 1 {
+        return Err(ApiError::bad_request("Expected revision must be positive"));
+    }
+    let existing = find(vault, &*state.workflow_repo, id).await?;
+    let expected_revision = Some(input.expected_revision);
+    existing.check_revision(expected_revision)?;
+    let replacement = WorkflowInput {
+        name: existing.name,
+        enabled: existing.enabled,
+        trigger: input.trigger,
+        conditions: existing.conditions,
+        actions: existing.actions,
+    };
+    let workflow = state
+        .workflow_repo
+        .replace(vault, id, replacement, expected_revision)
+        .await?;
     Ok(Json(redact(workflow)))
 }
 

@@ -258,6 +258,37 @@ async fn contract(db: Database) {
         events[0].data(),
         &serde_json::json!({"name":"Retained workflow", "enabled":true, "trigger":"document.uploaded"})
     );
+    let racing = r
+        .workflows
+        .create(vault, input("Concurrent edits"))
+        .await
+        .unwrap();
+    let mut disable = input("Concurrent edits");
+    disable.enabled = false;
+    let mut trigger = input("Concurrent edits");
+    trigger.trigger = WorkflowTrigger::DocumentProcessed;
+    let (disabled, changed_trigger) = tokio::join!(
+        r.workflows
+            .replace(vault, racing.id, disable, Some(racing.revision)),
+        r.workflows
+            .replace(vault, racing.id, trigger, Some(racing.revision)),
+    );
+    let winner = match (disabled, changed_trigger) {
+        (Ok(row), Err(folio_core::Error::Conflict(_)))
+        | (Err(folio_core::Error::Conflict(_)), Ok(row)) => row,
+        results => panic!("expected one winner and one conflict, got {results:?}"),
+    };
+    assert_eq!(winner.revision, racing.revision + 1);
+    let stored = r
+        .workflows
+        .find_by_id(vault, racing.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.revision, winner.revision);
+    assert_eq!(stored.enabled, winner.enabled);
+    assert_eq!(stored.trigger, winner.trigger);
+    r.workflows.delete(vault, racing.id).await.unwrap();
     let toggle = r
         .workflows
         .create(vault, input("Pause and resume"))

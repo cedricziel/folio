@@ -881,31 +881,32 @@ extension LiveFolioService: WorkflowTriggerEditingService {
         }
     }
 
+    public func workflowConfiguration(vaultID: UUID, workflowID: UUID) async throws
+        -> WorkflowConfigurationSummary
+    {
+        let scoped = scopedClient(to: vaultID)
+        let id = workflowID.uuidString.lowercased()
+        return try await scoped.call("workflows.get") {
+            let workflow = try await Self.workflowSummary(scoped.client.getWorkflow(path: .init(id: id)).ok.body.json)
+            guard workflow.id == workflowID, workflow.vaultID == vaultID, workflow.deletedAt == nil else {
+                throw FolioError.unreadableResponse
+            }
+            return workflow
+        }
+    }
+
     public func changeWorkflowTrigger(_ workflow: WorkflowConfigurationSummary, to triggerID: String) async throws
         -> WorkflowConfigurationSummary
     {
-        guard workflow.deletedAt == nil, let trigger = Components.Schemas.WorkflowTrigger(rawValue: triggerID) else {
-            throw FolioError.unreadableResponse
-        }
+        guard workflow.deletedAt == nil, let revision = workflow.revision,
+            let trigger = Components.Schemas.WorkflowTrigger(rawValue: triggerID)
+        else { throw FolioError.unreadableResponse }
         let scoped = scopedClient(to: workflow.vaultID)
         let id = workflow.id.uuidString.lowercased()
         return try await scoped.call("workflows.change_trigger") {
-            let current = try await scoped.client.getWorkflow(path: .init(id: id)).ok.body.json
-            let loaded = try Self.workflowSummary(current)
-            guard loaded.id == workflow.id, loaded.vaultID == workflow.vaultID, loaded.deletedAt == nil else {
-                throw FolioError.unreadableResponse
-            }
-            guard loaded.updatedAt == workflow.updatedAt, loaded.trigger == workflow.trigger else {
-                throw FolioError.server(status: 409, message: "The workflow changed. Reopen it before editing.")
-            }
-            let updated = try await scoped.client.updateWorkflow(
+            let updated = try await scoped.client.updateWorkflowTrigger(
                 path: .init(id: id),
-                body: .json(
-                    .init(
-                        actions: current.actions, conditions: current.conditions,
-                        enabled: current.enabled, name: current.name, trigger: trigger
-                    )
-                )
+                body: .json(.init(expectedRevision: revision, trigger: trigger))
             ).ok.body.json
             let result = try Self.workflowSummary(updated)
             guard result.vaultID == workflow.vaultID, result.id == workflow.id,
@@ -921,7 +922,7 @@ extension LiveFolioService: WorkflowTriggerEditingService {
         .init(
             id: try uuid(value.id), vaultID: try uuid(value.vaultId), name: value.name, enabled: value.enabled,
             trigger: value.trigger.rawValue, createdAt: value.createdAt, updatedAt: value.updatedAt,
-            deletedAt: value.deletedAt, createdBy: value.createdBy, updatedBy: value.updatedBy
+            deletedAt: value.deletedAt, createdBy: value.createdBy, updatedBy: value.updatedBy, revision: value.revision
         )
     }
 }

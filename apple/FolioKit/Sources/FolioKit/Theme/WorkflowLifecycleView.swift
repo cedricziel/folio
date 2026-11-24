@@ -139,7 +139,7 @@ private struct WorkflowLifecycleDetail: View {
                 Section("Configuration") {
                     LabeledContent("State", value: workflow.stateTitle)
                     Text(lifecycle.triggerTitle(for: workflow))
-                    if editingService != nil && workflow.deletedAt == nil {
+                    if editingService != nil && workflow.deletedAt == nil && workflow.revision != nil {
                         Button("Edit trigger") { showingTriggerEditor = true }
                             .disabled(lifecycle.isMutating || !lifecycle.canManage)
                     }

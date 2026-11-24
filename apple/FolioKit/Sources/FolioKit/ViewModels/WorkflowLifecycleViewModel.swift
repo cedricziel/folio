@@ -72,13 +72,13 @@ public final class WorkflowLifecycleViewModel {
         triggerTitles[workflow.trigger] ?? workflow.triggerTitle
     }
 
-    func applyTriggerUpdate(_ workflow: WorkflowConfigurationSummary, choice: WorkflowTriggerChoice) {
+    func applyTriggerUpdate(_ workflow: WorkflowConfigurationSummary, choice: WorkflowTriggerChoice?) {
         guard canManage, !accessDenied, !deleted, workflow.vaultID == vaultID, workflow.deletedAt == nil,
             let index = workflows.firstIndex(where: { $0.id == workflow.id })
         else { return }
         requestID = UUID()
         isLoading = false
-        triggerTitles[choice.id] = choice.title
+        if let choice { triggerTitles[choice.id] = choice.title }
         workflows[index] = workflow
     }
 

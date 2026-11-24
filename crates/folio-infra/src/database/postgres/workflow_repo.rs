@@ -238,8 +238,13 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     }
 
     #[instrument(skip(self, input))]
-    async fn update(&self, vault: VaultId, id: Id, input: WorkflowInput) -> Result<Workflow> {
-        input.validate()?;
+    async fn replace(
+        &self,
+        vault: VaultId,
+        id: Id,
+        input: WorkflowInput,
+        expected_revision: Option<i64>,
+    ) -> Result<Workflow> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let row = sqlx::query_as::<_, WorkflowRow>(
             "SELECT * FROM workflows WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE",
@@ -251,6 +256,8 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .map_err(repo_err)?
         .ok_or_else(|| not_found(id))?;
         let existing = Workflow::try_from(row)?;
+        existing.check_revision(expected_revision)?;
+        input.validate()?;
         if existing.name == input.name
             && existing.enabled == input.enabled
             && existing.trigger == input.trigger

@@ -8821,6 +8821,112 @@
         ]
       }
     },
+    "/api/workflows/{id}/trigger": {
+      "patch": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Change a workflow's trigger while retaining its other configuration.",
+        "operationId": "updateWorkflowTrigger",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowTriggerUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated workflow; webhook secrets are masked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The workflow changed after the revision was read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/events": {
       "get": {
         "tags": [
@@ -12926,6 +13032,11 @@
           "name": {
             "type": "string"
           },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Revision to send when changing the trigger."
+          },
           "trigger": {
             "$ref": "#/components/schemas/WorkflowTrigger"
           },
@@ -13595,6 +13706,24 @@
           },
           "target": {
             "$ref": "#/components/schemas/WorkflowTarget"
+          }
+        }
+      },
+      "WorkflowTriggerUpdate": {
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "trigger"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Revision returned by the workflow read used to start editing.",
+            "minimum": 1
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/WorkflowTrigger"
           }
         }
       }
