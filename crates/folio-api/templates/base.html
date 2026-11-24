@@ -902,6 +902,9 @@ Stimulus.register(
     static targets = [
       "trigger",
       "conditionEditor",
+      "cadence",
+      "cadenceMode",
+      "cadenceRepeat",
       "source",
       "folder",
       "email",
@@ -936,6 +939,11 @@ Stimulus.register(
 
     sync() {
       const trigger = this.triggerTarget.value;
+      const scheduled = trigger === "workflow.scheduled";
+      this.cadenceTarget.hidden = !scheduled;
+      this.cadenceTarget.disabled = !scheduled;
+      this.cadenceRepeatTarget.hidden = this.cadenceModeTarget.value !== "recurring";
+      this.cadenceRepeatTarget.querySelector("input").disabled = this.cadenceRepeatTarget.hidden;
       const ingest = trigger === "ingest.received";
       const entry = trigger.startsWith("document_note.") || trigger.startsWith("document_comment.");
       const health = trigger === "source.failed" || trigger === "source.recovered";
@@ -948,13 +956,14 @@ Stimulus.register(
       syncProcessingFields(this.processingFilterTarget, processingKeys);
       this.conditionEditor.sync({
         trigger,
+        scheduled,
         ingest,
         outcome,
         health,
         metadata,
         metadataValues,
         processingKeys,
-        documentFilters: !(entry || ingestEvent || metadata),
+        documentFilters: !(scheduled || entry || ingestEvent || metadata),
       });
       this.metadataFilterTarget.hidden = !metadata;
       this.metadataFilterTarget.disabled = !metadata;
@@ -975,7 +984,7 @@ Stimulus.register(
         currency.querySelector("input").disabled = currency.hidden;
       }
       for (const filter of this.documentFilterTargets) {
-        filter.hidden = entry || ingestEvent || metadata;
+        filter.hidden = scheduled || entry || ingestEvent || metadata;
         filter.disabled = filter.hidden;
       }
       this.ingestFilterTarget.hidden = !ingestEvent;
@@ -987,13 +996,13 @@ Stimulus.register(
       this.ingestRetryTarget.hidden = !outcome;
       this.ingestRetryTarget.disabled = !outcome;
       for (const action of this.documentActionTargets) {
-        action.hidden = ingestEvent || metadataDefinition;
+        action.hidden = scheduled || ingestEvent || metadataDefinition;
         for (const control of action.querySelectorAll("input, select")) {
           control.disabled = action.hidden;
         }
       }
-      this.eventFilterTarget.hidden = ingest;
-      this.eventFilterTarget.disabled = ingest;
+      this.eventFilterTarget.hidden = scheduled || ingest;
+      this.eventFilterTarget.disabled = this.eventFilterTarget.hidden;
       this.actorUserTarget.hidden = this.actorTarget.value !== "user";
       this.actionsTarget.hidden = ingest;
       this.discardTarget.hidden = !ingest;

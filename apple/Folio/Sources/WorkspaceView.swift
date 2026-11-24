@@ -69,6 +69,7 @@ struct WorkspaceView: View {
                             NavigationLink(value: SidebarItem.savedView(view.id)) {
                                 Label(view.name, systemImage: view.visibility == .private ? "bookmark" : "person.2")
                             }
+                            .accessibilityIdentifier("workspace-saved-view-\(view.id)")
                             .contextMenu {
                                 Button("Edit saved view") {
                                     editingSavedView = view

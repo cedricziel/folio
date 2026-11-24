@@ -33,6 +33,27 @@
             </select>
         </div>
 
+        <fieldset class="field" data-workflow-form-target="cadence"{% if values.trigger != "workflow.scheduled" %} hidden disabled{% endif %}>
+            <legend class="legend">Schedule</legend>
+            <label for="cadence-mode">Frequency</label>
+            <select class="select" id="cadence-mode" name="cadence_mode" data-workflow-form-target="cadenceMode" data-action="change->workflow-form#sync">
+                <option value="once"{% if values.cadence_mode == "once" %} selected{% endif %}>Once</option>
+                <option value="recurring"{% if values.cadence_mode == "recurring" %} selected{% endif %}>Repeat</option>
+            </select>
+            <label for="cadence-start">First run (UTC)</label>
+            <input class="input" type="text" id="cadence-start" name="cadence_start" value="{{ values.cadence_start }}" placeholder="2026-12-01T09:00:00Z">
+            <div data-workflow-form-target="cadenceRepeat"{% if values.cadence_mode != "recurring" %} hidden{% endif %}>
+                <label for="cadence-interval">Repeat every (seconds)</label>
+                <input class="input" type="number" id="cadence-interval" name="cadence_interval" value="{{ values.cadence_interval }}" min="1" step="1"{% if values.cadence_mode != "recurring" %} disabled{% endif %}>
+            </div>
+            {% if has_saved_root_filters %}
+            <label class="check"><input type="checkbox" name="clear_clock_filters" value="on"{% if values.clear_clock_filters.is_some() %} checked{% endif %}> Remove saved filters outside groups</label>
+            {% endif %}
+            {% if has_saved_non_webhook_actions %}
+            <label class="check"><input type="checkbox" name="clear_clock_actions" value="on"{% if values.clear_clock_actions.is_some() %} checked{% endif %}> Remove saved actions other than webhooks</label>
+            {% endif %}
+        </fieldset>
+
         <fieldset class="field" data-workflow-form-target="documentFilter">
             <legend class="legend">Only if the document matches</legend>
             <p class="hint">Leave a field empty to match any document.</p>

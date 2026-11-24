@@ -285,7 +285,11 @@ export class WorkflowConditionEditor {
         const owner = group.parentElement.parentElement;
         group.remove();
         this.refreshAdd(owner);
-        owner.querySelector(":scope > [data-condition-add] select").focus();
+        this.sync(this.visibility);
+        const focus = this.visibility.scheduled
+          ? this.form.querySelector('select[name="trigger"]')
+          : owner.querySelector(":scope > [data-condition-add] select");
+        focus.focus();
         break;
       }
       case "add-branch": {
@@ -307,7 +311,10 @@ export class WorkflowConditionEditor {
 
   sync(visibility) {
     this.visibility = visibility;
-    const { trigger, ingest, outcome, health, metadata, metadataValues, documentFilters, processingKeys = [] } = visibility;
+    const { trigger, scheduled, ingest, outcome, health, metadata, metadataValues, documentFilters, processingKeys = [] } = visibility;
+    this.root.toggleAttribute("data-condition-clock", scheduled);
+    this.root.hidden = scheduled && this.container(this.root).childElementCount === 0;
+    this.root.querySelector("[data-condition-clock-note]").hidden = !scheduled;
     for (const branch of this.root.querySelectorAll("[data-condition-branch]")) {
       const { source, fields, initial } = this.branchState.get(branch);
       const target = branch.querySelector(":scope > [data-condition-fields]");

@@ -168,7 +168,10 @@ impl WorkflowTriggerRegistry {
                             .expect("built-in event type")
                             .into(),
                         target: trigger.target(),
-                        condition_fields: if trigger == WorkflowTrigger::IngestReceived {
+                        condition_fields: if matches!(
+                            trigger,
+                            WorkflowTrigger::IngestReceived | WorkflowTrigger::Scheduled
+                        ) {
                             Vec::new()
                         } else {
                             vec![
