@@ -15,6 +15,7 @@ public final class WorkflowLifecycleViewModel {
     private let vaultID: UUID
     private let service: any WorkflowLifecycleService
     private var requestID = UUID()
+    private var triggerTitles: [String: String] = [:]
 
     public init(vaultID: UUID, service: any WorkflowLifecycleService, canManage: Bool) {
         self.vaultID = vaultID
@@ -65,6 +66,20 @@ public final class WorkflowLifecycleViewModel {
 
     public func restore(_ workflow: WorkflowConfigurationSummary) async -> Bool {
         await mutate(workflow, restoring: true)
+    }
+
+    func triggerTitle(for workflow: WorkflowConfigurationSummary) -> String {
+        triggerTitles[workflow.trigger] ?? workflow.triggerTitle
+    }
+
+    func applyTriggerUpdate(_ workflow: WorkflowConfigurationSummary, choice: WorkflowTriggerChoice) {
+        guard canManage, !accessDenied, !deleted, workflow.vaultID == vaultID, workflow.deletedAt == nil,
+            let index = workflows.firstIndex(where: { $0.id == workflow.id })
+        else { return }
+        requestID = UUID()
+        isLoading = false
+        triggerTitles[choice.id] = choice.title
+        workflows[index] = workflow
     }
 
     public func dismissMutationError() {
