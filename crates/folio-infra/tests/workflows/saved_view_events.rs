@@ -120,6 +120,7 @@ async fn exercise(
                     name: format!("View {name}"),
                     enabled: true,
                     trigger,
+                    triggers: Vec::new(),
                     cadence: None,
                     conditions: WorkflowConditions {
                         event: Some(WorkflowEventConditions {
