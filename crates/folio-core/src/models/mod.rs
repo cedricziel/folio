@@ -120,7 +120,8 @@ pub use workflow::{
 };
 
 pub use workflow_document_conditions::{
-    WorkflowDocumentConditions, WorkflowRevisionSource, WorkflowUnreviewReason,
+    WorkflowDocumentConditions, WorkflowRevisionSource, WorkflowTagChangeState,
+    WorkflowUnreviewReason,
 };
 pub use workflow_event_conditions::{
     MetadataChangeState, WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,

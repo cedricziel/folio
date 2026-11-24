@@ -38,6 +38,12 @@ action cannot cross vaults after the document departs.
 Run `cargo test -p folio-api --test workflows --test openapi` for lifecycle
 trigger selection, the editor's action compatibility error, and schema parity.
 
+Run `cargo test -p folio-infra -p folio-api --test workflows tag_replacement`
+for document transition conditions. The SQLite outbox fixture changes the
+document again before delivery and checks that the retained tag is excluded and
+replay queues no run. The web fixture saves and reopens the rule, then checks
+that trashing a tag preserves its saved ID in the editor.
+
 ## Verify explicit review persistence
 
 Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_reviews --test document_review_upgrade`
