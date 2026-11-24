@@ -927,6 +927,11 @@ Stimulus.register(
       "metadataValues",
       "metadataHint",
       "metadataCurrency",
+      "dateFilter",
+      "reviewFilter",
+      "unreviewFilter",
+      "revisionFilter",
+      "revisionSourceFilter",
     ];
 
     connect() {
@@ -956,6 +961,18 @@ Stimulus.register(
       const metadata = metadataValues || metadataDefinition;
       const processingKeys = this.triggerTarget.selectedOptions[0]?.dataset.processingKeys?.split(" ") ?? [];
       syncProcessingFields(this.processingFilterTarget, processingKeys);
+      const unreviewed = trigger === "document.unreviewed";
+      const revisionCreated = trigger === "document.revision_created";
+      for (const [filter, active] of [
+        [this.dateFilterTarget, trigger === "document.date_changed"],
+        [this.reviewFilterTarget, unreviewed || trigger === "document.reviewed"],
+        [this.unreviewFilterTarget, unreviewed],
+        [this.revisionFilterTarget, revisionCreated || trigger === "document.revision_restored"],
+        [this.revisionSourceFilterTarget, revisionCreated],
+      ]) {
+        filter.hidden = !active;
+        filter.disabled = !active;
+      }
       const documentFilters = !(scheduled || entry || ingestEvent || metadata || savedView);
       this.conditionEditor.sync({
         trigger,

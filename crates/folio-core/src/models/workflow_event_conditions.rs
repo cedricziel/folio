@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Id, IngestResult, MetadataKind, MetadataValue, SourceKind, UserId, WebhookIngest,
-    WebhookProcessing, WorkflowTrigger, WorkflowTriggerRegistry,
+    WebhookProcessing, WorkflowDocumentConditions, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 use crate::processing_events::{ProcessingEventStage, ProcessingReason};
 use crate::{DomainEventEnvelope, Error, Result};
@@ -319,6 +319,9 @@ pub struct WorkflowEventConditions {
     #[cfg_attr(feature = "openapi", schema(value_type = WorkflowMetadataConditions, required = false))]
     pub metadata: Option<WorkflowMetadataConditions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WorkflowDocumentConditions, required = false))]
+    pub document_change: Option<WorkflowDocumentConditions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(value_type = WorkflowProcessingConditions, required = false))]
     pub processing: Option<WorkflowProcessingConditions>,
 }
@@ -344,6 +347,10 @@ impl WorkflowEventConditions {
                 .is_none_or(|condition| condition.matches(event))
             && self
                 .metadata
+                .as_ref()
+                .is_none_or(|condition| condition.matches(event))
+            && self
+                .document_change
                 .as_ref()
                 .is_none_or(|condition| condition.matches(event))
             && self

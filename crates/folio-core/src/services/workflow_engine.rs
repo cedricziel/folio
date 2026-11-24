@@ -279,6 +279,11 @@ impl WorkflowEngine {
                         | WorkflowTrigger::DocumentTagsChanged
                         | WorkflowTrigger::DocumentCorrespondentChanged
                         | WorkflowTrigger::DocumentTypeChanged
+                        | WorkflowTrigger::DocumentDateChanged
+                        | WorkflowTrigger::DocumentReviewed
+                        | WorkflowTrigger::DocumentUnreviewed
+                        | WorkflowTrigger::DocumentRevisionCreated
+                        | WorkflowTrigger::DocumentRevisionRestored
                         | WorkflowTrigger::DocumentMovedOut
                         | WorkflowTrigger::DocumentMovedIn
                 )
