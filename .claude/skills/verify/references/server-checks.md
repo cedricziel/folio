@@ -114,8 +114,11 @@ cases in `workflow-condition-groups.spec.ts` verify the editor keeps a document
 action visible until the user removes it.
 
 For the shared trigger catalog, `cargo test -p folio-api --test workflows --test vaults --test openapi`
-checks that the web choices match the API, an editor cannot fetch the catalog,
-and the generated schema describes the same choices. The infrastructure
+checks that the web choices match the expanded API catalog, an editor cannot
+fetch the catalog, and the generated schema describes the same choices. The
+installed picker test checks that requests without `include_extended` keep
+the original catalog. `WorkflowLifecycleServiceTests` verifies that the updated
+picker requests the expanded catalog and skips IDs it cannot save. The infrastructure
 workflow suite dispatches a row with both a domain event and legacy projection,
 checks each trigger name in its payload, and replays the row.
 

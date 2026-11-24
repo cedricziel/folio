@@ -1217,9 +1217,42 @@ async fn web_editor_creates_an_entry_workflow_with_occurrence_filters() {
 }
 
 #[tokio::test]
+async fn installed_picker_keeps_its_catalog_when_saved_view_triggers_are_added() {
+    let app = test_app().await;
+    let (status, legacy) = json_request(&app, "GET", "/api/workflows/triggers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, extended) = json_request(
+        &app,
+        "GET",
+        "/api/workflows/triggers?include_extended=true",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let legacy = legacy.as_array().unwrap();
+    let extended = extended.as_array().unwrap();
+    assert_eq!(legacy.len(), 52);
+    assert!(legacy.iter().all(|entry| extended.contains(entry)));
+    for event in [
+        "saved_view.created",
+        "saved_view.updated",
+        "saved_view.deleted",
+    ] {
+        assert!(!legacy.iter().any(|entry| entry["event_type"] == event));
+        assert!(extended.iter().any(|entry| entry["event_type"] == event));
+    }
+}
+
+#[tokio::test]
 async fn trigger_catalog_matches_workflow_choices_and_describes_entry_filters() {
     let app = test_app().await;
-    let (status, json) = json_request(&app, "GET", "/api/workflows/triggers", None).await;
+    let (status, json) = json_request(
+        &app,
+        "GET",
+        "/api/workflows/triggers?include_extended=true",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let catalog = json.as_array().unwrap();
     let (status, html) = send(&app, "GET", "/workflows/new", None).await;
@@ -1243,7 +1276,13 @@ async fn trigger_catalog_matches_workflow_choices_and_describes_entry_filters() 
 #[tokio::test]
 async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
     let app = test_app().await;
-    let (status, json) = json_request(&app, "GET", "/api/workflows/triggers", None).await;
+    let (status, json) = json_request(
+        &app,
+        "GET",
+        "/api/workflows/triggers?include_extended=true",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let catalog = json.as_array().unwrap();
     let field_type = |trigger: &str, key: &str| {
@@ -1327,7 +1366,13 @@ async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
 #[tokio::test]
 async fn saved_view_triggers_use_event_filters_and_delivery_actions() {
     let app = test_app().await;
-    let (status, catalog) = json_request(&app, "GET", "/api/workflows/triggers", None).await;
+    let (status, catalog) = json_request(
+        &app,
+        "GET",
+        "/api/workflows/triggers?include_extended=true",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     for event_type in [
         "saved_view.created",

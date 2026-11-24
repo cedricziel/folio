@@ -141,18 +141,95 @@ pub(crate) struct WorkflowListQuery {
     pub deleted: bool,
 }
 
+// The original native picker can only encode the trigger IDs in its generated request type.
+const LEGACY_WORKFLOW_TRIGGER_IDS: &[&str] = &[
+    "document.uploaded",
+    "document.processed",
+    "document.updated",
+    "document.title_changed",
+    "document.tags_changed",
+    "document.correspondent_changed",
+    "document.document_type_changed",
+    "document_note.created",
+    "document_note.updated",
+    "document_note.deleted",
+    "document_comment.created",
+    "document_comment.updated",
+    "document_comment.deleted",
+    "metadata_field.created",
+    "metadata_field.updated",
+    "metadata_field.deleted",
+    "metadata_field.restored",
+    "metadata_option.created",
+    "metadata_option.updated",
+    "metadata_option.deleted",
+    "metadata_option.restored",
+    "document.metadata.changed",
+    "document.moved_out",
+    "document.moved_in",
+    "document.trashed",
+    "document.restored",
+    "document.purge_requested",
+    "document.purged",
+    "document.deleted",
+    "ingest.received",
+    "ingest.imported",
+    "ingest.skipped",
+    "ingest.duplicate",
+    "ingest.failed",
+    "source.failed",
+    "source.recovered",
+    "document.processing.ocr.started",
+    "document.processing.ocr.completed",
+    "document.processing.ocr.failed",
+    "document.processing.ocr.skipped",
+    "document.processing.ocr.retry_scheduled",
+    "document.processing.embedding.started",
+    "document.processing.embedding.completed",
+    "document.processing.embedding.failed",
+    "document.processing.embedding.skipped",
+    "document.processing.embedding.retry_scheduled",
+    "document.processing.thumbnail.started",
+    "document.processing.thumbnail.completed",
+    "document.processing.thumbnail.failed",
+    "document.processing.thumbnail.skipped",
+    "document.processing.thumbnail.retry_scheduled",
+    "workflow.scheduled",
+];
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct WorkflowTriggerCatalogQuery {
+    /// Include newer trigger IDs. Omit this parameter for the original picker catalog.
+    pub include_extended: Option<bool>,
+}
+
 /// List selectable workflow triggers and their occurrence fields
 #[utoipa::path(
     get,
     path = "/api/workflows/triggers",
     operation_id = "listWorkflowTriggers",
     tag = "workflows",
-    responses((status = 200, description = "Selectable workflow triggers", body = Vec<WorkflowTriggerDefinition>))
+    params(WorkflowTriggerCatalogQuery),
+    responses(
+        (status = 200, description = "Selectable workflow triggers", body = Vec<WorkflowTriggerDefinition>),
+        BadRequest,
+    )
 )]
 pub(crate) async fn list_triggers(
     DefaultVault(_vault): DefaultVault,
-) -> Json<&'static [WorkflowTriggerDefinition]> {
-    Json(WorkflowTriggerRegistry::built_in().definitions())
+    ApiQuery(query): ApiQuery<WorkflowTriggerCatalogQuery>,
+) -> Json<Vec<&'static WorkflowTriggerDefinition>> {
+    let extended = query.include_extended.unwrap_or_default();
+    Json(
+        WorkflowTriggerRegistry::built_in()
+            .definitions()
+            .iter()
+            .filter(|definition| {
+                extended || LEGACY_WORKFLOW_TRIGGER_IDS.contains(&definition.event_type.as_str())
+            })
+            .collect(),
+    )
 }
 
 /// List all workflows
