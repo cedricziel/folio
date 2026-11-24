@@ -22,7 +22,7 @@ pub enum UploadOutcome {
     Replayed(Document),
     /// Another request with the key is still storing the document; retry shortly
     InProgress,
-    /// An earlier request with the same key stored a document that has since been deleted
+    /// The document stored with this key is no longer live in the vault
     Deleted,
     /// The key was already used for a different upload; retrying with it never succeeds
     KeyMismatch,
@@ -150,13 +150,15 @@ impl IdempotentUploads {
             }
         };
         match imported {
-            Ok(stored) => {
-                if self.receipts.complete(key, token, Utc::now()).await? {
-                    Ok(UploadOutcome::Created(stored))
-                } else {
-                    // Another attempt took the claim over and recorded the same document.
-                    Ok(UploadOutcome::Replayed(stored))
-                }
+            Ok(()) => {
+                let completed = self.receipts.complete(key, token, Utc::now()).await?;
+                Ok(
+                    match self.documents.find_by_id(key.vault, document).await? {
+                        Some(stored) if completed => UploadOutcome::Created(stored),
+                        Some(stored) => UploadOutcome::Replayed(stored),
+                        None => UploadOutcome::Deleted,
+                    },
+                )
             }
             Err(e) => {
                 // Only the attempt still holding the claim cleans up, so it never removes a document another

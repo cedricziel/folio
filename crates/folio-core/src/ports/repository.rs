@@ -9,7 +9,7 @@ use crate::models::{
     DocumentFilter, DocumentRevision, DocumentRevisionPage, DocumentType, ExternalRef,
     FileIdentity, GroupId, Id, ImportedDocument, NewAuditEvent, Principal, ProcessingStage,
     ProcessingStatus, Setting, Tag, UnverifiedOriginal, UpdateCorrespondent, UpdateDocument,
-    UpdateDocumentType, UpdateTag, UserId, Vault, VaultId, VaultMember, VaultRole,
+    UpdateDocumentType, UpdateTag, UserId, Vault, VaultId, VaultMember, VaultRole, WorkflowRun,
 };
 
 /// Storage source for a thumbnail served for the document's current original.
@@ -164,6 +164,11 @@ pub trait DocumentRepository: Send + Sync {
 
     /// Update an existing document
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document>;
+
+    /// Commit a local action and its progress. Returns true if this call committed run success.
+    /// Call through the workflow repository binding so mutations use workflow event origin.
+    /// A completed step is a no-op for a pending, current run. Stopped or stale runs return a conflict.
+    async fn apply_workflow_document_action(&self, run: &WorkflowRun, index: u32) -> Result<bool>;
 
     /// Move a document to trash without deleting stored objects. Repeats succeed.
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()>;

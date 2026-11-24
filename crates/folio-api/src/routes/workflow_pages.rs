@@ -550,7 +550,7 @@ impl FormValues {
                 WorkflowAction::SetDocumentType { document_type_id } => {
                     action_document_type_id = document_type_id.to_string()
                 }
-                WorkflowAction::Webhook { .. } | WorkflowAction::SkipImport => {}
+                _ => {}
             }
         }
         if let Some(processing) = c.event.as_ref().and_then(|event| event.processing.as_ref()) {
@@ -962,7 +962,13 @@ fn set_action(
         (Some(i), None) => {
             actions.remove(i);
         }
-        (None, Some(action)) => actions.push(action),
+        (None, Some(action)) => {
+            let index = actions
+                .iter()
+                .position(|existing| matches!(existing, WorkflowAction::TrashDocument))
+                .unwrap_or(actions.len());
+            actions.insert(index, action);
+        }
         (None, None) => {}
     }
 }

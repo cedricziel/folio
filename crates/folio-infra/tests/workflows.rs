@@ -2188,13 +2188,13 @@ async fn event_actor_filters_use_the_producer_context_without_granting_private_a
 }
 
 /// Deletes the workflow just before the runner records its first completed action
-struct DeleteBeforeFirstProgress {
+struct DeleteAfterLocalAction {
     inner: Arc<dyn WorkflowRepository>,
     deleted: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait::async_trait]
-impl WorkflowRepository for DeleteBeforeFirstProgress {
+impl WorkflowRepository for DeleteAfterLocalAction {
     async fn locate(&self, id: Id) -> folio_core::Result<Option<folio_core::models::VaultId>> {
         self.inner.locate(id).await
     }
@@ -2267,12 +2267,18 @@ impl WorkflowRepository for DeleteBeforeFirstProgress {
         self.inner.enqueue_due_schedules(now, limit).await
     }
     async fn find_run(&self, id: Id) -> folio_core::Result<Option<WorkflowRun>> {
-        self.inner.find_run(id).await
+        let stored = self.inner.find_run(id).await?;
+        if let Some(run) = &stored {
+            if run.completed_actions > 0
+                && !self.deleted.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                self.inner.delete(run.vault_id, run.workflow_id).await?;
+                return self.inner.find_run(id).await;
+            }
+        }
+        Ok(stored)
     }
     async fn update_run(&self, run: &WorkflowRun) -> folio_core::Result<()> {
-        if !self.deleted.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            self.inner.delete(run.vault_id, run.workflow_id).await?;
-        }
         self.inner.update_run(run).await
     }
     async fn list_runs(
@@ -2306,11 +2312,13 @@ async fn deleting_a_workflow_stops_its_inflight_run_after_the_current_action() {
         .await;
     let document = h.document("stopped.pdf", "application/pdf").await;
     let run = h.run_for(&workflow, document.id).await;
-    let deleting: Arc<dyn WorkflowRepository> = Arc::new(DeleteBeforeFirstProgress {
+    let deleting: Arc<dyn WorkflowRepository> = Arc::new(DeleteAfterLocalAction {
         inner: h.workflows.clone(),
         deleted: std::sync::atomic::AtomicBool::new(false),
     });
-    let runner = WorkflowRunner::new(deleting, h.documents.clone(), WebhookClient::new());
+    let documents = folio_infra::database::sqlite::SqliteDocumentRepository::new(h.pool.clone())
+        .with_origin(EventOrigin::Workflow);
+    let runner = WorkflowRunner::new(deleting, Arc::new(documents), WebhookClient::new());
 
     assert_eq!(runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
 
@@ -2326,6 +2334,7 @@ async fn deleting_a_workflow_stops_its_inflight_run_after_the_current_action() {
     let stopped = h.run(run.id).await;
     assert_eq!(stopped.status, RunStatus::Failed);
     assert_eq!(stopped.last_error.as_deref(), Some("Workflow was deleted"));
+    assert_eq!(stopped.completed_actions, 1);
 }
 
 async fn workflow_runs(h: &Harness, workflow: &Workflow) -> usize {

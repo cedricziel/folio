@@ -175,6 +175,82 @@ fn workflow_body(url: &str) -> Value {
 }
 
 #[tokio::test]
+async fn workflow_api_preserves_ordered_document_actions_and_requires_trash_last() {
+    let app = test_app().await;
+    let actions = json!([
+        {"type": "rename_document", "title": "Renamed"},
+        {"type": "clear_correspondent"},
+        {"type": "clear_document_type"},
+        {"type": "set_document_date", "date": "2026-11-20"},
+        {"type": "set_reviewed", "reviewed": true},
+        {"type": "trash_document"}
+    ]);
+    let mut input = json!({"name": "File obsolete document", "trigger": "document.uploaded", "actions": actions});
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(input.clone())).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["actions"], actions);
+
+    let id = created["id"].as_str().unwrap();
+    let form = "name=Renamed+workflow&trigger=document.uploaded&enabled=on";
+    let (status, page) = post_form(&app, &format!("/workflows/{id}"), form.into()).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{page}");
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["name"], "Renamed workflow");
+    assert_eq!(stored["actions"], actions);
+
+    input["actions"].as_array_mut().unwrap().reverse();
+    let (status, error) = json_request(&app, "POST", "/api/workflows", Some(input)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+}
+
+#[tokio::test]
+async fn web_form_inserts_a_new_action_before_a_retained_trash_action() {
+    let app = test_app().await;
+    let (status, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Discard processed invoices",
+            "trigger": "document.uploaded",
+            "actions": [{"type": "trash_document"}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let form = "name=Notify+before+discarding&trigger=document.uploaded&enabled=on&webhook_url=https%3A%2F%2Fexample.com%2Fhook";
+    let (status, page) = post_form(&app, &format!("/workflows/{id}"), form.into()).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{page}");
+    let (status, saved) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["actions"][0]["url"], "https://example.com/hook");
+    assert_eq!(saved["actions"][1]["type"], "trash_document");
+}
+
+#[tokio::test]
+async fn workflow_api_rejects_a_rename_title_with_nul() {
+    let app = test_app().await;
+    let (status, error) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Rename invoices",
+            "trigger": "document.uploaded",
+            "actions": [{"type": "rename_document", "title": "Invoice\0copy"}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(
+        error["error"],
+        "Document title cannot contain a NUL character"
+    );
+}
+
+#[tokio::test]
 async fn condition_groups_survive_api_storage_and_html_edits() {
     let app = test_app().await;
     let groups = json!({

@@ -9,8 +9,8 @@ use chrono::{Duration, Utc};
 use folio_core::error::{Error, Result};
 use folio_core::models::{Id, VaultId};
 use folio_core::ports::{
-    DocumentImporter, DocumentStore, StoredObject, UploadClaim, UploadReceiptKey,
-    UPLOAD_RECEIPT_RETENTION,
+    DocumentImporter, DocumentRepository, DocumentStore, ProcessingQueue, ProcessingStatus,
+    StoredObject, UploadClaim, UploadReceiptKey, UPLOAD_RECEIPT_RETENTION,
 };
 use folio_core::services::{ClaimTiming, IdempotentUploads, Importer, NewUpload, UploadOutcome};
 use folio_infra::{Database, ObjectStoreDocumentStore, Repositories};
@@ -404,6 +404,64 @@ fn fingerprint(data: &str) -> String {
     folio_core::ports::upload_fingerprint("scan.pdf", "application/pdf", "Scan", data.as_bytes())
 }
 
+struct TrashAfterPublication(Arc<dyn DocumentRepository>);
+
+#[async_trait]
+impl ProcessingQueue for TrashAfterPublication {
+    async fn enqueue_processing(&self, vault: VaultId, document: Id) -> Result<()> {
+        self.0.delete(vault, document).await
+    }
+
+    async fn processing_status(&self, _: Id) -> Result<ProcessingStatus> {
+        Ok(ProcessingStatus::Completed)
+    }
+}
+
+async fn trashed_upload_contract(r: &Repositories) {
+    let vault = r.vaults.instance_default().await.unwrap();
+    let importer = Arc::new(Importer::new(
+        r.documents.clone(),
+        Arc::new(ObjectStoreDocumentStore::in_memory()),
+        Arc::new(TrashAfterPublication(r.workflow_documents.clone())),
+    ));
+    let uploads = IdempotentUploads::new(r.upload_receipts.clone(), importer, r.documents.clone());
+    let key = key(vault, "user:alice");
+    let now = Utc::now();
+    let (reserved, _, _) = claimed(
+        r.upload_receipts
+            .claim(&key, &fingerprint("trashed"), stale(now), stale(now))
+            .await
+            .unwrap(),
+    );
+    let upload_at = Utc::now() + Duration::seconds(1);
+    let uploads = uploads.with_timing(ClaimTiming {
+        stale_after: Duration::seconds(1),
+        ..ClaimTiming::default()
+    });
+    assert!(matches!(
+        uploads
+            .upload(key.clone(), upload("trashed"))
+            .await
+            .unwrap(),
+        UploadOutcome::Deleted
+    ));
+    assert_eq!(
+        r.documents.locate_retained(reserved).await.unwrap(),
+        Some(vault)
+    );
+    assert_eq!(
+        r.upload_receipts
+            .claim(&key, &fingerprint("trashed"), upload_at, stale(upload_at))
+            .await
+            .unwrap(),
+        UploadClaim::Completed(reserved)
+    );
+    assert!(matches!(
+        uploads.upload(key, upload("trashed")).await.unwrap(),
+        UploadOutcome::Deleted
+    ));
+}
+
 async fn uploads_contract(r: &Repositories) {
     let vault = r.vaults.instance_default().await.unwrap();
     let f = flow(r, ClaimTiming::default());
@@ -707,6 +765,7 @@ async fn sqlite_upload_receipts_reserve_renew_take_over_and_expire() {
 async fn sqlite_keyed_uploads_never_store_a_document_twice() {
     let (_dir, r) = sqlite().await;
     uploads_contract(&r).await;
+    trashed_upload_contract(&r).await;
 }
 
 #[tokio::test]
@@ -735,6 +794,7 @@ async fn postgres_keyed_uploads_never_store_a_document_twice() {
         return;
     };
     uploads_contract(&r).await;
+    trashed_upload_contract(&r).await;
 }
 
 #[tokio::test]

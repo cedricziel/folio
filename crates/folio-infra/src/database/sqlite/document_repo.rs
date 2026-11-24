@@ -9,6 +9,9 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::database::document_revisions::{RevisionRow, READ_REVISIONS};
+use crate::database::workflow_actions::{pending_action, run_stopped, DocumentAction};
+use crate::database::workflow_lifecycle::workflow_run_outcome;
+use folio_core::models::{RunStatus, WorkflowRun, WorkflowTarget};
 
 use super::outbox::{
     capture_document, insert_domain_event_with_origin, insert_event, insert_event_with_envelope,
@@ -1338,46 +1341,11 @@ impl DocumentRepository for SqliteDocumentRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
-        )))
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        let existing: Document = row
-            .map(TryInto::try_into)
-            .transpose()?
-            .ok_or_else(|| not_found("Document", id))?;
-
-        if existing.reviewed_at.is_some() == reviewed {
-            return Ok(existing);
+        let (document, changed) = self.review_in(&mut tx, vault, id, reviewed).await?;
+        if changed {
+            self.commit(tx).await?;
         }
-        let before = capture_document(&mut tx, id, None)
-            .await?
-            .ok_or_else(|| not_found("Document", id))?;
-        let mut review = folio_core::models::DocumentReview::default();
-        review.set_reviewed_from_context(reviewed);
-        let decision = review.decision();
-        sqlx::query("UPDATE documents SET reviewed_at = ?, reviewed_by = ?, review_origin = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ?")
-            .bind(decision.map(|d| d.reviewed_at.to_rfc3339()))
-            .bind(decision.and_then(|d| d.reviewed_by.as_ref()).map(|id| id.0.as_str()))
-            .bind(decision.map(|d| d.origin.as_str()))
-            .bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string())
-            .execute(&mut *tx).await.map_err(map_sqlx_error)?;
-        self.emit_metadata_in(&mut tx, &before).await?;
-        let row: DocumentRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ?"
-        )))
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        let result = row.try_into()?;
-        self.commit(tx).await?;
-        Ok(result)
+        Ok(document)
     }
 
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document> {
@@ -1386,98 +1354,100 @@ impl DocumentRepository for SqliteDocumentRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
-        )))
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        let existing: Document = row
-            .map(TryInto::try_into)
-            .transpose()?
-            .ok_or_else(|| not_found("Document", id))?;
-
-        let before = capture_document(&mut tx, id, None)
-            .await?
-            .ok_or_else(|| not_found("Document", id))?;
-        let title = params.title.unwrap_or_else(|| existing.title.clone());
-        let content = params.content.or_else(|| existing.content.clone());
-        let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
-        let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
-        let document_date = params.document_date.unwrap_or(existing.document_date);
-        let now = Utc::now();
-
-        let tags_changed = if let Some(tags) = params.tag_ids {
-            self.replace_tags(&mut tx, vault, id, &tags).await?
-        } else {
-            false
-        };
-        if title == existing.title
-            && content == existing.content
-            && correspondent_id == existing.correspondent_id
-            && document_type_id == existing.document_type_id
-            && document_date == existing.document_date
-            && !tags_changed
-        {
-            return Ok(existing);
+        let (document, changed) = self.update_in(&mut tx, vault, id, params).await?;
+        if changed {
+            self.commit(tx).await?;
         }
+        Ok(document)
+    }
 
-        if let Some(c) = correspondent_id.filter(|c| Some(*c) != existing.correspondent_id) {
-            require_entry(&mut tx, "correspondents", "Correspondent", vault, c).await?;
+    async fn apply_workflow_document_action(&self, run: &WorkflowRun, index: u32) -> Result<bool> {
+        if self.origin != EventOrigin::Workflow || run.event.target() != WorkflowTarget::Document {
+            return Err(Error::Validation("Expected a document workflow run".into()));
         }
-        if let Some(t) = document_type_id.filter(|t| Some(*t) != existing.document_type_id) {
-            require_entry(&mut tx, "document_types", "DocumentType", vault, t).await?;
-        }
-
-        sqlx::query(
-            "UPDATE documents SET title = ?, content = ?, correspondent_id = ?,
-                                  document_type_id = ?, updated_at = ?, document_date = ?, updated_by = ?
-             WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+        let vault = run.vault_id;
+        let document_id = run
+            .document_id
+            .ok_or_else(|| Error::Validation("Run has no document to change".into()))?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let (completed, actions): (i64, String) = sqlx::query_as(
+            "SELECT r.completed_actions, r.actions FROM workflow_runs r
+             JOIN workflows w ON w.id = r.workflow_id
+             JOIN vaults v ON v.id = w.vault_id
+             WHERE r.id = ? AND w.id = ? AND r.document_id = ? AND w.vault_id = ? AND r.event = ?
+               AND r.status = 'pending' AND w.enabled = 1 AND w.deleted_at IS NULL AND v.deleted_at IS NULL
+               AND (r.definition_revision IS NULL OR r.definition_revision = w.revision)",
         )
-        .bind(&title)
-        .bind(&content)
-        .bind(correspondent_id.map(|id| id.to_string()))
-        .bind(document_type_id.map(|id| id.to_string()))
-        .bind(now.to_rfc3339())
-        .bind(document_date.map(|value| value.to_string()))
-        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
-        .bind(id.to_string())
+        .bind(run.id.to_string())
+        .bind(run.workflow_id.to_string())
+        .bind(document_id.to_string())
         .bind(vault.to_string())
-        .execute(&mut *tx)
+        .bind(run.event.as_str())
+        .fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?.ok_or_else(run_stopped)?;
+        let Some((action, is_final)) = pending_action(completed, index, &actions)? else {
+            return Ok(false);
+        };
+        match DocumentAction::try_from(&action)? {
+            DocumentAction::Update(params) => {
+                self.update_in(&mut tx, vault, document_id, params).await?;
+            }
+            DocumentAction::Tags { ids, add } => {
+                require_document(&mut tx, vault, document_id).await?;
+                if !add {
+                    for &tag_id in ids {
+                        sqlx::query("SELECT 1 FROM tags WHERE id = ? AND vault_id = ?")
+                            .bind(tag_id.to_string())
+                            .bind(vault.to_string())
+                            .fetch_optional(&mut *tx)
+                            .await
+                            .map_err(map_sqlx_error)?
+                            .ok_or_else(|| not_found("Tag", tag_id))?;
+                    }
+                }
+                self.change_tags_in(&mut tx, vault, document_id, ids, add)
+                    .await?;
+            }
+            DocumentAction::Trash => {
+                require_document(&mut tx, vault, document_id).await?;
+                self.trash_in(&mut tx, vault, document_id).await?;
+            }
+            DocumentAction::Review(reviewed) => {
+                self.review_in(&mut tx, vault, document_id, reviewed)
+                    .await?;
+            }
+        }
+        let payload: Option<String> = sqlx::query_scalar(
+            "UPDATE workflow_runs SET
+                 completed_actions = ?1, attempts = MAX(attempts, ?2),
+                 status = CASE WHEN ?4 IS NULL THEN status ELSE 'succeeded' END,
+                 last_error = CASE WHEN ?4 IS NULL THEN last_error ELSE NULL END,
+                 finished_at = COALESCE(?4, finished_at)
+             WHERE id = ?3
+             RETURNING CASE WHEN ?4 IS NOT NULL THEN payload END",
+        )
+        .bind(index + 1)
+        .bind(run.attempts)
+        .bind(run.id.to_string())
+        .bind(is_final.then(|| Utc::now().to_rfc3339()))
+        .fetch_one(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        self.emit_metadata_in(&mut tx, &before).await?;
+        if let Some(payload) = payload {
+            let event = workflow_run_outcome(
+                vault,
+                run.id,
+                run.workflow_id,
+                RunStatus::Succeeded,
+                &payload,
+            )?;
+            insert_domain_event_with_origin(&mut tx, &event, EventOrigin::Workflow).await?;
+        }
         self.commit(tx).await?;
-
-        Ok(Document {
-            id,
-            vault_id: vault,
-            uploaded_by: existing.uploaded_by,
-            created_by: existing.created_by,
-            updated_by: folio_core::mutation::current_actor(),
-            document_date,
-            reviewed_at: existing.reviewed_at,
-            reviewed_by: existing.reviewed_by,
-            review_origin: existing.review_origin,
-            title,
-            content,
-            original_filename: existing.original_filename,
-            file_path: existing.file_path,
-            file_size: existing.file_size,
-            mime_type: existing.mime_type,
-            correspondent_id,
-            document_type_id,
-            page_count: existing.page_count,
-            source: existing.source,
-            ocr_status: existing.ocr_status,
-            embed_status: existing.embed_status,
-            deleted_at: None,
-            purge_requested_at: None,
-            created_at: existing.created_at,
-            updated_at: now,
-        })
+        Ok(is_final)
     }
 
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
@@ -1486,31 +1456,10 @@ impl DocumentRepository for SqliteDocumentRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents
-             WHERE id = ? AND vault_id = ?"
-        )))
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        let document: Document = row.ok_or_else(|| not_found("Document", id))?.try_into()?;
-        if document.deleted_at.is_some() {
-            return Ok(());
+        if self.trash_in(&mut tx, vault, id).await? {
+            self.commit(tx).await?;
         }
-        let now = Utc::now();
-        sqlx::query("UPDATE documents SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
-            .bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
-        sqlx::query(crate::database::archival::CANCEL_QUEUED)
-            .bind("Document trashed")
-            .bind(id.to_string())
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
-        self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
-            .await?;
-        self.commit(tx).await
+        Ok(())
     }
 
     async fn locate_retained(&self, id: Id) -> Result<Option<VaultId>> {
@@ -2439,22 +2388,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
             .map_err(map_sqlx_error)?;
         require_document(&mut tx, vault, document_id).await?;
-        let before = capture_document(&mut tx, document_id, None)
-            .await?
-            .ok_or_else(|| not_found("Document", document_id))?;
-        require_entry(&mut tx, "tags", "Tag", vault, tag_id).await?;
-        let result = sqlx::query(
-            "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-        )
-        .bind(document_id.to_string())
-        .bind(tag_id.to_string())
-        .execute(&mut *tx)
-        .await
-        .map_err(map_sqlx_error)?;
-        if result.rows_affected() > 0 {
-            stamp_document(&mut tx, vault, document_id).await?;
-            self.emit_metadata_in(&mut tx, &before).await?;
-        }
+        self.change_tags_in(&mut tx, vault, document_id, &[tag_id], true)
+            .await?;
         self.commit(tx).await
     }
 
@@ -2465,19 +2400,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
             .map_err(map_sqlx_error)?;
         require_document(&mut tx, vault, document_id).await?;
-        let before = capture_document(&mut tx, document_id, None)
-            .await?
-            .ok_or_else(|| not_found("Document", document_id))?;
-        let result = sqlx::query("DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?")
-            .bind(document_id.to_string())
-            .bind(tag_id.to_string())
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
-        if result.rows_affected() > 0 {
-            stamp_document(&mut tx, vault, document_id).await?;
-            self.emit_metadata_in(&mut tx, &before).await?;
-        }
+        self.change_tags_in(&mut tx, vault, document_id, &[tag_id], false)
+            .await?;
         self.commit(tx).await
     }
 }
@@ -3002,6 +2926,226 @@ impl DocumentTypeRepository for SqliteDocumentTypeRepository {
     }
 }
 impl SqliteDocumentRepository {
+    async fn review_in(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        vault: VaultId,
+        id: Id,
+        reviewed: bool,
+    ) -> Result<(Document, bool)> {
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let existing: Document = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("Document", id))?;
+
+        if existing.reviewed_at.is_some() == reviewed {
+            return Ok((existing, false));
+        }
+        let before = capture_document(tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let mut review = folio_core::models::DocumentReview::default();
+        review.set_reviewed_from_context(reviewed);
+        let decision = review.decision();
+        sqlx::query("UPDATE documents SET reviewed_at = ?, reviewed_by = ?, review_origin = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ?")
+            .bind(decision.map(|d| d.reviewed_at.to_rfc3339()))
+            .bind(decision.and_then(|d| d.reviewed_by.as_ref()).map(|id| id.0.as_str()))
+            .bind(decision.map(|d| d.origin.as_str()))
+            .bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string())
+            .execute(&mut **tx).await.map_err(map_sqlx_error)?;
+        self.emit_metadata_in(tx, &before).await?;
+        let row: DocumentRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ?"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let result = row.try_into()?;
+        Ok((result, true))
+    }
+
+    async fn update_in(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        vault: VaultId,
+        id: Id,
+        params: UpdateDocument,
+    ) -> Result<(Document, bool)> {
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let existing: Document = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("Document", id))?;
+
+        let before = capture_document(tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let title = params.title.unwrap_or_else(|| existing.title.clone());
+        let content = params.content.or_else(|| existing.content.clone());
+        let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
+        let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
+        let document_date = params.document_date.unwrap_or(existing.document_date);
+        let now = Utc::now();
+
+        let tags_changed = if let Some(tags) = params.tag_ids {
+            self.replace_tags(tx, vault, id, &tags).await?
+        } else {
+            false
+        };
+        if title == existing.title
+            && content == existing.content
+            && correspondent_id == existing.correspondent_id
+            && document_type_id == existing.document_type_id
+            && document_date == existing.document_date
+            && !tags_changed
+        {
+            return Ok((existing, false));
+        }
+
+        if let Some(c) = correspondent_id.filter(|c| Some(*c) != existing.correspondent_id) {
+            require_entry(tx, "correspondents", "Correspondent", vault, c).await?;
+        }
+        if let Some(t) = document_type_id.filter(|t| Some(*t) != existing.document_type_id) {
+            require_entry(tx, "document_types", "DocumentType", vault, t).await?;
+        }
+
+        sqlx::query(
+            "UPDATE documents SET title = ?, content = ?, correspondent_id = ?,
+                                  document_type_id = ?, updated_at = ?, document_date = ?, updated_by = ?
+             WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+        )
+        .bind(&title)
+        .bind(&content)
+        .bind(correspondent_id.map(|id| id.to_string()))
+        .bind(document_type_id.map(|id| id.to_string()))
+        .bind(now.to_rfc3339())
+        .bind(document_date.map(|value| value.to_string()))
+        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .execute(&mut **tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        self.emit_metadata_in(tx, &before).await?;
+
+        Ok((
+            Document {
+                id,
+                vault_id: vault,
+                uploaded_by: existing.uploaded_by,
+                created_by: existing.created_by,
+                updated_by: folio_core::mutation::current_actor(),
+                document_date,
+                reviewed_at: existing.reviewed_at,
+                reviewed_by: existing.reviewed_by,
+                review_origin: existing.review_origin,
+                title,
+                content,
+                original_filename: existing.original_filename,
+                file_path: existing.file_path,
+                file_size: existing.file_size,
+                mime_type: existing.mime_type,
+                correspondent_id,
+                document_type_id,
+                page_count: existing.page_count,
+                source: existing.source,
+                ocr_status: existing.ocr_status,
+                embed_status: existing.embed_status,
+                deleted_at: None,
+                purge_requested_at: None,
+                created_at: existing.created_at,
+                updated_at: now,
+            },
+            true,
+        ))
+    }
+
+    async fn trash_in(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        vault: VaultId,
+        id: Id,
+    ) -> Result<bool> {
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents
+             WHERE id = ? AND vault_id = ?"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let document: Document = row.ok_or_else(|| not_found("Document", id))?.try_into()?;
+        if document.deleted_at.is_some() {
+            return Ok(false);
+        }
+        let now = Utc::now();
+        sqlx::query("UPDATE documents SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
+            .bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut **tx).await.map_err(map_sqlx_error)?;
+        sqlx::query(crate::database::archival::CANCEL_QUEUED)
+            .bind("Document trashed")
+            .bind(id.to_string())
+            .execute(&mut **tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        self.emit_in(tx, DocumentEvent::Trashed { document_id: id })
+            .await?;
+        Ok(true)
+    }
+
+    async fn change_tags_in(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        vault: VaultId,
+        document_id: Id,
+        tag_ids: &[Id],
+        add: bool,
+    ) -> Result<()> {
+        let before = capture_document(tx, document_id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", document_id))?;
+        let operation = if add {
+            "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING"
+        } else {
+            "DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?"
+        };
+        let mut changed = false;
+        for &tag_id in tag_ids {
+            if add {
+                require_entry(tx, "tags", "Tag", vault, tag_id).await?;
+            }
+            let result = sqlx::query(operation)
+                .bind(document_id.to_string())
+                .bind(tag_id.to_string())
+                .execute(&mut **tx)
+                .await
+                .map_err(map_sqlx_error)?;
+            changed |= result.rows_affected() > 0;
+        }
+        if changed {
+            stamp_document(tx, vault, document_id).await?;
+            self.emit_metadata_in(tx, &before).await?;
+        }
+        Ok(())
+    }
+
     async fn replace_tags(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,

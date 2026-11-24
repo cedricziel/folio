@@ -514,8 +514,9 @@ impl WorkflowRepository for SqliteWorkflowRepository {
             .await
             .map_err(repo_err)?;
         let updated = sqlx::query(
-            "UPDATE workflow_runs SET status = ?, attempts = ?, completed_actions = ?, last_error = ?, \
-             response_status = ?, finished_at = ? WHERE id = ? AND status = 'pending'",
+            "UPDATE workflow_runs SET status = ?1, attempts = ?2, completed_actions = ?3, last_error = ?4,
+                                      response_status = ?5, finished_at = ?6
+             WHERE id = ?7 AND status = 'pending' AND completed_actions <= ?3 AND attempts <= ?2",
         )
         .bind(run.status.as_str())
         .bind(run.attempts)
@@ -528,9 +529,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .await
         .map_err(repo_err)?;
         if updated.rows_affected() == 0 {
-            return Err(Error::Conflict(
-                "Workflow run is already terminal or missing".into(),
-            ));
+            return Err(Error::Conflict("Workflow run is no longer current".into()));
         }
         if run.status.is_terminal() {
             let (vault_id, workflow_id, payload): (String, String, String) = sqlx::query_as(

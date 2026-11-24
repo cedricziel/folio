@@ -61,24 +61,16 @@ impl Importer {
         Ok(expected)
     }
 
-    /// Stores the original of a created upload unless it is already there, finalizes it and queues processing.
-    /// Every step can be repeated, so an interrupted import is resumed by running it again.
-    async fn finish(&self, vault: VaultId, document: Document, data: Vec<u8>) -> Result<Document> {
+    async fn publish(&self, vault: VaultId, document: &Document, data: Vec<u8>) -> Result<()> {
         let imported = async {
-            let identity = self.store_original(&document, data).await?;
+            let identity = self.store_original(document, data).await?;
             self.documents
                 .finalize_verified_upload(vault, document.id, &identity)
                 .await?;
             if let Err(e) = self.queue.enqueue_processing(vault, document.id).await {
                 tracing::error!("Failed to queue processing of {}: {e}", document.id);
             }
-            self.documents
-                .find_by_id(vault, document.id)
-                .await?
-                .ok_or_else(|| crate::Error::NotFound {
-                    entity_type: "Document",
-                    id: document.id.to_string(),
-                })
+            Ok(())
         }
         .await;
         if imported.is_err()
@@ -100,6 +92,17 @@ impl Importer {
             }
         }
         imported
+    }
+
+    async fn finish(&self, vault: VaultId, document: Document, data: Vec<u8>) -> Result<Document> {
+        self.publish(vault, &document, data).await?;
+        self.documents
+            .find_by_id(vault, document.id)
+            .await?
+            .ok_or_else(|| crate::Error::NotFound {
+                entity_type: "Document",
+                id: document.id.to_string(),
+            })
     }
 }
 
@@ -126,12 +129,12 @@ impl DocumentImporter for Importer {
             .await
     }
 
-    async fn import_as(&self, vault: VaultId, id: Id, upload: NewUpload) -> Result<Document> {
+    async fn import_as(&self, vault: VaultId, id: Id, upload: NewUpload) -> Result<()> {
         let document = self.begin_as(vault, id, &upload).await?;
         if document.file_path.is_some() {
-            return Ok(document);
+            return Ok(());
         }
-        self.finish(vault, document, upload.data).await
+        self.publish(vault, &document, upload.data).await
     }
 
     async fn import_reserved(
