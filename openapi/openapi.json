@@ -8921,16 +8921,6 @@
               }
             }
           },
-          "400": {
-            "description": "The request is malformed or fails validation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
           "401": {
             "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
           },
