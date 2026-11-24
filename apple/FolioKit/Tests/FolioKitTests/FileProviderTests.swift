@@ -70,6 +70,90 @@ struct VaultProviderCatalogTests {
     private let personal = Vault(id: UUID(), name: "Personal", role: .owner)
     private let shared = Vault(id: UUID(), name: "Household", role: .viewer)
 
+    @Test func searchReturnsRankedBrowsableAliasesForViewerVault() async throws {
+        let best = Document(title: "Ranked first", originalFilename: "2026/invoice.pdf")
+        let next = Document(title: "Ranked second")
+        let sharedService = MockFolioService(documents: [best, best, next, Document(title: "Beyond limit")])
+        let own = Document(title: "Personal match")
+        let personalService = MockFolioService(documents: [own])
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id),
+            vaultServices: [personal.id: personalService, shared.id: sharedService]
+        )
+        let catalog = FolioCatalog(service: source)
+        let folder = FolioItemID.Folder.scoped(shared.id, .all)
+
+        let results = try await catalog.search(" invoice ", limit: 2)
+
+        let sharedAlias = FolioItemID.document(best.id, in: folder)
+        let personalAlias = FolioItemID.document(own.id, in: .scoped(personal.id, .all))
+        let expected =
+            shared.id.uuidString < personal.id.uuidString
+            ? [sharedAlias, personalAlias] : [personalAlias, sharedAlias]
+        #expect(results.map(\.id) == expected)
+        let first = try #require(results.first { $0.parent == .folder(folder) })
+        #expect(first.name == "2026-invoice.pdf")
+        #expect(first.parent == .folder(folder))
+        #expect(try await catalog.node(for: first.id)?.document == best)
+        #expect(await sharedService.queries == ["invoice", ""])
+        #expect(await personalService.queries == ["invoice"])
+    }
+
+    @Test func searchSkipsRevokedVaultWithCachedMembership() async throws {
+        let sharedService = MockFolioService(documents: [Document(title: "Revoked")])
+        let own = Document(title: "Still visible")
+        let personalService = MockFolioService(documents: [own])
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [shared], defaultVaultID: shared.id),
+            vaultServices: [shared.id: sharedService, personal.id: personalService]
+        )
+        let catalog = FolioCatalog(service: source, cache: FolioCatalogCache())
+        _ = try await catalog.children(of: .root)
+        await source.setVaults(VaultCatalog(vaults: [personal], defaultVaultID: personal.id))
+
+        let results = try await catalog.search("letter", limit: 5)
+        #expect(results.map(\.id) == [.document(own.id, in: .scoped(personal.id, .all))])
+        #expect(await sharedService.queries.isEmpty)
+        #expect(await personalService.queries == ["letter"])
+    }
+
+    @Test func blankSearchDoesNotListDocuments() async throws {
+        let source = MockFolioService(documents: [Document(title: "Unrelated")])
+        let catalog = FolioCatalog(service: source)
+
+        #expect(try await catalog.search("  ", limit: 5).isEmpty)
+        #expect(await source.queries.isEmpty)
+    }
+
+    @Test func searchReturnsNoResultsWhenVaultIsRevokedAfterDiscovery() async throws {
+        let sharedService = MockFolioService()
+        await sharedService.setFailure(.server(status: 404, message: "Vault not found"))
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [shared], defaultVaultID: shared.id),
+            vaultServices: [shared.id: sharedService]
+        )
+        let catalog = FolioCatalog(service: source)
+
+        #expect(try await catalog.search("invoice", limit: 5).isEmpty)
+        #expect(await sharedService.queries == ["invoice"])
+    }
+
+    @Test func searchDiscardsAResponseAfterCancellation() async {
+        let source = MockFolioService(documents: [Document(title: "Late response")])
+        await source.suspendDocuments()
+        let catalog = FolioCatalog(service: source)
+        let request = Task {
+            try await catalog.search("late", limit: 5)
+        }
+        await source.waitForDocumentRequest()
+        request.cancel()
+        await source.releaseDocuments()
+
+        await #expect(throws: CancellationError.self) {
+            try await request.value
+        }
+    }
+
     @Test func rootListsVaultsAndEachLibraryKeepsItsOwnDocuments() async throws {
         let privateDocument = Document(title: "Private letter")
         let sharedDocument = Document(title: "Shared letter")

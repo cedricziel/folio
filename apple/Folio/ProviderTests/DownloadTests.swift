@@ -4,6 +4,7 @@ import PDFKit
 import XCTest
 
 private let downloadID = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+private let otherSearchID = UUID(uuidString: "11111111-2222-4333-8444-555555555556")!
 private let downloadVaultID = UUID(uuidString: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")!
 
 private final class TransferProtocol: URLProtocol {
@@ -37,6 +38,7 @@ private final class TransferProtocol: URLProtocol {
         }
         let download = request.url!.path.hasSuffix("/download")
         let discovery = request.url!.path.hasSuffix("/api/vaults")
+        let search = request.url!.path.hasSuffix("/api/documents/search")
         let missing = download && request.url!.path.contains("/missing/")
         let wrongVault =
             !discovery && request.value(forHTTPHeaderField: "X-Folio-Vault") != downloadVaultID.uuidString.lowercased()
@@ -54,14 +56,20 @@ private final class TransferProtocol: URLProtocol {
                     contentsOf: Bundle(for: DownloadTests.self).url(forResource: "sample", withExtension: "pdf")!
                 )
         } else {
-            body = Data(
-                """
-                {"documents":[{"id":"\(downloadID.uuidString.lowercased())","title":"Sample","original_filename":"sample.pdf",
+            let document = """
+                {"id":"\(downloadID.uuidString.lowercased())","title":"Sample","original_filename":"sample.pdf",
                 "mime_type":"application/pdf","vault_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","uploaded_by":"test",
                 "ocr_status":"done","embed_status":"done","tags":[],
-                "created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-01T00:00:00Z"}],"count":1}
-                """.utf8
-            )
+                "created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-01T00:00:00Z"}
+                """
+            let other = document.replacingOccurrences(
+                of: downloadID.uuidString.lowercased(), with: otherSearchID.uuidString.lowercased()
+            ).replacingOccurrences(of: "sample.pdf", with: "another.pdf")
+            let payload =
+                search
+                ? #"{"results":[{"document":\#(document),"score":1},{"document":\#(other),"score":0.9}]}"#
+                : #"{"documents":[\#(document),\#(other)],"count":2}"#
+            body = Data(payload.utf8)
         }
         let response = HTTPURLResponse(
             url: request.url!, statusCode: status, httpVersion: nil,
@@ -70,6 +78,33 @@ private final class TransferProtocol: URLProtocol {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private final class SearchObserver: NSObject, NSFileProviderSearchEnumerationObserver {
+    let maximumNumberOfResultsPerPage = 1
+    private let reply: CheckedContinuation<(NSFileProviderItemIdentifier, NSFileProviderPage?), any Error>
+    private var identifier: NSFileProviderItemIdentifier?
+
+    init(reply: CheckedContinuation<(NSFileProviderItemIdentifier, NSFileProviderPage?), any Error>) {
+        self.reply = reply
+    }
+
+    func didEnumerate(_ results: [any NSFileProviderSearchResult]) {
+        XCTAssertEqual(results.count, 1)
+        identifier = results.first?.itemIdentifier
+    }
+
+    func finishEnumerating(upTo page: NSFileProviderPage?) {
+        guard let identifier else {
+            reply.resume(throwing: NSFileProviderError(.noSuchItem))
+            return
+        }
+        reply.resume(returning: (identifier, page))
+    }
+
+    func finishEnumeratingWithError(_ error: any Error) {
+        reply.resume(throwing: error)
     }
 }
 
@@ -101,11 +136,14 @@ final class DownloadTests: XCTestCase {
         )
     }
 
-    private func fetch(_ provider: FolioFileProvider) async throws -> URL {
+    private func fetch(
+        _ provider: FolioFileProvider,
+        identifier: NSFileProviderItemIdentifier = FolioItemID.document(downloadID, in: .scoped(downloadVaultID, .all))
+            .providerIdentifier
+    ) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             _ = provider.fetchContents(
-                for: FolioItemID.document(downloadID, in: .scoped(downloadVaultID, .all)).providerIdentifier,
-                version: nil, request: NSFileProviderRequest()
+                for: identifier, version: nil, request: NSFileProviderRequest()
             ) { @Sendable url, item, error in
                 if let error {
                     continuation.resume(throwing: error); return
@@ -118,6 +156,28 @@ final class DownloadTests: XCTestCase {
                 continuation.resume(returning: url)
             }
         }
+    }
+
+    func testViewerSearchResultDownloadsAsTheExistingAlias() async throws {
+        let provider = provider()
+        let enumerator = provider.makeSearchEnumerator(query: "sample", desiredCount: 50)
+        defer { enumerator.invalidate() }
+        let (identifier, nextPage) = try await withCheckedThrowingContinuation { continuation in
+            enumerator.enumerateSearchResults(for: SearchObserver(reply: continuation), startingAt: nil)
+        }
+        let page = try XCTUnwrap(nextPage)
+        let (other, end) = try await withCheckedThrowingContinuation { continuation in
+            enumerator.enumerateSearchResults(for: SearchObserver(reply: continuation), startingAt: page)
+        }
+        XCTAssertNil(end)
+        XCTAssertEqual(
+            other, FolioItemID.document(otherSearchID, in: .scoped(downloadVaultID, .all)).providerIdentifier)
+        XCTAssertEqual(
+            identifier, FolioItemID.document(downloadID, in: .scoped(downloadVaultID, .all)).providerIdentifier)
+        let first = try await fetch(provider, identifier: identifier)
+        let reopened = try await fetch(provider, identifier: identifier)
+        XCTAssertEqual(PDFDocument(url: first)?.pageCount, 1)
+        XCTAssertEqual(try Data(contentsOf: first), try Data(contentsOf: reopened))
     }
 
     func testReadOnlyDocumentDownloadsAsReadablePDFAndCanReopen() async throws {
