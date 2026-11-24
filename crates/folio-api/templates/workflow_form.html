@@ -245,6 +245,57 @@
             </fieldset>
         </fieldset>
 
+        <fieldset class="field" data-workflow-form-target="dateFilter" hidden disabled>
+            <legend class="legend">Document date conditions</legend>
+            <label for="document-date-state">Date change</label>
+            <select class="select" id="document-date-state" name="document_date_state">
+                <option value="">Any change</option>
+                <option value="set"{% if values.document_date_state == "set" %} selected{% endif %}>Date set</option>
+                <option value="replaced"{% if values.document_date_state == "replaced" %} selected{% endif %}>Date changed</option>
+                <option value="cleared"{% if values.document_date_state == "cleared" %} selected{% endif %}>Date cleared</option>
+            </select>
+            <label for="document-date-before">Previous document date</label>
+            <input class="input" id="document-date-before" name="document_date_before" type="date" value="{{ values.document_date_before }}">
+            <label for="document-date-after">New document date</label>
+            <input class="input" id="document-date-after" name="document_date_after" type="date" value="{{ values.document_date_after }}">
+        </fieldset>
+
+        <fieldset class="field" data-workflow-form-target="reviewFilter" hidden disabled>
+            <legend class="legend">Review conditions</legend>
+            <label for="review-origin">Review origin</label>
+            <select class="select" id="review-origin" name="review_origin">
+                <option value="">Any origin</option>
+                <option value="human"{% if values.review_origin == "human" %} selected{% endif %}>Person</option>
+                <option value="system"{% if values.review_origin == "system" %} selected{% endif %}>Folio</option>
+                <option value="legacy_classification"{% if values.review_origin == "legacy_classification" %} selected{% endif %}>Earlier classification</option>
+            </select>
+            <fieldset class="field" data-workflow-form-target="unreviewFilter" hidden disabled aria-label="Unreview conditions">
+                <label for="unreview-reason">Reason for marking unreviewed</label>
+                <select class="select" id="unreview-reason" name="unreview_reason">
+                    <option value="">Any reason</option>
+                    <option value="user"{% if values.unreview_reason == "user" %} selected{% endif %}>Marked by a person</option>
+                    <option value="system"{% if values.unreview_reason == "system" %} selected{% endif %}>Marked by Folio</option>
+                    <option value="file_replaced"{% if values.unreview_reason == "file_replaced" %} selected{% endif %}>File replaced</option>
+                    <option value="file_restored"{% if values.unreview_reason == "file_restored" %} selected{% endif %}>Earlier revision restored</option>
+                </select>
+            </fieldset>
+        </fieldset>
+
+        <fieldset class="field" data-workflow-form-target="revisionFilter" hidden disabled>
+            <legend class="legend">File revision conditions</legend>
+            <label for="revision-number">Revision number</label>
+            <input class="input" id="revision-number" name="revision_number" type="number" min="1" step="1" value="{{ values.revision_number }}">
+            <fieldset class="field" data-workflow-form-target="revisionSourceFilter" hidden disabled aria-label="Revision source conditions">
+                <label for="revision-source">Revision source</label>
+                <select class="select" id="revision-source" name="revision_source">
+                    <option value="">Any source</option>
+                    <option value="upload"{% if values.revision_source == "upload" %} selected{% endif %}>First upload</option>
+                    <option value="replacement"{% if values.revision_source == "replacement" %} selected{% endif %}>Replacement file</option>
+                    <option value="restoration"{% if values.revision_source == "restoration" %} selected{% endif %}>Restored revision</option>
+                </select>
+            </fieldset>
+        </fieldset>
+
         {% include "workflow_condition_editor.html" %}
 
         <p class="f-notice" data-workflow-form-target="discard" hidden>

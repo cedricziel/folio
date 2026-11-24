@@ -227,6 +227,36 @@ impl WorkflowTriggerRegistry {
                             },
                         ));
                     }
+                    use WorkflowConditionType::{Date, Integer, Text};
+                    let document_fields: &[(&str, &str, WorkflowConditionType)] = match trigger {
+                        WorkflowTrigger::DocumentDateChanged => &[
+                            ("before", "Previous document date", Date),
+                            ("after", "New document date", Date),
+                            ("state", "Date change", Text),
+                        ],
+                        WorkflowTrigger::DocumentReviewed => &[("origin", "Review origin", Text)],
+                        WorkflowTrigger::DocumentUnreviewed => &[
+                            ("origin", "Previous review origin", Text),
+                            ("reason", "Reason for marking unreviewed", Text),
+                        ],
+                        WorkflowTrigger::DocumentRevisionCreated => &[
+                            ("number", "Revision number", Integer),
+                            ("source", "Revision source", Text),
+                        ],
+                        WorkflowTrigger::DocumentRevisionRestored => {
+                            &[("number", "Revision number", Integer)]
+                        }
+                        _ => &[],
+                    };
+                    definition
+                        .condition_fields
+                        .extend(document_fields.iter().map(|(key, label, value_type)| {
+                            WorkflowConditionField {
+                                key: format!("event.document_change.{key}"),
+                                label: (*label).into(),
+                                value_type: *value_type,
+                            }
+                        }));
                     definition
                 })
                 .collect();

@@ -2581,6 +2581,160 @@ async fn a_domain_and_compatibility_projection_each_keep_their_selected_trigger(
 }
 
 #[tokio::test]
+async fn file_and_review_workflows_use_the_committed_document_snapshot() {
+    use folio_core::document_transitions::{revision_publication_envelopes, RevisionOccurrence};
+    use folio_core::models::FileIdentity;
+    use folio_core::ports::keys;
+    use serde_json::json;
+
+    let h = Harness::new().await;
+    let document = h
+        .documents
+        .create_for_upload(
+            h.vault,
+            CreateDocument {
+                title: "original title".into(),
+                original_filename: Some("invoice.pdf".into()),
+                mime_type: Some("application/pdf".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let original = FileIdentity::from_bytes(
+        keys::original(document.id),
+        "application/pdf",
+        b"first verified original",
+    );
+    h.documents
+        .finalize_verified_upload(h.vault, document.id, &original)
+        .await
+        .unwrap();
+    h.documents
+        .update(
+            h.vault,
+            document.id,
+            UpdateDocument {
+                document_date: Some(Some("2024-02-29".parse().unwrap())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    for reviewed in [true, false] {
+        h.documents
+            .set_reviewed(h.vault, document.id, reviewed)
+            .await
+            .unwrap();
+    }
+    h.documents
+        .update(
+            h.vault,
+            document.id,
+            UpdateDocument {
+                title: Some("later title".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let mut events = h.pending_events().await;
+    let uploaded = events
+        .iter()
+        .find_map(|item| match &item.event {
+            Some(DocumentEvent::Created { document_id }) if *document_id == document.id => {
+                item.context.as_deref()
+            }
+            _ => None,
+        })
+        .expect("upload occurrence snapshot");
+    let restored = revision_publication_envelopes(
+        uploaded,
+        uploaded,
+        RevisionOccurrence {
+            revision_id: Uuid::new_v4(),
+            revision_number: 3,
+            previous_revision_id: Some(Uuid::new_v4()),
+            restored_from_revision_id: Some(document.id),
+            original: &original,
+        },
+    )
+    .unwrap()
+    .into_iter()
+    .find(|event| event.event_type() == "document.revision_restored")
+    .unwrap();
+    let mut connection = h.pool.acquire().await.unwrap();
+    folio_infra::database::sqlite::insert_domain_event(&mut connection, &restored)
+        .await
+        .unwrap();
+    drop(connection);
+
+    events.extend(h.pending_events().await);
+    let mismatch = serde_json::from_value(json!({
+        "event": { "document_change": { "type": "date", "after": "2024-03-01" } }
+    }))
+    .unwrap();
+    h.workflow(
+        WorkflowTrigger::DocumentDateChanged,
+        mismatch,
+        unreachable_hook(),
+    )
+    .await;
+
+    for (trigger, predicate) in [
+        (
+            WorkflowTrigger::DocumentDateChanged,
+            json!({"type": "date", "after": "2024-02-29", "state": "set"}),
+        ),
+        (
+            WorkflowTrigger::DocumentReviewed,
+            json!({"type": "review", "origin": "system"}),
+        ),
+        (
+            WorkflowTrigger::DocumentUnreviewed,
+            json!({"type": "review", "reason": "system"}),
+        ),
+        (
+            WorkflowTrigger::DocumentRevisionCreated,
+            json!({"type": "revision", "number": 1, "source": "upload"}),
+        ),
+        (
+            WorkflowTrigger::DocumentRevisionRestored,
+            json!({"type": "revision", "number": 3}),
+        ),
+    ] {
+        let conditions = serde_json::from_value(json!({
+            "event": { "document_change": predicate }
+        }))
+        .unwrap();
+        let workflow = h.workflow(trigger, conditions, unreachable_hook()).await;
+        let committed = events
+            .iter()
+            .find(|item| {
+                item.envelope
+                    .as_ref()
+                    .is_some_and(|event| event.event_type() == trigger.as_str())
+            })
+            .expect("committed document occurrence");
+        for origin in [EventOrigin::Workflow, EventOrigin::Import] {
+            let suppressed = OutboxEvent {
+                origin,
+                ..committed.clone()
+            };
+            assert!(h.engine.handle(&suppressed).await.unwrap().is_empty());
+        }
+        let runs = h.engine.handle(committed).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].workflow_id, workflow.id);
+        let payload: serde_json::Value = serde_json::from_str(&runs[0].payload).unwrap();
+        assert_eq!(payload["event"], trigger.as_str());
+        assert_eq!(payload["document"]["title"], "original title");
+        assert!(h.engine.handle(committed).await.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn metadata_workflows_use_the_committed_occurrence_and_run_once() {
     use folio_core::models::{MetadataChange, MetadataFieldInput, MetadataKind, MetadataValue};
     use folio_core::ports::{MetadataFieldRepository, MetadataValueRepository};
