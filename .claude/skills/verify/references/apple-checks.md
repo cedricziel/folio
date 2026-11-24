@@ -230,8 +230,9 @@ history, restored workflows, conflict recovery, read-only controls, and retry.
 For trigger editing, the package fixture exercises the generated catalog and
 update requests in the selected vault. It checks all six note and comment
 choices, all six ingestion and source outcomes, and retained conditions,
-ordered actions, and credential masks. The UI fixture saves a note trigger,
-reopens the picker, and saves a source trigger.
+ordered actions, and credential masks. The UI fixture saves a note trigger and a
+comment trigger, checks that each stays selected when reopened, then saves a
+source trigger.
 
 ## Verify Apple vault management
 
