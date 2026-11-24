@@ -134,11 +134,11 @@ final class ThumbnailTests: XCTestCase {
         handle { $0.respond(401) }
         let itemCompleted = expectation(description: "Authentication failure delivered")
         let completed = expectation(description: "Batch completed")
-        _ = provider.fetchThumbnails(for: [identifier()], requestedSize: .zero) { _, data, error in
+        _ = provider.fetchThumbnails(for: [identifier()], requestedSize: .zero) { @Sendable _, data, error in
             XCTAssertNil(data)
             XCTAssertEqual((error as? NSFileProviderError)?.code, .notAuthenticated)
             itemCompleted.fulfill()
-        } completionHandler: { error in
+        } completionHandler: { @Sendable error in
             XCTAssertNil(error)
             completed.fulfill()
         }
@@ -150,12 +150,12 @@ final class ThumbnailTests: XCTestCase {
         let invalid = NSFileProviderItemIdentifier("not-a-document")
         let itemCompleted = expectation(description: "Invalid item rejected")
         let completed = expectation(description: "Batch completed")
-        _ = provider.fetchThumbnails(for: [invalid], requestedSize: .zero) { item, data, error in
+        _ = provider.fetchThumbnails(for: [invalid], requestedSize: .zero) { @Sendable item, data, error in
             XCTAssertEqual(item, invalid)
             XCTAssertNil(data)
             XCTAssertEqual((error as? NSFileProviderError)?.code, .noSuchItem)
             itemCompleted.fulfill()
-        } completionHandler: { error in
+        } completionHandler: { @Sendable error in
             XCTAssertNil(error)
             completed.fulfill()
         }
@@ -165,9 +165,9 @@ final class ThumbnailTests: XCTestCase {
     func testEmptyBatchCompletesWithoutRequestingCredentials() async {
         handle { _ in XCTFail("Empty batch should not request a thumbnail") }
         let completed = expectation(description: "Empty batch completed")
-        _ = provider.fetchThumbnails(for: [], requestedSize: .zero) { _, _, _ in
+        _ = provider.fetchThumbnails(for: [], requestedSize: .zero) { @Sendable _, _, _ in
             XCTFail("Empty batch has no item callback")
-        } completionHandler: { error in
+        } completionHandler: { @Sendable error in
             XCTAssertNil(error)
             completed.fulfill()
         }
@@ -182,9 +182,9 @@ final class ThumbnailTests: XCTestCase {
         let completed = expectation(description: "Cancellation completed")
         completed.assertForOverFulfill = true
         let progress = provider.fetchThumbnails(for: [identifier(), identifier(UUID())], requestedSize: .zero) {
-            _, _, _ in
+            @Sendable _, _, _ in
             XCTFail("Cancelled batch should not deliver item callbacks")
-        } completionHandler: { error in
+        } completionHandler: { @Sendable error in
             XCTAssertEqual((error as NSError?)?.domain, NSCocoaErrorDomain)
             XCTAssertEqual((error as NSError?)?.code, NSUserCancelledError)
             completed.fulfill()

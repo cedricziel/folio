@@ -160,7 +160,7 @@ final class EnumerationTests: XCTestCase {
 
     private func anchor(for enumerator: FolioEnumerator) async throws -> NSFileProviderSyncAnchor {
         let value = await withCheckedContinuation { continuation in
-            enumerator.currentSyncAnchor { continuation.resume(returning: $0) }
+            enumerator.currentSyncAnchor { @Sendable anchor in continuation.resume(returning: anchor) }
         }
         return try XCTUnwrap(value)
     }

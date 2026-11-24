@@ -58,7 +58,7 @@ final class FileProviderTests: XCTestCase {
         _ = provider.createItem(
             basedOn: template, fields: [.contents], contents: file, request: NSFileProviderRequest()
         ) {
-            item, _, _, error in
+            @Sendable item, _, _, error in
             XCTAssertNil(error)
             XCTAssertEqual(
                 item?.parentItemIdentifier, FolioItemID.folder(.scoped(shared.id, .inbox)).providerIdentifier
@@ -89,7 +89,7 @@ final class FileProviderTests: XCTestCase {
         _ = provider.createItem(
             basedOn: template, fields: [], contents: URL(filePath: "/unused"), request: NSFileProviderRequest()
         ) {
-            item, _, _, error in
+            @Sendable item, _, _, error in
             XCTAssertNil(item)
             XCTAssertEqual((error as NSError?)?.code, NSFeatureUnsupportedError)
             completed.fulfill()
@@ -111,7 +111,7 @@ final class FileProviderTests: XCTestCase {
         _ = provider.createItem(
             basedOn: UploadTemplate(), fields: [.contents, .filename], contents: file,
             request: NSFileProviderRequest()
-        ) { item, pending, fetch, error in
+        ) { @Sendable item, pending, fetch, error in
             XCTAssertNil(error)
             XCTAssertNotNil(item)
             XCTAssertEqual(item?.filename, "scan.pdf")
@@ -173,10 +173,10 @@ final class FileProviderTests: XCTestCase {
             domain: domain, service: service, localMetadata: LocalItemMetadataStore(file: file)
         )
         let looked = expectation(description: "Item looked up")
-        _ = restarted.item(for: id.providerIdentifier, request: NSFileProviderRequest()) { item, error in
+        _ = restarted.item(for: id.providerIdentifier, request: NSFileProviderRequest()) { @Sendable item, error in
             XCTAssertNil(error)
-            XCTAssertEqual(item?.tagData ?? nil, Data("red".utf8))
-            XCTAssertEqual(item?.lastUsedDate ?? nil, edited.lastUsedDate)
+            XCTAssertEqual(item?.tagData ?? nil, tags)
+            XCTAssertEqual(item?.lastUsedDate ?? nil, lastUsed)
             looked.fulfill()
         }
         await fulfillment(of: [looked], timeout: 5)
@@ -287,7 +287,7 @@ final class FileProviderTests: XCTestCase {
             -> ReportedPolicy
         {
             try await withCheckedThrowingContinuation { continuation in
-                _ = provider.item(for: id, request: NSFileProviderRequest()) { item, error in
+                _ = provider.item(for: id, request: NSFileProviderRequest()) { @Sendable item, error in
                     if let item {
                         continuation.resume(
                             returning: ReportedPolicy(
