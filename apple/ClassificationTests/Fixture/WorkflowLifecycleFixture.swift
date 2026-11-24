@@ -78,6 +78,9 @@ struct WorkflowLifecycleFixture: View {
         [
             .init(id: "document.uploaded", title: "When a document is added", target: .document, conditionFields: []),
             .init(id: "document_note.created", title: "When a note is created", target: .document, conditionFields: []),
+            .init(
+                id: "document_comment.created", title: "When a comment is created", target: .document, conditionFields: []
+            ),
             .init(id: "source.failed", title: "When a source becomes unavailable", target: .event, conditionFields: []),
         ]
     }

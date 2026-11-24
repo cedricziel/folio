@@ -845,6 +845,120 @@ async fn trigger_edit_rejects_a_stale_revision_and_keeps_the_current_definition(
 }
 
 #[tokio::test]
+async fn document_condition_edit_rejects_stale_revisions_and_preserves_other_conditions() {
+    let app = test_app().await;
+    let mut input = workflow_body("https://example.com/revisions");
+    input["trigger"] = json!("document.revision_created");
+    input["conditions"] = json!({
+        "mime_type": "application/pdf",
+        "event": {"actor": {"type": "system"}, "document_change": {"type": "revision", "number": 2}},
+        "all": [{"filename_glob": "invoice-*"}]
+    });
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(input)).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let workflow_uri = format!("/api/workflows/{}", created["id"].as_str().unwrap());
+    let trigger_uri = format!("{workflow_uri}/trigger");
+
+    let (status, updated) = json_request(
+        &app,
+        "PATCH",
+        &trigger_uri,
+        Some(json!({
+            "trigger": "document.revision_created",
+            "expected_revision": created["revision"],
+            "document_change": {"type": "revision", "number": 3, "source": "replacement"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let mut expected = created["conditions"].clone();
+    expected["event"]["document_change"] =
+        json!({"type": "revision", "number": 3, "source": "replacement"});
+    assert_eq!(updated["conditions"], expected);
+    assert_eq!(updated["actions"], created["actions"]);
+    assert_eq!(updated["cadence"], created["cadence"]);
+
+    let (status, conflict) = json_request(
+        &app,
+        "PATCH",
+        &trigger_uri,
+        Some(json!({
+            "trigger": "document.revision_created",
+            "expected_revision": created["revision"],
+            "document_change": null
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+    let (_, unchanged) = json_request(&app, "GET", &workflow_uri, None).await;
+    assert_eq!(unchanged, updated);
+
+    let (status, retained) = json_request(
+        &app,
+        "PATCH",
+        &trigger_uri,
+        Some(json!({
+            "trigger": "document.revision_created",
+            "expected_revision": updated["revision"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{retained}");
+    assert_eq!(retained["conditions"], expected);
+
+    let (status, cleared) = json_request(
+        &app,
+        "PATCH",
+        &trigger_uri,
+        Some(json!({
+            "trigger": "document.revision_created",
+            "expected_revision": retained["revision"],
+            "document_change": null
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    expected["event"]
+        .as_object_mut()
+        .unwrap()
+        .remove("document_change");
+    assert_eq!(cleared["conditions"], expected);
+    assert_eq!(cleared["actions"], created["actions"]);
+}
+
+#[tokio::test]
+async fn document_condition_patch_retains_the_ordered_trigger_selection() {
+    let app = test_app().await;
+    let mut input = workflow_body("https://example.com/reviews");
+    input["trigger"] = json!("document.reviewed");
+    input["triggers"] = json!(["document.reviewed", "document.unreviewed"]);
+    input["conditions"] = json!({
+        "event": {"actor": {"type": "system"}, "document_change": {"type": "review", "origin": "human"}},
+        "any": []
+    });
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(input)).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let trigger_uri = format!("/api/workflows/{}/trigger", created["id"].as_str().unwrap());
+    let (status, updated) = json_request(
+        &app,
+        "PATCH",
+        &trigger_uri,
+        Some(json!({
+            "trigger": "document.reviewed",
+            "expected_revision": created["revision"],
+            "document_change": {"type": "review", "origin": "system"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["triggers"], created["triggers"]);
+    let mut expected = created["conditions"].clone();
+    expected["event"]["document_change"]["origin"] = json!("system");
+    assert_eq!(updated["conditions"], expected);
+    assert_eq!(updated["actions"], created["actions"]);
+}
+
+#[tokio::test]
 async fn crud_round_trip() {
     let app = test_app().await;
 

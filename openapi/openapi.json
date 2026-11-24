@@ -8981,6 +8981,14 @@
         "responses": {
           "200": {
             "description": "Selectable workflow triggers",
+            "headers": {
+              "Folio-Workflow-Document-Conditions": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The server accepts guarded document predicate edits when true"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -9651,7 +9659,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "Change a workflow's trigger while retaining its other configuration.",
+        "summary": "Change a workflow's trigger and optional document predicate.",
         "operationId": "updateWorkflowTrigger",
         "parameters": [
           {
@@ -15127,6 +15135,17 @@
           "trigger"
         ],
         "properties": {
+          "document_change": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowDocumentConditions",
+                "description": "Omit to retain the document predicate. Use null to clear it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "expected_revision": {
             "type": "integer",
             "format": "int64",

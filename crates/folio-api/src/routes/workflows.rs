@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
+    response::IntoResponse,
     routing::{get, patch, post, put},
     Json, Router,
 };
@@ -14,8 +15,9 @@ use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use folio_core::models::{
-    redact_url, WebhookPayload, Workflow, WorkflowAction, WorkflowInput, WorkflowRun,
-    WorkflowTrigger, WorkflowTriggerDefinition, WorkflowTriggerRegistry,
+    redact_url, WebhookPayload, Workflow, WorkflowAction, WorkflowDocumentConditions,
+    WorkflowInput, WorkflowRun, WorkflowTrigger, WorkflowTriggerDefinition,
+    WorkflowTriggerRegistry,
 };
 use folio_core::ports::WorkflowRepository;
 use folio_infra::{workflow::WebhookRequest, WebhookClient};
@@ -265,23 +267,26 @@ pub(crate) struct WorkflowTriggerCatalogQuery {
     tag = "workflows",
     params(WorkflowTriggerCatalogQuery),
     responses(
-        (status = 200, description = "Selectable workflow triggers", body = Vec<WorkflowTriggerDefinition>),
+        (status = 200, description = "Selectable workflow triggers", body = Vec<WorkflowTriggerDefinition>,
+            headers(("Folio-Workflow-Document-Conditions" = String, description = "The server accepts guarded document predicate edits when true"))),
         BadRequest,
     )
 )]
 pub(crate) async fn list_triggers(
     DefaultVault(_vault): DefaultVault,
     ApiQuery(query): ApiQuery<WorkflowTriggerCatalogQuery>,
-) -> Json<Vec<&'static WorkflowTriggerDefinition>> {
+) -> impl IntoResponse {
     let extended = query.include_extended.unwrap_or_default();
-    Json(
-        WorkflowTriggerRegistry::built_in()
-            .definitions()
-            .iter()
-            .filter(|definition| {
-                extended || LEGACY_WORKFLOW_TRIGGER_IDS.contains(&definition.event_type.as_str())
-            })
-            .collect(),
+    let definitions: Vec<_> = WorkflowTriggerRegistry::built_in()
+        .definitions()
+        .iter()
+        .filter(|definition| {
+            extended || LEGACY_WORKFLOW_TRIGGER_IDS.contains(&definition.event_type.as_str())
+        })
+        .collect();
+    (
+        [("folio-workflow-document-conditions", "true")],
+        Json(definitions),
     )
 }
 
@@ -456,9 +461,22 @@ pub(crate) struct WorkflowTriggerUpdate {
     #[schema(minimum = 1)]
     expected_revision: i64,
     trigger: WorkflowTrigger,
+    /// Omit to retain the document predicate. Use null to clear it.
+    #[serde(default, deserialize_with = "deserialize_document_predicate")]
+    #[schema(value_type = Option<WorkflowDocumentConditions>, required = false)]
+    document_change: Option<Option<WorkflowDocumentConditions>>,
 }
 
-/// Change a workflow's trigger while retaining its other configuration.
+fn deserialize_document_predicate<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<WorkflowDocumentConditions>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<WorkflowDocumentConditions>::deserialize(deserializer).map(Some)
+}
+
+/// Change a workflow's trigger and optional document predicate.
 #[utoipa::path(
     patch,
     path = "/api/workflows/{id}/trigger",
@@ -495,13 +513,21 @@ pub(crate) async fn update_workflow_trigger(
                 .filter(|trigger| *trigger != input.trigger),
         )
         .collect();
+    let mut conditions = existing.conditions;
+    if let Some(document_change) = input.document_change {
+        let event = conditions.event.get_or_insert_with(Default::default);
+        event.document_change = document_change;
+        if *event == Default::default() {
+            conditions.event = None;
+        }
+    }
     let replacement = WorkflowInput {
         name: existing.name,
         enabled: existing.enabled,
         trigger: input.trigger,
         triggers,
         cadence: existing.cadence,
-        conditions: existing.conditions,
+        conditions,
         actions: existing.actions,
     };
     let workflow = state

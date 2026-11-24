@@ -133,6 +133,7 @@ import Testing
         }
         let choices = try await service().workflowTriggerChoices(vaultID: vaultID)
         #expect(choices.map(\.id) == ["saved_view.updated"])
+        #expect(choices.allSatisfy { !$0.canEditDocumentConditions })
     }
 
     @Test(arguments: [1, 2])
@@ -267,6 +268,71 @@ import Testing
         let saved = try await live.changeWorkflowTrigger(latest, to: "document_note.created")
         #expect(!saved.enabled)
         #expect(saved.revision == 3)
+    }
+
+    @Test func advertisedDocumentConditionsUseTheRevisionGuardAndClearWithNull() async throws {
+        let trigger = "document.revision_created"
+        let live = service()
+        LifecycleURLProtocol.responseHeaders = ["Folio-Workflow-Document-Conditions": "true"]
+        defer { LifecycleURLProtocol.responseHeaders = [:] }
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.url?.path == "/folio/api/workflows/triggers")
+            return (
+                200,
+                """
+                [{"event_type":"\(trigger)","label":"Revision created","subject_type":"document","target":"document",
+                "condition_fields":[{"key":"event.document_change.number","label":"Revision number","value_type":"integer"}]}]
+                """
+            )
+        }
+        let choice = try #require(try await live.workflowTriggerChoices(vaultID: vaultID).first)
+        #expect(choice.canEditDocumentConditions)
+        LifecycleURLProtocol.responseHeaders = [:]
+
+        let path = "/folio/api/workflows/\(workflowID.uuidString.lowercased())"
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            #expect(request.url?.path == path)
+            return (200, workflowJSON(deleted: false, trigger: trigger, revision: 7))
+        }
+        let workflow = try await live.workflowConfiguration(vaultID: vaultID, workflowID: workflowID)
+        var draft = try #require(try await live.loadWorkflowDocumentConditions(workflow, choice: choice))
+        draft[.number] = "3"
+
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url?.path == path + "/trigger")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
+            guard let data = LifecycleURLProtocol.body(for: request),
+                let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                let predicate = body["document_change"] as? [String: Any]
+            else { return (400, "{}") }
+            #expect(body["expected_revision"] as? Int64 == 7)
+            #expect(Set(body.keys) == ["trigger", "expected_revision", "document_change"])
+            #expect(predicate["type"] as? String == "revision")
+            #expect(predicate["number"] as? Int == 3)
+            return (
+                200,
+                workflowJSON(
+                    deleted: false, trigger: trigger, revision: 8,
+                    conditions: #"{"event":{"document_change":{"type":"revision","number":3}}}"#
+                )
+            )
+        }
+        let updated = try await live.saveWorkflowTrigger(workflow, choice: choice, documentConditions: draft)
+        #expect(updated.revision == 8)
+
+        LifecycleURLProtocol.handler = { request in
+            guard let data = LifecycleURLProtocol.body(for: request),
+                let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            else { return (400, "{}") }
+            #expect(request.httpMethod == "PATCH")
+            #expect(body["expected_revision"] as? Int64 == 8)
+            #expect(body["document_change"] is NSNull)
+            return (200, workflowJSON(deleted: false, trigger: trigger, revision: 9))
+        }
+        let cleared = try await live.saveWorkflowTrigger(updated, choice: choice, documentConditions: nil)
+        #expect(cleared.revision == 9)
     }
 
     @Test func anOlderServerKeepsTheListReadableWithoutOfferingUnconditionalTriggerEdits() async throws {
@@ -412,6 +478,51 @@ import Testing
         #expect(updated.revision == 8)
     }
 
+    @Test(arguments: [true, false])
+    func orderedTriggerSavesRetainOtherPredicatesWhenSettingOrClearingReviewOrigin(setOrigin: Bool) async throws {
+        let original = ["document.unreviewed", "document.reviewed"]
+        let reordered = Array(original.reversed())
+        let initialJSON = workflowJSON(
+            deleted: false, trigger: original[0], revision: 7, triggers: original,
+            conditions:
+                #"{"event":{"actor":{"type":"system"},"document_change":{"type":"review","origin":"human"}},"any":[]}"#)
+        let expected =
+            setOrigin
+            ? #"{"event":{"actor":{"type":"system"},"document_change":{"type":"review","origin":"system"}},"any":[]}"#
+            : #"{"event":{"actor":{"type":"system"}},"any":[]}"#
+        let updatedJSON = workflowJSON(
+            deleted: false, trigger: reordered[0], revision: 8, triggers: reordered, conditions: expected)
+        let choices = reordered.map {
+            WorkflowTriggerChoice(
+                id: $0, title: $0, target: .document,
+                conditionFields: [.init(id: "event.document_change.origin", title: "Review origin", valueType: "text")],
+                canEditDocumentConditions: true)
+        }
+        let selection = try #require(WorkflowTriggerChoice.matching(reordered, in: choices))
+        #expect(selection.canEditDocumentConditions)
+        var conditions = try #require(WorkflowDocumentConditionDraft(selection))
+        if setOrigin { conditions[.origin] = "system" }
+        LifecycleURLProtocol.handler = { request in
+            if request.httpMethod == "GET" { return (200, initialJSON) }
+            #expect(request.httpMethod == "PUT")
+            #expect(request.url?.query == "expected_revision=7")
+            guard let data = LifecycleURLProtocol.body(for: request),
+                let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            else { return (400, "{}") }
+            #expect(body["triggers"] as? [String] == reordered)
+            #expect(
+                body["conditions"] as? NSDictionary == (try? JSONSerialization.jsonObject(with: Data(expected.utf8)))
+                    as? NSDictionary)
+            return (200, updatedJSON)
+        }
+        let live = service()
+        let workflow = try await live.workflowConfiguration(vaultID: vaultID, workflowID: workflowID)
+        let updated = try await live.saveWorkflowTriggers(
+            workflow, to: reordered, cadence: nil, documentConditions: conditions)
+        #expect(updated.selectedTriggers == reordered)
+        #expect(updated.revision == 8)
+    }
+
     @Test func actionTaxonomyUsesTheWorkflowVaultAndReturnsActiveEntries() async throws {
         LifecycleURLProtocol.handler = { request in
             #expect(request.url?.path == "/folio/api/tags")
@@ -461,14 +572,15 @@ import Testing
 
     private func workflowJSON(
         deleted: Bool, trigger: String = "document.uploaded", revision: Int64? = 1, enabled: Bool = true,
-        triggers: [String]? = nil
+        triggers: [String]? = nil,
+        conditions: String = #"{"any":[{"event":{"actor":{"type":"system"}}}],"none":[]}"#
     ) -> String {
         let selected = triggers.map { "[" + $0.map { "\"\($0)\"" }.joined(separator: ",") + "]" }
         let triggersField = selected.map { "\"triggers\":\($0)," } ?? ""
         let revisionField = revision.map { "\"revision\":\($0)," } ?? ""
         return """
             {"id":"\(workflowID)","vault_id":"\(vaultID)","name":"File invoices","enabled":\(enabled),\(revisionField)
-            "trigger":"\(trigger)",\(triggersField)"conditions":{"any":[{"event":{"actor":{"type":"system"}}}],"none":[]},
+            "trigger":"\(trigger)",\(triggersField)"conditions":\(conditions),
             "actions":[{"type":"webhook","url":"https://receiver.test/hook","method":"POST","secret":"********",
             "headers":{"Authorization":"********"}},{"type":"webhook","url":"https://receiver.test/hook","method":"POST",
             "headers":{"X-Custom-Credential":"********"}}],
@@ -480,6 +592,7 @@ import Testing
 
 private final class LifecycleURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var handler: ((URLRequest) -> (Int, String))?
+    nonisolated(unsafe) static var responseHeaders: [String: String] = [:]
 
     override class func canInit(with request: URLRequest) -> Bool {
         request.url?.host == "workflow-lifecycle.test"
@@ -493,7 +606,7 @@ private final class LifecycleURLProtocol: URLProtocol, @unchecked Sendable {
         let (status, json) = Self.handler?(request) ?? (500, "{}")
         let response = HTTPURLResponse(
             url: request.url!, statusCode: status, httpVersion: nil,
-            headerFields: ["Content-Type": "application/json"]
+            headerFields: ["Content-Type": "application/json"].merging(Self.responseHeaders) { _, new in new }
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(json.utf8))
