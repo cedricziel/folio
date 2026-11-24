@@ -299,6 +299,24 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     }
 }
 
+#if os(macOS)
+    extension FolioFileProvider: NSFileProviderSearching {
+        func searchEnumerator(for request: NSFileProviderStringSearchRequest) -> any NSFileProviderSearchEnumerator {
+            makeSearchEnumerator(query: request.query, desiredCount: request.desiredNumberOfResults)
+        }
+
+        func makeSearchEnumerator(query: String, desiredCount: Int) -> FolioSearchEnumerator {
+            FolioSearchEnumerator(desiredCount: desiredCount) { [context] limit in
+                let (catalog, _) = try context.catalog()
+                let nodes = try await catalog.search(query, limit: limit)
+                return nodes.map(context.providerItem)
+            }
+        }
+    }
+
+    extension FolioProviderItem: NSFileProviderSearchResult {}
+#endif
+
 private struct ProviderContext: Sendable {
     let localMetadata: LocalItemMetadataStore
     let service: (any FolioService)?

@@ -3,7 +3,11 @@ import FileProvider
 /// Registers Folio as a location in Files and Finder while a server is configured.
 enum FileProviderDomain {
     private static var domain: NSFileProviderDomain {
-        NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier("folio"), displayName: "Folio")
+        let domain = NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier("folio"), displayName: "Folio")
+        #if os(macOS)
+            domain.supportsStringSearchRequest = true
+        #endif
+        return domain
     }
 
     static func register() {
