@@ -57,7 +57,9 @@ final class CustomMetadataWorkflowUITests: XCTestCase {
         let compare = app.switches["Match new value"]
         for _ in 0..<4 where !compare.isHittable { app.swipeUp() }
         XCTAssertTrue(compare.isHittable)
-        compare.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        let switchThumb = compare.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -62, dy: 0))
+        switchThumb.tap()
         XCTAssertEqual(compare.value as? String, "1")
     }
 
