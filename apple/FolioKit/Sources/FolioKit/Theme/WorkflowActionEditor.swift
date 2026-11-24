@@ -19,7 +19,9 @@ struct WorkflowActionEditor: View {
                 if let draft = Binding($draft), let choice {
                     WorkflowActionRows(
                         draft: draft, target: choice.target, vaultID: workflow.vaultID,
-                        taxonomy: service as? any WorkflowActionTaxonomyService
+                        taxonomy: service as? any WorkflowActionTaxonomyService,
+                        metadata: (service as? any WorkflowActionMetadataService)?
+                            .workflowMetadataService(vaultID: workflow.vaultID)
                     )
                     .disabled(isSaving || needsReload)
 
@@ -93,6 +95,7 @@ struct WorkflowActionRows: View {
     let target: WorkflowTriggerChoice.Target
     let vaultID: UUID
     let taxonomy: (any WorkflowActionTaxonomyService)?
+    let metadata: (any FolioService & CustomMetadataService)?
 
     var body: some View {
         Section("Actions") {
@@ -100,11 +103,17 @@ struct WorkflowActionRows: View {
                 actionRow(row, position: index, draft: $draft)
             }
             NavigationLink("Add action") {
-                WorkflowActionChoices(kinds: WorkflowActionDraft.Kind.available(for: target)) {
+                WorkflowActionChoices(kinds: actionChoices) {
                     draft.rows.append(.init(kind: $0))
                 }
             }
         }
+    }
+
+    private var actionChoices: [WorkflowActionDraft.Kind] {
+        let available = WorkflowActionDraft.Kind.available(for: target)
+        guard metadata == nil else { return available }
+        return available.filter { $0 != .setMetadata && $0 != .clearMetadata }
     }
 
     @ViewBuilder private func actionRow(
@@ -113,8 +122,10 @@ struct WorkflowActionRows: View {
         let title = "\(position + 1). \(row.kind.title)"
         if row.kind.hasFields {
             NavigationLink {
-                WorkflowActionFields(row: binding(row, in: draft), vaultID: vaultID, taxonomy: taxonomy)
-                    .navigationTitle(row.kind.title)
+                WorkflowActionFields(
+                    row: binding(row, in: draft), vaultID: vaultID, taxonomy: taxonomy, metadata: metadata
+                )
+                .navigationTitle(row.kind.title)
             } label: {
                 VStack(alignment: .leading) {
                     Text(title)
@@ -189,6 +200,7 @@ private struct WorkflowActionFields: View {
     @Binding var row: WorkflowActionDraft.Row
     let vaultID: UUID
     let taxonomy: (any WorkflowActionTaxonomyService)?
+    let metadata: (any FolioService & CustomMetadataService)?
 
     var body: some View {
         Form {
@@ -217,6 +229,12 @@ private struct WorkflowActionFields: View {
                 Picker("Review state", selection: $row.reviewed) {
                     Text("Needs review").tag(false)
                     Text("Reviewed").tag(true)
+                }
+            case .setMetadata, .clearMetadata:
+                if let metadata {
+                    WorkflowMetadataActionFields(row: $row, source: metadata)
+                } else {
+                    Text("Custom field choices are unavailable.")
                 }
             case .trash:
                 Text("Place this action last.")
@@ -324,10 +342,95 @@ private extension WorkflowActionDraft.Kind {
     var hasFields: Bool {
         switch self {
         case .webhook, .addTags, .removeTags, .correspondent, .documentType, .rename, .documentDate, .reviewed,
-            .skipImport, .trash:
+            .skipImport, .trash, .setMetadata, .clearMetadata:
             true
         case .clearCorrespondent, .clearDocumentType, .clearDocumentDate:
             false
+        }
+    }
+}
+
+private struct WorkflowMetadataActionFields: View {
+    @Binding var row: WorkflowActionDraft.Row
+    let source: any FolioService & CustomMetadataService
+    @State private var fields: [CustomFieldDefinition] = []
+    @State private var error: String?
+    @State private var loading = false
+
+    var body: some View {
+        Group {
+            Picker("Custom field", selection: fieldSelection) {
+                Text("Choose a custom field").tag(UUID?.none)
+                if let saved = row.metadataFieldID, !available.contains(where: { $0.id == saved }) {
+                    Text(fields.first(where: { $0.id == saved })?.draft.name ?? "Saved custom field")
+                        .tag(Optional(saved))
+                        .disabled(true)
+                }
+                ForEach(available) { field in
+                    Text(field.draft.name).tag(Optional(field.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("workflow-custom-field")
+            .disabled(loading)
+            .task { await load() }
+            if loading { ProgressView("Loading custom fields…") }
+            if let error {
+                Text(error).foregroundStyle(Color.danger)
+                Button("Retry custom fields") { Task { await load() } }
+            }
+            if row.kind == .setMetadata, let field = available.first(where: { $0.id == row.metadataFieldID }) {
+                if row.metadataKind == field.draft.kind {
+                    CustomFieldValueInput(field: field, draft: $row.metadataValue, metadata: source, documents: source)
+                        .id(field.id)
+                } else {
+                    Button("Use current field type") { select(field) }
+                }
+            }
+        }
+    }
+
+    private var available: [CustomFieldDefinition] {
+        fields.filter { !$0.isRetired && (row.kind != .clearMetadata || !$0.draft.required) }
+    }
+
+    private var fieldSelection: Binding<UUID?> {
+        Binding {
+            row.metadataFieldID
+        } set: { id in
+            guard id != row.metadataFieldID else { return }
+            select(available.first(where: { $0.id == id }))
+        }
+    }
+
+    private func select(_ field: CustomFieldDefinition?) {
+        row.metadataFieldID = field?.id
+        row.metadataKind = field?.draft.kind
+        row.metadataValue = CustomFieldValueDraft()
+    }
+
+    private func load() async {
+        guard !loading else { return }
+        loading = true
+        error = nil
+        defer { loading = false }
+        do {
+            var cursor: UUID?
+            var loaded: [CustomFieldDefinition] = []
+            while true {
+                let page = try await source.customFields(after: cursor)
+                try Task.checkCancellation()
+                loaded.append(contentsOf: page)
+                guard page.count == 50, let next = page.last?.id, next != cursor else { break }
+                cursor = next
+            }
+            fields = loaded.sorted {
+                let order = $0.draft.name.localizedStandardCompare($1.draft.name)
+                return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            self.error = WorkflowLifecycleViewModel.message(error, fallback: "Couldn't load custom fields.")
         }
     }
 }

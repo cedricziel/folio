@@ -9,7 +9,7 @@ use folio_core::models::{
     MetadataSearchHit, MetadataSearchPage, MetadataSearchQuery, MetadataValue, UserId, VaultId,
 };
 use folio_core::ports::MetadataValueRepository;
-use folio_core::{Error, Result};
+use folio_core::{Error, EventOrigin, Result};
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder};
 use tokio::sync::Notify;
 
@@ -190,6 +190,7 @@ async fn publish(
     document: Id,
     revision: Id,
     changes: Vec<serde_json::Value>,
+    origin: EventOrigin,
 ) -> Result<()> {
     let event = DomainEventEnvelope::new(
         folio_core::domain_event::DOCUMENT_METADATA_CHANGED,
@@ -202,7 +203,7 @@ async fn publish(
         EventAudience::Vault,
         serde_json::json!({"revision": revision, "changes": changes}),
     )?;
-    super::insert_domain_event(conn, &event).await?;
+    super::outbox::insert_domain_event_with_origin(conn, &event, origin).await?;
     Ok(())
 }
 
@@ -436,8 +437,11 @@ pub(crate) async fn clear_incoming_links(
     }
     for (document, changes) in sources {
         let revision = bump_revision(conn, vault, document).await?;
-        folio_core::mutation::with_actor(None, publish(conn, vault, document, revision, changes))
-            .await?;
+        folio_core::mutation::with_actor(
+            None,
+            publish(conn, vault, document, revision, changes, EventOrigin::User),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -500,6 +504,103 @@ pub(super) fn push_exact_value(
         .push_bind(columns.option);
     qb.push(" AND mv.target_document_id IS NOT DISTINCT FROM ")
         .push_bind(columns.target);
+    Ok(())
+}
+
+async fn require_active_document(
+    conn: &mut PgConnection,
+    vault: VaultId,
+    document: Id,
+) -> Result<()> {
+    match document_state(conn, vault, document, "FOR UPDATE").await? {
+        None => return Err(not_found("Document", document)),
+        Some(false) => {
+            return Err(Error::Conflict(
+                "Restore the document before editing its custom fields".into(),
+            ))
+        }
+        Some(true) => {}
+    }
+    Ok(())
+}
+
+pub(super) async fn apply_workflow_change(
+    conn: &mut PgConnection,
+    vault: VaultId,
+    document: Id,
+    change: MetadataChange,
+) -> Result<()> {
+    require_active_document(conn, vault, document).await?;
+    folio_core::mutation::with_actor(
+        None,
+        apply_changes(conn, vault, document, vec![change], EventOrigin::Workflow),
+    )
+    .await
+}
+
+async fn apply_changes(
+    conn: &mut PgConnection,
+    vault: VaultId,
+    document: Id,
+    changes: Vec<MetadataChange>,
+    origin: EventOrigin,
+) -> Result<()> {
+    let actor = folio_core::mutation::current_actor();
+    let now = Utc::now().trunc_subsecs(6);
+    let mut applied = Vec::new();
+    for MetadataChange { field_id, value } in changes {
+        let FieldForWrite {
+            kind_name,
+            required,
+            unique,
+            live,
+        } = field_for_write(conn, vault, field_id).await?;
+        let kind = parse_kind(&kind_name)?;
+        let existing: Option<ValueRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {VALUE_COLS} FROM metadata_values value WHERE value.vault_id = $1 AND value.document_id = $2 AND field_id = $3"
+        )))
+        .bind(vault.0)
+        .bind(document)
+        .bind(field_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(db_error)?;
+        let exists = existing.is_some();
+        let before = existing
+            .map(DocumentMetadataValue::try_from)
+            .transpose()?
+            .and_then(|value| value.value);
+        let after = kind.validate_value(value, required && live)?;
+        if after == before {
+            continue;
+        }
+        if let Some(after) = &after {
+            if !live {
+                return Err(Error::Conflict(
+                    "Retired fields cannot receive new values".into(),
+                ));
+            }
+            check_reference(conn, vault, field_id, after).await?;
+        }
+        write_value(
+            conn,
+            vault,
+            document,
+            field_id,
+            &kind_name,
+            unique,
+            after.as_ref(),
+            exists,
+            actor.as_ref(),
+            now,
+        )
+        .await?;
+        applied.push(change(field_id, kind, before.as_ref(), after.as_ref()));
+    }
+    if !applied.is_empty() {
+        let revision = bump_revision(conn, vault, document).await?;
+        publish(conn, vault, document, revision, applied, origin).await?;
+    }
     Ok(())
 }
 
@@ -579,76 +680,13 @@ impl MetadataValueRepository for PostgresMetadataValueRepository {
             ));
         }
         let mut tx = self.pool.begin().await.map_err(db_error)?;
-        match document_state(&mut tx, vault, document, "FOR UPDATE").await? {
-            None => return Err(not_found("Document", document)),
-            Some(false) => {
-                return Err(Error::Conflict(
-                    "Restore the document before editing its custom fields".into(),
-                ))
-            }
-            Some(true) => {}
-        }
+        require_active_document(&mut tx, vault, document).await?;
         if current_revision(&mut tx, vault, document).await? != revision {
             return Err(Error::Conflict(
                 "Custom fields changed since they were read".into(),
             ));
         }
-        let actor = folio_core::mutation::current_actor();
-        let now = Utc::now().trunc_subsecs(6);
-        let mut applied = Vec::new();
-        for MetadataChange { field_id, value } in changes {
-            let FieldForWrite {
-                kind_name,
-                required,
-                unique,
-                live,
-            } = field_for_write(&mut tx, vault, field_id).await?;
-            let kind = parse_kind(&kind_name)?;
-            let existing: Option<ValueRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "SELECT {VALUE_COLS} FROM metadata_values value WHERE value.vault_id = $1 AND value.document_id = $2 AND field_id = $3"
-            )))
-            .bind(vault.0)
-            .bind(document)
-            .bind(field_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_error)?;
-            let exists = existing.is_some();
-            let before = existing
-                .map(DocumentMetadataValue::try_from)
-                .transpose()?
-                .and_then(|value| value.value);
-            let after = kind.validate_value(value, required && live)?;
-            if after == before {
-                continue;
-            }
-            if let Some(after) = &after {
-                if !live {
-                    return Err(Error::Conflict(
-                        "Retired fields cannot receive new values".into(),
-                    ));
-                }
-                check_reference(&mut tx, vault, field_id, after).await?;
-            }
-            write_value(
-                &mut tx,
-                vault,
-                document,
-                field_id,
-                &kind_name,
-                unique,
-                after.as_ref(),
-                exists,
-                actor.as_ref(),
-                now,
-            )
-            .await?;
-            applied.push(change(field_id, kind, before.as_ref(), after.as_ref()));
-        }
-        if !applied.is_empty() {
-            let revision = bump_revision(&mut tx, vault, document).await?;
-            publish(&mut tx, vault, document, revision, applied).await?;
-        }
+        apply_changes(&mut tx, vault, document, changes, EventOrigin::User).await?;
         let metadata = load(&mut tx, vault, document).await?;
         tx.commit().await.map_err(db_error)?;
         self.wake.notify_one();

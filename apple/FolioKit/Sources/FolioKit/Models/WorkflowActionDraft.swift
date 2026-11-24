@@ -7,7 +7,7 @@ struct WorkflowActionDraft: Sendable {
     enum Kind: String, Identifiable, Sendable {
         case webhook, addTags, correspondent, documentType, skipImport
         case rename, removeTags, clearCorrespondent, clearDocumentType, trash
-        case documentDate, clearDocumentDate, reviewed
+        case documentDate, clearDocumentDate, reviewed, setMetadata, clearMetadata
 
         var id: Self { self }
 
@@ -26,6 +26,8 @@ struct WorkflowActionDraft: Sendable {
             case .documentDate: "Set document date"
             case .clearDocumentDate: "Clear document date"
             case .reviewed: "Set review state"
+            case .setMetadata: "Set custom field"
+            case .clearMetadata: "Clear custom field"
             }
         }
 
@@ -34,7 +36,8 @@ struct WorkflowActionDraft: Sendable {
             case .document:
                 [
                     .webhook, .rename, .addTags, .removeTags, .correspondent, .clearCorrespondent, .documentType,
-                    .clearDocumentType, .documentDate, .clearDocumentDate, .reviewed, .trash,
+                    .clearDocumentType, .documentDate, .clearDocumentDate, .reviewed, .setMetadata, .clearMetadata,
+                    .trash,
                 ]
             case .event: [.webhook]
             case .ingestCandidate: [.skipImport]
@@ -56,6 +59,9 @@ struct WorkflowActionDraft: Sendable {
         var title = ""
         var date = ""
         var reviewed = false
+        var metadataFieldID: UUID?
+        var metadataKind: CustomFieldKind?
+        var metadataValue = CustomFieldValueDraft()
 
         init(kind: Kind) {
             self.kind = kind
@@ -110,6 +116,16 @@ struct WorkflowActionDraft: Sendable {
             case .case13(let setReviewed):
                 kind = .reviewed
                 reviewed = setReviewed.reviewed
+            case .case14(let update):
+                kind = .setMetadata
+                metadataFieldID = UUID(uuidString: update.fieldId)
+                if let value = try? CustomFieldValue(update.value) {
+                    metadataKind = value.kind
+                    metadataValue = CustomFieldValueDraft(value)
+                }
+            case .case15(let clear):
+                kind = .clearMetadata
+                metadataFieldID = UUID(uuidString: clear.fieldId)
             }
         }
 
@@ -155,6 +171,10 @@ struct WorkflowActionDraft: Sendable {
                 .case12(.init(_type: .clearDocumentDate))
             case .reviewed:
                 .case13(.init(reviewed: reviewed, _type: .setReviewed))
+            case .setMetadata:
+                try setMetadata()
+            case .clearMetadata:
+                try .case15(.init(fieldId: selectedField(), _type: .clearMetadata))
             }
         }
 
@@ -170,6 +190,19 @@ struct WorkflowActionDraft: Sendable {
             let value = date.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let day = DocumentDate(rawValue: value) else { throw invalid("Enter a valid YYYY-MM-DD date.") }
             return day.rawValue
+        }
+
+        private func selectedField() throws -> String {
+            guard let id = metadataFieldID else { throw invalid("Choose a custom field.") }
+            return id.uuidString.lowercased()
+        }
+
+        private func setMetadata() throws -> Action {
+            let field = try selectedField()
+            guard let metadataKind, let value = metadataValue.value(for: metadataKind) else {
+                throw invalid("Enter a custom field value.")
+            }
+            return .case14(.init(fieldId: field, _type: .setMetadata, value: value.apiValue))
         }
 
         private static func masked(_ value: String) -> String {
@@ -282,4 +315,8 @@ protocol WorkflowActionEditingService: WorkflowConditionEditingService {
 
 protocol WorkflowActionTaxonomyService: Sendable {
     func workflowActionTaxonomy(_ kind: TaxonomyKind, vaultID: UUID) async throws -> [TaxonomyEntry]
+}
+
+protocol WorkflowActionMetadataService: Sendable {
+    func workflowMetadataService(vaultID: UUID) -> any FolioService & CustomMetadataService
 }

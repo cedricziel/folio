@@ -183,6 +183,9 @@ async fn workflow_api_preserves_ordered_document_actions_and_requires_trash_last
         {"type": "clear_document_type"},
         {"type": "set_document_date", "date": "2026-11-20"},
         {"type": "set_reviewed", "reviewed": true},
+        {"type": "set_metadata", "field_id": "11111111-2222-4333-8444-555555555555",
+            "value": {"kind": "money", "value": {"amount": "45.60", "currency": "EUR"}}},
+        {"type": "clear_metadata", "field_id": "55555555-4444-4333-8222-111111111111"},
         {"type": "trash_document"}
     ]);
     let mut input = json!({"name": "File obsolete document", "trigger": "document.uploaded", "actions": actions});

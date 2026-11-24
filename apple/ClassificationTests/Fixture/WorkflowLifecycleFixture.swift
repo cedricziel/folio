@@ -21,6 +21,7 @@ struct WorkflowLifecycleFixture: View {
         return arguments.contains("--workflow-action-order") || arguments.contains("--workflow-create")
             || arguments.contains("--workflow-schedule") || arguments.contains("--workflow-document-actions")
             || arguments.contains("--workflow-create-multiple")
+            || arguments.contains("--workflow-custom-field-actions")
     }
 }
 
@@ -142,7 +143,7 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
 
     private static func initialWorkflow() -> SavedWorkflow {
         var workflow = SavedWorkflow()
-        if documentActions {
+        if documentActions || ProcessInfo.processInfo.arguments.contains("--workflow-custom-field-actions") {
             workflow.actions = Data(#"[{"type":"set_reviewed","reviewed":false}]"#.utf8)
             workflow.conditions = Data("{}".utf8)
         }
@@ -157,6 +158,7 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
     private static let id = WorkflowLifecycleFixtureService.workflowID.uuidString.lowercased()
     private static let vault = WorkflowLifecycleFixtureService.vaultID.uuidString.lowercased()
     private static let host = "workflow-editor-fixture.test"
+    private static let customField = "00000000-0000-4000-8000-000000000031"
 
     static func service() -> LiveFolioService {
         let configuration = URLSessionConfiguration.ephemeral
@@ -189,6 +191,15 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
     private static func response(for request: URLRequest) -> (Int, String) {
         guard request.value(forHTTPHeaderField: "X-Folio-Vault") == vault else { return (403, "{}") }
         switch (request.httpMethod, request.url?.path) {
+        case ("GET", "/api/vaults/\(vault)/metadata-fields"):
+            return (
+                200,
+                """
+                [{"id":"\(customField)","vault_id":"\(vault)","name":"Invoice total","kind":"money",
+                "required":false,"unique":false,"created_at":"2026-11-02T12:34:56Z",
+                "updated_at":"2026-11-02T12:35:00Z"}]
+                """
+            )
         case ("GET", "/api/workflows"):
             let awaitsCreation = creatingWorkflow && saved.withLock { $0.revision == 7 }
             return (200, awaitsCreation ? "[]" : "[\(workflow)]")
@@ -261,6 +272,18 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                     actions.last?["type"] as? String == "set_reviewed",
                     actions.last?["reviewed"] as? Bool == false
                 else { return (400, #"{"error":"Unexpected document action order"}"#) }
+            }
+            if ProcessInfo.processInfo.arguments.contains("--workflow-custom-field-actions") {
+                guard sources == "-,0", actions.count == 2,
+                    actions[0]["type"] as? String == "set_metadata",
+                    actions[0]["field_id"] as? String == customField,
+                    let value = actions[0]["value"] as? [String: Any],
+                    value["kind"] as? String == "money",
+                    let money = value["value"] as? [String: String],
+                    money["amount"] == "9007199254740993.010",
+                    money["currency"] == "EUR",
+                    actions[1]["type"] as? String == "set_reviewed"
+                else { return (400, #"{"error":"Unexpected custom-field actions"}"#) }
             }
             if scheduleEditing {
                 guard trigger == "workflow.scheduled", let schedule = input["cadence"] as? [String: String],

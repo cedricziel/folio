@@ -14287,6 +14287,48 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "required": [
+              "field_id",
+              "value",
+              "type"
+            ],
+            "properties": {
+              "field_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set_metadata"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/MetadataValue"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "field_id",
+              "type"
+            ],
+            "properties": {
+              "field_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "clear_metadata"
+                ]
+              }
+            }
           }
         ],
         "description": "A step a workflow performs, in order"

@@ -41,6 +41,21 @@ public enum CustomFieldValue: Hashable, Sendable {
     case select(UUID)
     case url(String)
     case documentLink(UUID)
+
+    var kind: CustomFieldKind {
+        switch self {
+        case .text: .text
+        case .longText: .longText
+        case .boolean: .boolean
+        case .integer: .integer
+        case .decimal: .decimal
+        case .date: .date
+        case .money: .money
+        case .select: .select
+        case .url: .url
+        case .documentLink: .documentLink
+        }
+    }
 }
 
 public struct CustomFieldDraft: Equatable, Sendable {
@@ -126,4 +141,49 @@ public protocol CustomMetadataService: Sendable {
     func customMetadata(documentID: UUID) async throws -> CustomMetadataSnapshot
     func setCustomValue(documentID: UUID, revision: UUID?, fieldID: UUID, value: CustomFieldValue?) async throws
         -> CustomMetadataSnapshot
+}
+
+public struct CustomFieldValueDraft: Sendable {
+    var text = ""
+    var currency = ""
+    var boolean: Bool?
+    var date: Date?
+    var reference: UUID?
+
+    public init(_ value: CustomFieldValue? = nil) {
+        switch value {
+        case let .text(value), let .longText(value), let .integer(value), let .decimal(value), let .url(value):
+            text = value
+        case let .date(value):
+            date = DocumentDate(rawValue: value)?.start(in: Self.calendar.timeZone)
+        case let .boolean(value): boolean = value
+        case let .money(amount, code):
+            text = amount
+            currency = code
+        case let .select(id), let .documentLink(id): reference = id
+        case nil: break
+        }
+    }
+
+    public func value(for kind: CustomFieldKind) -> CustomFieldValue? {
+        switch kind {
+        case .text: .text(text)
+        case .longText: .longText(text)
+        case .boolean: boolean.map(CustomFieldValue.boolean)
+        case .integer: .integer(text)
+        case .decimal: .decimal(text)
+        case .date:
+            date.map { .date($0.formatted(.iso8601.year().month().day().dateSeparator(.dash))) }
+        case .money: .money(amount: text, currency: currency)
+        case .select: reference.map(CustomFieldValue.select)
+        case .url: .url(text)
+        case .documentLink: reference.map(CustomFieldValue.documentLink)
+        }
+    }
+
+    static let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        return calendar
+    }()
 }
