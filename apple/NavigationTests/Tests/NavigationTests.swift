@@ -270,8 +270,10 @@ import XCTest
         XCTAssertFalse(pages.exists)
 
         app.buttons["Simulate remote edit"].tap()
-        let top = first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        top.press(forDuration: 0.1, thenDragTo: top.withOffset(CGVector(dx: 0, dy: 500)))
+        let documentList = app.collectionViews.containing(.button, identifier: first.identifier).firstMatch
+        let pullStart = documentList.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.4))
+        let pullEnd = documentList.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.85))
+        pullStart.press(forDuration: 0.05, thenDragTo: pullEnd)
 
         let renamed = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Electricity bill")).firstMatch
         XCTAssertTrue(renamed.waitForExistence(timeout: 10), app.debugDescription)
