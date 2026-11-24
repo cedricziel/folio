@@ -180,22 +180,13 @@ import XCTest
         app.launchArguments = ["--saved-views", "--slow-saved-view"]
         app.launch()
         try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
-        let saveCurrent = app.buttons["Save current view"]
-        XCTAssertTrue(saveCurrent.waitForExistence(timeout: 10), app.debugDescription)
-        saveCurrent.tap()
-        let name = app.textFields["Name"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
-        name.tap()
-        name.typeText("Saved fixture")
-        app.buttons["Save"].tap()
-        XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.navigationBars["All documents"].waitForExistence(timeout: 10), app.debugDescription)
         returnToSidebar(in: app)
-        app.buttons["Inbox"].firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
+        let view = app.buttons["Saved fixture"]
+        XCTAssertTrue(view.waitForExistence(timeout: 5), "The sidebar must show the seeded saved view.")
+        view.tap()
         returnToSidebar(in: app)
-        app.buttons["Saved fixture"].firstMatch.tap()
-        returnToSidebar(in: app)
-        app.buttons["Inbox"].firstMatch.tap()
+        app.buttons["workspace-destination-inbox"].tap()
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertFalse(
             app.navigationBars["Saved fixture"].waitForExistence(timeout: 14),

@@ -52,6 +52,13 @@ typealias Document = FolioKit.Document
 
 extension FixtureApp {
     private static func makeService(arguments: [String]) -> MockFolioService {
+        if arguments.contains("--slow-saved-view") {
+            let view = SavedView(
+                id: UUID(), vaultID: MockFolioService.defaultVault.id, ownerID: "test-user",
+                name: "Saved fixture", query: .init(), createdAt: .distantPast, updatedAt: .distantPast,
+                createdBy: "test-user", updatedBy: "test-user")
+            return MockFolioService(savedViews: [view], savedViewDelay: .seconds(12), documents: documents)
+        }
         guard arguments.contains("--classification") else {
             return MockFolioService(
                 documents: documents, loseFirstEntryResponse: arguments.contains("--discussion-save-failure"))
@@ -144,10 +151,6 @@ private struct SavedViewsFixture: View {
             serverURL: URL(string: "https://unused.invalid")!, service: service, onSignOut: {}, workspace: workspace
         )
         .task {
-            if ProcessInfo.processInfo.arguments.contains("--slow-saved-view"), let mock = service as? MockFolioService
-            {
-                await mock.delaySavedViewResponses(by: .seconds(12))
-            }
             await workspace.loadVaults()
             workspace.destination = .all
         }

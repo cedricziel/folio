@@ -56,9 +56,7 @@ actor MockFolioService: FolioService {
         return values
     }
 
-    private var savedViewDelay: Duration?
-
-    func delaySavedViewResponses(by delay: Duration) { savedViewDelay = delay }
+    private let savedViewDelay: Duration?
 
     func savedView(id: UUID) async throws -> SavedView {
         if let savedViewDelay { try? await Task.sleep(for: savedViewDelay) }
@@ -145,6 +143,7 @@ actor MockFolioService: FolioService {
     private var suspendUploadRequests = false
 
     init(
+        savedViews: [SavedView] = [], savedViewDelay: Duration? = nil,
         documents: [Document] = [], correspondents: [Correspondent] = [], types: [DocumentType] = [],
         vaults: VaultCatalog = MockFolioService.defaultCatalog, vaultServices: [UUID: any FolioService] = [:],
         tags: [Tag] = [], loseFirstEntryResponse: Bool = false, failFirstClassificationSave: Bool = false
@@ -157,6 +156,8 @@ actor MockFolioService: FolioService {
         documentList = documents
         correspondentList = correspondents
         typeList = types
+        savedViewValues = savedViews
+        self.savedViewDelay = savedViewDelay
     }
 
     func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) throws -> DocumentEntryPage {
