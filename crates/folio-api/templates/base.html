@@ -1007,6 +1007,10 @@ Stimulus.register(
       "metadataValues",
       "metadataHint",
       "metadataCurrency",
+      "titleFilter",
+      "tagDeltaFilter",
+      "correspondentDeltaFilter",
+      "typeDeltaFilter",
       "dateFilter",
       "reviewFilter",
       "unreviewFilter",
@@ -1110,6 +1114,10 @@ Stimulus.register(
       const activeTriggers = selected.filter(Boolean);
       const allTriggersMatch = (...kinds) => activeTriggers.length > 0 && activeTriggers.every((value) => kinds.includes(value));
       for (const [filter, active] of [
+        [this.titleFilterTarget, allTriggersMatch("document.title_changed")],
+        [this.tagDeltaFilterTarget, allTriggersMatch("document.tags_changed")],
+        [this.correspondentDeltaFilterTarget, allTriggersMatch("document.correspondent_changed")],
+        [this.typeDeltaFilterTarget, allTriggersMatch("document.document_type_changed")],
         [this.dateFilterTarget, allTriggersMatch("document.date_changed")],
         [this.reviewFilterTarget, allTriggersMatch("document.reviewed", "document.unreviewed")],
         [this.unreviewFilterTarget, allTriggersMatch("document.unreviewed")],

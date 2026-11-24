@@ -225,8 +225,27 @@ impl WorkflowTriggerRegistry {
                             },
                         ));
                     }
-                    use WorkflowConditionType::{Date, Integer, Text};
+                    use WorkflowConditionType::{Date, Identifier, Integer, Text};
                     let document_fields: &[(&str, &str, WorkflowConditionType)] = match trigger {
+                        WorkflowTrigger::DocumentTitleChanged => &[
+                            ("before", "Previous title", Text),
+                            ("after", "New title", Text),
+                        ],
+                        WorkflowTrigger::DocumentTagsChanged => &[
+                            ("added_id", "Added tag", Identifier),
+                            ("removed_id", "Removed tag", Identifier),
+                            ("state", "Tag change", Text),
+                        ],
+                        WorkflowTrigger::DocumentCorrespondentChanged => &[
+                            ("before_id", "Previous correspondent", Identifier),
+                            ("after_id", "New correspondent", Identifier),
+                            ("state", "Correspondent change", Text),
+                        ],
+                        WorkflowTrigger::DocumentTypeChanged => &[
+                            ("before_id", "Previous document type", Identifier),
+                            ("after_id", "New document type", Identifier),
+                            ("state", "Document type change", Text),
+                        ],
                         WorkflowTrigger::DocumentDateChanged => &[
                             ("before", "Previous document date", Date),
                             ("after", "New document date", Date),

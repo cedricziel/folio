@@ -1,6 +1,6 @@
 import Foundation
 
-/// multipart/form-data body for `POST /api/documents/upload`: a `file` part and an optional `title`.
+/// Multipart original with either an upload title or a replacement's expected current revision.
 struct MultipartForm {
     let boundary = "folio-\(UUID().uuidString)"
     let body: Data
@@ -9,13 +9,17 @@ struct MultipartForm {
         "multipart/form-data; boundary=\(boundary)"
     }
 
-    init(file: UploadFile) {
+    init(file: UploadFile, expectedCurrentRevisionID: UUID? = nil) {
         var body = Data()
         func append(_ string: String) {
             body.append(Data(string.utf8))
         }
 
-        if let title = file.title {
+        if let expectedCurrentRevisionID {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"expected_current_revision_id\"\r\n\r\n")
+            append(expectedCurrentRevisionID.uuidString.lowercased() + "\r\n")
+        } else if let title = file.title {
             append("--\(boundary)\r\n")
             append("Content-Disposition: form-data; name=\"title\"\r\n\r\n\(title)\r\n")
         }

@@ -636,24 +636,80 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
                 let page = try await client.listDocumentRevisions(
                     path: .init(id: documentID.uuidString.lowercased()), query: .init(before: before)
                 ).ok.body.json
-                let revisions = try page.revisions.map { revision in
-                    let status = revision.original.verification.rawValue
-                    guard let verification = DocumentFileRevision.Verification(rawValue: status) else {
-                        throw FolioError.unreadableResponse
-                    }
-                    return try DocumentFileRevision(
-                        id: Self.uuid(revision.id), number: revision.number, isCurrent: revision.isCurrent,
-                        createdAt: revision.createdAt, createdBy: revision.createdBy,
-                        restoredFromRevisionID: revision.restoredFromRevisionId.map(Self.uuid),
-                        filename: revision.original.filename,
-                        mimeType: revision.original.mimeType, verification: verification,
-                        byteSize: revision.original.byteSize
-                    )
-                }
-                return DocumentFileRevisionPage(revisions: revisions, nextBefore: page.nextBefore)
+                return try DocumentFileRevisionPage(
+                    revisions: page.revisions.map(Self.fileRevision),
+                    nextBefore: page.nextBefore,
+                    publicationEnabled: page.publicationEnabled ?? false
+                )
             }
         } catch FolioError.server(status: 404, message: nil) {
             return nil
+        }
+    }
+
+    private static func fileRevision(_ revision: Components.Schemas.RevisionView) throws -> DocumentFileRevision {
+        guard let verification = DocumentFileRevision.Verification(rawValue: revision.original.verification.rawValue)
+        else { throw FolioError.unreadableResponse }
+        return try DocumentFileRevision(
+            id: Self.uuid(revision.id), number: revision.number, isCurrent: revision.isCurrent,
+            createdAt: revision.createdAt, createdBy: revision.createdBy,
+            restoredFromRevisionID: revision.restoredFromRevisionId.map(Self.uuid),
+            filename: revision.original.filename,
+            mimeType: revision.original.mimeType, verification: verification,
+            byteSize: revision.original.byteSize
+        )
+    }
+
+    public func replaceDocumentFile(
+        _ file: UploadFile, for documentID: Document.ID, expectedCurrentRevisionID: UUID, idempotencyKey: UUID
+    ) async throws -> DocumentFileRevision {
+        try await call("documents.replaceRevision") {
+            let form = MultipartForm(file: file, expectedCurrentRevisionID: expectedCurrentRevisionID)
+            let path = "api/documents/\(documentID.uuidString.lowercased())/revisions"
+            return try await publishRevision(path, body: form.body, contentType: form.contentType, key: idempotencyKey)
+        }
+    }
+
+    public func restoreDocumentFile(
+        _ revisionID: UUID, for documentID: Document.ID, expectedCurrentRevisionID: UUID, idempotencyKey: UUID
+    ) async throws -> DocumentFileRevision {
+        try await call("documents.restoreRevision") {
+            let prefix = "api/documents/\(documentID.uuidString.lowercased())/revisions"
+            let path = "\(prefix)/\(revisionID.uuidString.lowercased())/restore"
+            let input = Components.Schemas.RestoreRevisionRequest(
+                expectedCurrentRevisionId: expectedCurrentRevisionID.uuidString.lowercased()
+            )
+            let body = try JSONEncoder().encode(input)
+            return try await publishRevision(path, body: body, contentType: "application/json", key: idempotencyKey)
+        }
+    }
+
+    private func publishRevision(_ path: String, body: Data, contentType: String, key: UUID)
+        async throws -> DocumentFileRevision
+    {
+        var request = URLRequest(url: endpoint(path))
+        request.httpMethod = "POST"
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.setValue(key.uuidString.lowercased(), forHTTPHeaderField: "Idempotency-Key")
+        let (data, response) = try await authorizedTransfer(request) {
+            try await session.upload(for: $0, from: body)
+        }
+        do {
+            try check(response, body: data)
+        } catch FolioError.server(status: 404, message: nil), FolioError.server(status: 405, message: nil) {
+            throw FolioError.server(status: 501, message: "File replacement is unavailable on this server.")
+        }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 || http.statusCode == 201
+        else { throw FolioError.unreadableResponse }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let string = try decoder.singleValueContainer().decode(String.self)
+            return try LenientDateTranscoder().decode(string)
+        }
+        do {
+            return try Self.fileRevision(decoder.decode(Components.Schemas.RevisionView.self, from: data))
+        } catch {
+            throw FolioError.unreadableResponse
         }
     }
 

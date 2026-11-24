@@ -76,6 +76,7 @@ public final class DocumentDetailViewModel {
     private let service: any FolioService
     private var lookups: DocumentLookups
     private var loading = false
+    private var previewGeneration = 0
     private var metadataWrites = 0
     private var failedChange: ClassificationChange?
     /// `updatedAt` of the last full document fetched from the server.
@@ -280,19 +281,36 @@ public final class DocumentDetailViewModel {
         rebuildFields()
     }
 
+    public func refreshAfterFilePublication() async {
+        previewGeneration += 1
+        let generation = previewGeneration
+        loading = true
+        preview = .loading
+        await refreshMetadata()
+        guard generation == previewGeneration else { return }
+        loading = false
+        await loadPreview()
+    }
+
     public func loadPreview() async {
         guard !loading else { return }
         if case .ready = preview { return }
+        let generation = previewGeneration
         loading = true
-        defer { loading = false }
+        defer {
+            if generation == previewGeneration { loading = false }
+        }
         preview = .loading
         // Navigation may cancel the view task while this model still owns the visible preview.
         let download = Task { [service, document] in
             try await service.downloadFile(for: document)
         }
         do {
-            preview = .ready(try await download.value)
+            let url = try await download.value
+            guard generation == previewGeneration else { return }
+            preview = .ready(url)
         } catch {
+            guard generation == previewGeneration else { return }
             preview = .failed(error.localizedDescription)
         }
     }
