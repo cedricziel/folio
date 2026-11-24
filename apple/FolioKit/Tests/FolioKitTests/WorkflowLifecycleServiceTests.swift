@@ -450,6 +450,53 @@ import Testing
         #expect(updated.revision == 5)
     }
 
+    @Test func groupedMetadataEditUsesRevisionGuardAndKeepsTheSavedDefinition() async throws {
+        let live = service()
+        let trigger = "document.title_changed"
+        let original = #"{"all":[{"event":{"actor":{"type":"system"}}}]}"#
+        let edited = #"{"all":[{"event":{"actor":{"type":"system"},"document_change":{"type":"title","before":""}}}]}"#
+        let choice = WorkflowTriggerChoice(
+            id: trigger, title: "Title changes", target: .document,
+            conditionFields: [
+                .init(id: "event.document_change.before", title: "Previous title", valueType: "text")
+            ]
+        )
+        LifecycleURLProtocol.handler = { request in
+            if request.httpMethod == "GET" {
+                return (200, workflowJSON(deleted: false, trigger: trigger, triggers: [trigger], conditions: original))
+            }
+            #expect(request.httpMethod == "PUT")
+            #expect(request.url?.path.hasSuffix("/definition") == true)
+            #expect(request.url?.query == "expected_revision=1")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
+            guard let bytes = LifecycleURLProtocol.body(for: request),
+                let body = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any]
+            else { return (400, "{}") }
+            #expect(body["triggers"] as? [String] == [trigger])
+            #expect((body["actions"] as? [[String: Any]])?.first?["secret"] as? String == "********")
+            let all = (body["conditions"] as? [String: Any])?["all"] as? [[String: Any]]
+            let event = all?.first?["event"] as? [String: Any]
+            #expect(event?["actor"] as? [String: String] == ["type": "system"])
+            #expect(event?["document_change"] as? [String: String] == ["type": "title", "before": ""])
+            return (
+                200,
+                workflowJSON(
+                    deleted: false, trigger: trigger, revision: 2, triggers: [trigger], conditions: edited
+                )
+            )
+        }
+        let workflow = try await live.workflowConfiguration(vaultID: vaultID, workflowID: workflowID)
+        var tree = try await live.loadWorkflowConditions(workflow)
+        var leaf = try #require(tree[.all]?.first)
+        var change = try #require(leaf.metadataChange(for: choice))
+        change.setTitleMatch(true, for: .before)
+        leaf.setMetadataChange(change)
+        tree[.all] = [leaf]
+        let saved = try await live.saveWorkflowConditions(workflow, conditions: tree)
+        #expect(saved.revision == 2)
+        #expect(saved.selectedTriggers == [trigger])
+    }
+
     @Test func orderedActionsAndCadenceUseTheSameGuardedDefinitionRoute() async throws {
         let live = service()
         let choice = WorkflowTriggerChoice(

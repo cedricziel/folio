@@ -27,6 +27,7 @@ struct WorkflowLifecycleFixture: View {
             || arguments.contains("--workflow-create-multiple")
             || arguments.contains("--workflow-custom-field-actions")
             || arguments.contains("--workflow-ingestion-conditions")
+            || arguments.contains("--workflow-metadata-conditions")
     }
 }
 
@@ -149,6 +150,10 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
     private static let createdSelection = ["document_note.created", "document.uploaded"]
     private static let documentActions = ProcessInfo.processInfo.arguments.contains("--workflow-document-actions")
     private static let scheduleEditing = ProcessInfo.processInfo.arguments.contains("--workflow-schedule")
+    private static let metadataEditing = ProcessInfo.processInfo.arguments.contains("--workflow-metadata-conditions")
+    private static let archive = "aaaaaaaa-0000-4000-8000-000000000001"
+    private static let review = "aaaaaaaa-0000-4000-8000-000000000002"
+    private static let checked = "aaaaaaaa-0000-4000-8000-000000000003"
 
     private static let ingestionConditionEditing = ProcessInfo.processInfo.arguments.contains(
         "--workflow-ingestion-conditions")
@@ -172,6 +177,17 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 """
                 {"all":[{"event":{"ingest":{"source_id":"\(watchedSource)","source_kind":"folder","retryable":true}}}]}
                 """.utf8)
+        }
+        if metadataEditing {
+            workflow.trigger = "document.tags_changed"
+            workflow.triggers = [workflow.trigger]
+            workflow.conditions = Data(
+                """
+                {"all":[{"event":{"actor":{"type":"system"},"document_change":{
+                    "type":"tags","state":"replaced","added_id":"\(archive)","removed_id":"\(review)"
+                }}}]}
+                """.utf8
+            )
         }
         return workflow
     }
@@ -250,6 +266,19 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
             }
             return (201, workflow)
         case ("GET", "/api/workflows/triggers"):
+            if metadataEditing {
+                return (
+                    200,
+                    """
+                    [{"event_type":"document.tags_changed","label":"When tags change","subject_type":"document",
+                    "target":"document","condition_fields":[
+                        {"key":"event.document_change.state","label":"Tag change","value_type":"text"},
+                        {"key":"event.document_change.added_id","label":"Added tag","value_type":"identifier"},
+                        {"key":"event.document_change.removed_id","label":"Removed tag","value_type":"identifier"}
+                    ]}]
+                    """
+                )
+            }
             return (
                 200,
                 """
@@ -292,6 +321,14 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 {"key":"data.source_kind","label":"Source kind","value_type":"text"}]}]
                 """
             )
+        case ("GET", "/api/tags") where metadataEditing:
+            let entries = [(archive, "Archive"), (review, "Review"), (checked, "Checked")].map { id, name in
+                """
+                {"id":"\(id)","vault_id":"\(vault)","name":"\(name)",
+                "created_at":"2026-11-02T12:35:00Z","updated_at":"2026-11-02T12:35:00Z"}
+                """
+            }
+            return (200, "[" + entries.joined(separator: ",") + "]")
         case ("GET", "/api/workflows/\(id)/runs"):
             return (200, "[]")
         case ("GET", "/api/workflows/\(id)"):
@@ -342,6 +379,17 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 else { return (400, #"{"error":"Unexpected cadence"}"#) }
             }
             let triggers = input["triggers"] as? [String]
+            if metadataEditing {
+                let group = filters["all"] as? [[String: Any]]
+                let event = group?.first?["event"] as? [String: Any]
+                let expectedChange = [
+                    "type": "tags", "state": "replaced", "added_id": checked, "removed_id": review,
+                ]
+                guard trigger == "document.tags_changed", triggers == [trigger], group?.count == 1,
+                    event?["actor"] as? [String: String] == ["type": "system"],
+                    event?["document_change"] as? [String: String] == expectedChange
+                else { return (400, #"{"error":"Unexpected metadata condition"}"#) }
+            }
             if creatingMultiple {
                 guard trigger == createdSelection[0], triggers == createdSelection
                 else { return (400, #"{"error":"Workflow settings changed the trigger order"}"#) }
