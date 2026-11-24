@@ -7,6 +7,10 @@ use tracing::instrument;
 
 use super::insert_domain_event;
 use crate::database::workflow_lifecycle::workflow_event;
+use crate::database::workflow_schedule::{
+    clock_cursor, clock_time, decode_cadence, edited_clock_cursor, encode_cadence,
+    resumed_clock_cursor,
+};
 use folio_core::error::{Error, Result};
 use folio_core::events::EventOrigin;
 use folio_core::models::{
@@ -44,6 +48,8 @@ struct WorkflowRow {
     name: String,
     enabled: bool,
     trigger_event: String,
+    cadence: Option<String>,
+    next_run_at: Option<String>,
     conditions: String,
     actions: String,
     created_at: DateTime<Utc>,
@@ -64,6 +70,7 @@ impl TryFrom<WorkflowRow> for Workflow {
             name: row.name,
             enabled: row.enabled,
             trigger: parse_trigger(&row.trigger_event)?,
+            cadence: decode_cadence(row.cadence.as_deref())?,
             conditions: serde_json::from_str(&row.conditions).map_err(repo_err)?,
             actions: serde_json::from_str(&row.actions).map_err(repo_err)?,
             created_at: row.created_at,
@@ -126,6 +133,54 @@ fn not_found(id: Id) -> Error {
         entity_type: "Workflow",
         id: id.to_string(),
     }
+}
+
+async fn insert_run(
+    conn: &mut PgConnection,
+    run: &WorkflowRun,
+    revision: i64,
+    scheduled_at: Option<DateTime<Utc>>,
+) -> Result<bool> {
+    let mutation_id = run.source_identity()?.map(|source| source.mutation_id);
+    let result = sqlx::query(
+        "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts,
+                                    completed_actions, last_error, response_status, payload,
+                                    actions, source_event_id, created_at, finished_at, mutation_id, definition_revision, scheduled_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(run.id)
+    .bind(run.workflow_id)
+    .bind(run.event.as_str())
+    .bind(run.document_id)
+    .bind(run.status.as_str())
+    .bind(run.attempts as i32)
+    .bind(run.completed_actions as i32)
+    .bind(&run.last_error)
+    .bind(run.response_status.map(i32::from))
+    .bind(&run.payload)
+    .bind(serde_json::to_string(&run.actions).map_err(repo_err)?)
+    .bind(run.source_event_id)
+    .bind(run.created_at)
+    .bind(run.finished_at)
+    .bind(mutation_id)
+    .bind(revision)
+    .bind(scheduled_at.map(clock_time))
+    .execute(&mut *conn)
+    .await
+    .map_err(repo_err)?;
+    if result.rows_affected() == 0 {
+        return Ok(false);
+    }
+    insert_job(
+        conn,
+        JobType::ExecuteWorkflowRun { run_id: run.id },
+        Utc::now(),
+        MAX_ATTEMPTS as i32,
+        crate::queue::JobTraceContext::current().as_ref(),
+    )
+    .await?;
+    Ok(true)
 }
 
 #[async_trait]
@@ -215,7 +270,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         let actor = folio_core::mutation::current_actor();
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, conditions, actions, created_at, updated_at, created_by, updated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *",
+            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, conditions, actions, created_at, updated_at, created_by, updated_by, cadence, next_run_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *",
         )
         .bind(id)
         .bind(vault.0)
@@ -228,6 +283,8 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .bind(now)
         .bind(actor.as_ref().map(UserId::as_str))
         .bind(actor.as_ref().map(UserId::as_str))
+        .bind(encode_cadence(input.cadence)?)
+        .bind(input.cadence.map(|cadence| clock_time(cadence.first_at())))
         .fetch_one(&mut *tx)
         .await
         .map_err(repo_err)?;
@@ -255,28 +312,34 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .await
         .map_err(repo_err)?
         .ok_or_else(|| not_found(id))?;
+        let stored_cursor = row.next_run_at.clone();
         let existing = Workflow::try_from(row)?;
         existing.check_revision(expected_revision)?;
         input.validate()?;
         if existing.name == input.name
             && existing.enabled == input.enabled
             && existing.trigger == input.trigger
+            && existing.cadence == input.cadence
             && existing.conditions == input.conditions
             && existing.actions == input.actions
         {
             return Ok(existing);
         }
+        let now = Utc::now();
+        let cursor = edited_clock_cursor(&existing, &input, stored_cursor.as_deref(), now)?;
         let actor = folio_core::mutation::current_actor();
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "UPDATE workflows SET revision = revision + 1, name = $1, enabled = $2, trigger_event = $3, conditions = $4, actions = $5, updated_at = $6, updated_by = $7 WHERE id = $8 AND vault_id = $9 RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, name = $1, enabled = $2, trigger_event = $3, conditions = $4, actions = $5, updated_at = $6, updated_by = $7, cadence = $8, next_run_at = $9 WHERE id = $10 AND vault_id = $11 RETURNING *",
         )
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.trigger.as_str())
         .bind(serde_json::to_string(&input.conditions).map_err(repo_err)?)
         .bind(serde_json::to_string(&input.actions).map_err(repo_err)?)
-        .bind(Utc::now())
+        .bind(now)
         .bind(actor.as_ref().map(UserId::as_str))
+        .bind(encode_cadence(input.cadence)?)
+        .bind(cursor)
         .bind(id)
         .bind(vault.0)
         .fetch_one(&mut *tx)
@@ -357,18 +420,21 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .await
         .map_err(repo_err)?
         .ok_or_else(|| not_found(id))?;
+        let stored_cursor = row.next_run_at.clone();
         let existing = Workflow::try_from(row)?;
         if existing.deleted_at.is_none() {
             return Ok(existing);
         }
         let actor = folio_core::mutation::current_actor();
         let now = Utc::now();
+        let cursor = resumed_clock_cursor(existing.cadence, stored_cursor.as_deref(), now)?;
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "UPDATE workflows SET revision = revision + 1, deleted_at = $1, updated_at = $2, updated_by = $3 WHERE id = $4 AND vault_id = $5 RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, deleted_at = $1, updated_at = $2, updated_by = $3, next_run_at = $4 WHERE id = $5 AND vault_id = $6 RETURNING *",
         )
         .bind(None::<DateTime<Utc>>)
         .bind(now)
         .bind(actor.as_ref().map(UserId::as_str))
+        .bind(cursor)
         .bind(id)
         .bind(vault.0)
         .fetch_one(&mut *tx)
@@ -405,46 +471,45 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         {
             return Ok(false);
         }
-        let mutation_id = run.source_identity()?.map(|source| source.mutation_id);
-        let result = sqlx::query(
-            "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts,
-                                        completed_actions, last_error, response_status, payload,
-                                        actions, source_event_id, created_at, finished_at, mutation_id, definition_revision)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-             ON CONFLICT DO NOTHING",
+        let inserted = insert_run(&mut tx, run, revision, None).await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(inserted)
+    }
+
+    async fn enqueue_due_schedules(&self, now: DateTime<Utc>, limit: u32) -> Result<usize> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let rows = sqlx::query_as::<_, WorkflowRow>(
+            "SELECT w.* FROM workflows w JOIN vaults v ON v.id = w.vault_id
+             WHERE w.enabled AND w.deleted_at IS NULL AND v.deleted_at IS NULL
+               AND w.next_run_at IS NOT NULL AND w.next_run_at <= $1
+             ORDER BY w.next_run_at, w.id LIMIT $2 FOR UPDATE OF w SKIP LOCKED FOR SHARE OF v SKIP LOCKED",
         )
-        .bind(run.id)
-        .bind(run.workflow_id)
-        .bind(run.event.as_str())
-        .bind(run.document_id)
-        .bind(run.status.as_str())
-        .bind(run.attempts as i32)
-        .bind(run.completed_actions as i32)
-        .bind(&run.last_error)
-        .bind(run.response_status.map(i32::from))
-        .bind(&run.payload)
-        .bind(serde_json::to_string(&run.actions).map_err(repo_err)?)
-        .bind(run.source_event_id)
-        .bind(run.created_at)
-        .bind(run.finished_at)
-        .bind(mutation_id)
-        .bind(revision)
-        .execute(&mut *tx)
+        .bind(clock_time(now))
+        .bind(i64::from(limit))
+        .fetch_all(&mut *tx)
         .await
         .map_err(repo_err)?;
-        if result.rows_affected() == 0 {
-            return Ok(false);
+        let mut count = 0;
+        for row in rows {
+            let cursor = clock_cursor(row.next_run_at.as_deref())?;
+            let workflow = Workflow::try_from(row)?;
+            let cadence = workflow
+                .cadence
+                .ok_or_else(|| repo_err("A clock cursor needs a cadence"))?;
+            let window = cadence.claim_window(cursor, now)?;
+            for at in window.due {
+                let run = WorkflowRun::for_clock(&workflow, at)?;
+                count += usize::from(insert_run(&mut tx, &run, workflow.revision, Some(at)).await?);
+            }
+            sqlx::query("UPDATE workflows SET next_run_at = $1 WHERE id = $2")
+                .bind(window.next_at.map(clock_time))
+                .bind(workflow.id)
+                .execute(&mut *tx)
+                .await
+                .map_err(repo_err)?;
         }
-        insert_job(
-            &mut tx,
-            JobType::ExecuteWorkflowRun { run_id: run.id },
-            Utc::now(),
-            MAX_ATTEMPTS as i32,
-            crate::queue::JobTraceContext::current().as_ref(),
-        )
-        .await?;
         tx.commit().await.map_err(repo_err)?;
-        Ok(true)
+        Ok(count)
     }
 
     #[instrument(skip(self))]

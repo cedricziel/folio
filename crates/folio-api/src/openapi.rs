@@ -148,7 +148,7 @@ use crate::routes::{
         (name = "document_types", description = "Document classifications"),
         (name = "events", description = "Real-time updates"),
         (name = "devices", description = "Apple devices registered for push notifications"),
-        (name = "workflows", description = "Automations that react to document events, such as webhooks"),
+        (name = "workflows", description = "Automations that react to events or run on a schedule"),
         (name = "sources", description = "Consume folders and mailboxes that import documents automatically"),
     )
 )]

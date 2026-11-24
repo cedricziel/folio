@@ -821,6 +821,11 @@ fieldset.field {
   white-space: nowrap;
   flex-shrink: 0;
 }
+[data-condition-clock] [data-condition-add],
+[data-condition-clock] [data-condition-command="add-branch"] {
+  display: none;
+}
+
 .condition-controls {
   flex-wrap: wrap;
   gap: var(--space-1) var(--space-2);

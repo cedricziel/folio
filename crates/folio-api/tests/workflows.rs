@@ -1460,3 +1460,172 @@ async fn web_form_authors_and_validates_typed_processing_filters() {
     assert_eq!(unchanged["conditions"], stored["conditions"]);
     assert_eq!(unchanged["trigger"], stored["trigger"]);
 }
+
+#[tokio::test]
+async fn web_editor_roundtrips_a_clock_schedule_when_editing_and_toggling() {
+    let app = test_app().await;
+    let form = "name=Clock&trigger=workflow.scheduled&enabled=on&cadence_mode=recurring&cadence_start=2030-01-03T09%3A00%3A00.123456789Z&cadence_interval=3600&webhook_url=https%3A%2F%2Fexample.com%2Fhook";
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/workflows")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let id = response.headers()["location"]
+        .to_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let page = format!("/workflows/{id}");
+    let (status, html) = send(&app, "GET", &page, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains(r#"value="2030-01-03T09:00:00.123456789Z""#));
+    assert!(html.contains(r#"name="cadence_interval" value="3600""#));
+
+    let (status, _) = send(&app, "POST", &format!("{page}/toggle"), None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, stored) = json_request(&app, "GET", &format!("/api{page}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["enabled"], false);
+    assert_eq!(
+        stored["cadence"],
+        json!({
+            "type": "recurring",
+            "first_at": "2030-01-03T09:00:00.123456789Z",
+            "interval_seconds": 3600
+        })
+    );
+}
+
+#[tokio::test]
+async fn converting_to_a_clock_clears_only_the_explicitly_selected_sections() {
+    let app = test_app().await;
+    let (status, tag) =
+        json_request(&app, "POST", "/api/tags", Some(json!({"name": "Invoices"}))).await;
+    assert_eq!(status, StatusCode::OK, "{tag}");
+    let (status, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Clock conversion",
+            "trigger": "document.uploaded",
+            "conditions": {"mime_type": "application/pdf"},
+            "actions": [
+                {"type": "add_tags", "tag_ids": [tag["id"]]},
+                {"type": "webhook", "url": "https://example.com/clock"},
+                {"type": "webhook", "url": "https://example.com/second"}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let path = format!("/workflows/{}", created["id"].as_str().unwrap());
+    let form = "name=Clock+conversion&trigger=workflow.scheduled&enabled=on&cadence_mode=once&cadence_start=2040-03-01T09%3A00%3A00Z&webhook_url=https%3A%2F%2Fexample.com%2Fclock";
+
+    for missing in ["", "&clear_clock_filters=on", "&clear_clock_actions=on"] {
+        let (status, _) = post_form(&app, &path, format!("{form}{missing}")).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, unchanged) = json_request(&app, "GET", &format!("/api{path}"), None).await;
+        assert_eq!(unchanged["trigger"], "document.uploaded");
+        assert_eq!(unchanged["conditions"], created["conditions"]);
+        assert_eq!(unchanged["actions"], created["actions"]);
+    }
+
+    let (status, html) = post_form(
+        &app,
+        &path,
+        format!("{form}&clear_clock_filters=on&clear_clock_actions=on"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{html}");
+    let (_, saved) = json_request(&app, "GET", &format!("/api{path}"), None).await;
+    assert_eq!(saved["trigger"], "workflow.scheduled");
+    assert_eq!(saved["conditions"], json!({}));
+    assert_eq!(
+        saved["actions"].as_array().unwrap(),
+        &created["actions"].as_array().unwrap()[1..]
+    );
+}
+
+#[tokio::test]
+async fn trigger_only_edit_cannot_remove_or_invent_a_clock_schedule() {
+    let app = test_app().await;
+    let cadence = json!({
+        "type": "recurring",
+        "first_at": "2040-01-03T09:00:00.000000001Z",
+        "interval_seconds": 3600,
+    });
+    let (status, clock) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Recurring clock",
+            "trigger": "workflow.scheduled",
+            "cadence": cadence,
+            "actions": [
+                {"type": "webhook", "url": "https://example.test/first"},
+                {"type": "webhook", "url": "https://example.test/second"}
+            ],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{clock}");
+    let clock_uri = format!("/api/workflows/{}", clock["id"].as_str().unwrap());
+    let (status, _) = json_request(
+        &app,
+        "PATCH",
+        &format!("{clock_uri}/trigger"),
+        Some(json!({"trigger": "document.uploaded", "expected_revision": clock["revision"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, stored) = json_request(&app, "GET", &clock_uri, None).await;
+    assert_eq!(stored, clock);
+
+    let (status, document) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(workflow_body("https://example.test/event")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{document}");
+    let document_uri = format!("/api/workflows/{}", document["id"].as_str().unwrap());
+    let (status, _) = json_request(
+        &app,
+        "PATCH",
+        &format!("{document_uri}/trigger"),
+        Some(json!({"trigger": "workflow.scheduled", "expected_revision": document["revision"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, stored) = json_request(&app, "GET", &document_uri, None).await;
+    assert_eq!(stored, document);
+}
+
+#[tokio::test]
+async fn clock_schedule_api_rejects_document_actions() {
+    let app = test_app().await;
+    let (status, _) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Clock",
+            "trigger": "workflow.scheduled",
+            "cadence": {"type": "once", "at": "2030-01-03T09:00:00Z"},
+            "actions": [{"type": "add_tags", "tag_ids": [Uuid::new_v4()]}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

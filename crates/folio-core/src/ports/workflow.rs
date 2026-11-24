@@ -1,6 +1,7 @@
 //! Ports used by the workflow engine
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 
 use crate::error::Result;
 use crate::models::{Id, VaultId, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger};
@@ -53,6 +54,9 @@ pub trait WorkflowRepository: Send + Sync {
     /// Returns false if the captured definition has changed, the outbox event
     /// was handled before, or a once-per-document run already exists.
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool>;
+
+    /// Advance due clocks and persist each run and its job in the same transaction.
+    async fn enqueue_due_schedules(&self, now: DateTime<Utc>, limit: u32) -> Result<usize>;
 
     async fn find_run(&self, id: Id) -> Result<Option<WorkflowRun>>;
 

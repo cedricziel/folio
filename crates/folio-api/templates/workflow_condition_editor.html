@@ -1,5 +1,6 @@
 <fieldset class="field" data-workflow-form-target="conditionEditor" hidden>
     <legend class="legend">Nested conditions</legend>
+    <p class="hint" data-condition-clock-note hidden>Remove nested conditions before saving this clock schedule.</p>
     <input type="hidden" name="condition_groups" value="{{ condition_groups }}" data-condition-payload{% if values.condition_groups.is_some() %} data-condition-draft{% endif %} disabled>
     <div data-condition-groups></div>
     <template data-condition-template="add">

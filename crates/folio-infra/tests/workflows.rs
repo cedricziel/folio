@@ -20,8 +20,8 @@ use uuid::Uuid;
 
 use folio_core::models::{
     CreateCorrespondent, CreateDocument, CreateTag, Document, Id, RunStatus, UpdateDocument,
-    WebhookMethod, Workflow, WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun,
-    WorkflowTrigger,
+    WebhookMethod, Workflow, WorkflowAction, WorkflowCadence, WorkflowConditions, WorkflowInput,
+    WorkflowRun, WorkflowTrigger,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, OutboxStore,
@@ -209,6 +209,7 @@ impl Harness {
             .create(
                 self.vault,
                 WorkflowInput {
+                    cadence: None,
                     name: "test".into(),
                     enabled: true,
                     trigger,
@@ -397,6 +398,7 @@ async fn engine_only_queues_workflows_whose_conditions_match() {
             h.vault,
             disabled.id,
             WorkflowInput {
+                cadence: None,
                 name: disabled.name,
                 enabled: false,
                 trigger: disabled.trigger,
@@ -1216,6 +1218,7 @@ async fn editing_a_workflow_cancels_queued_runs_and_retains_their_inputs() {
             h.vault,
             workflow.id,
             WorkflowInput {
+                cadence: None,
                 name: workflow.name,
                 enabled: true,
                 trigger: workflow.trigger,
@@ -1512,6 +1515,7 @@ async fn moving_before_dispatch_never_routes_an_event_to_destination_workflows()
         .create(
             destination,
             WorkflowInput {
+                cadence: None,
                 name: "destination hook".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUpdated,
@@ -1823,6 +1827,62 @@ async fn webhook_test_run_without_a_document_still_sends() {
     assert_eq!(server.hits("sample"), 1);
 }
 
+#[tokio::test]
+async fn clock_run_delivers_the_scheduled_instant_without_a_document() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    let at = "2030-01-03T09:00:00.123456789Z".parse().unwrap();
+    let workflow = h
+        .workflows
+        .create(
+            h.vault,
+            WorkflowInput {
+                name: "Scheduled export".into(),
+                enabled: true,
+                trigger: WorkflowTrigger::Scheduled,
+                cadence: Some(WorkflowCadence::Once { at }),
+                conditions: WorkflowConditions::default(),
+                actions: vec![WorkflowAction::Webhook {
+                    url: server.url("clock"),
+                    method: WebhookMethod::Post,
+                    headers: Default::default(),
+                    secret: None,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(h.workflows.enqueue_due_schedules(at, 16).await.unwrap(), 1);
+    let runs = h
+        .workflows
+        .list_runs(h.vault, workflow.id, 8)
+        .await
+        .unwrap();
+    let [run] = runs.as_slice() else {
+        panic!("expected one scheduled run");
+    };
+    assert_eq!(
+        h.runner.execute(run.id).await.unwrap(),
+        RunOutcome::Succeeded
+    );
+    assert_eq!(
+        h.runner.execute(run.id).await.unwrap(),
+        RunOutcome::Succeeded
+    );
+    assert_eq!(h.workflows.enqueue_due_schedules(at, 16).await.unwrap(), 0);
+
+    let requests = server.state.received.lock().unwrap();
+    let [request] = requests.as_slice() else {
+        panic!("expected one delivery");
+    };
+    assert_eq!(request.path, "clock");
+    let payload: folio_core::models::WebhookPayload = serde_json::from_str(&request.body).unwrap();
+    assert_eq!(payload.event, WorkflowTrigger::Scheduled);
+    assert_eq!(payload.occurred_at, at);
+    assert!(payload.document.is_none());
+}
+
 struct RestoreVaultAfterLookup {
     inner: Arc<dyn WorkflowRepository>,
     vaults: Arc<dyn VaultRepository>,
@@ -1899,6 +1959,13 @@ impl WorkflowRepository for RestoreVaultAfterLookup {
     }
     async fn create_run(&self, run: &WorkflowRun) -> folio_core::Result<bool> {
         self.inner.create_run(run).await
+    }
+    async fn enqueue_due_schedules(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        limit: u32,
+    ) -> folio_core::Result<usize> {
+        self.inner.enqueue_due_schedules(now, limit).await
     }
     async fn find_run(&self, id: Id) -> folio_core::Result<Option<WorkflowRun>> {
         self.inner.find_run(id).await
@@ -2188,6 +2255,13 @@ impl WorkflowRepository for DeleteBeforeFirstProgress {
     }
     async fn create_run(&self, run: &WorkflowRun) -> folio_core::Result<bool> {
         self.inner.create_run(run).await
+    }
+    async fn enqueue_due_schedules(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        limit: u32,
+    ) -> folio_core::Result<usize> {
+        self.inner.enqueue_due_schedules(now, limit).await
     }
     async fn find_run(&self, id: Id) -> folio_core::Result<Option<WorkflowRun>> {
         self.inner.find_run(id).await

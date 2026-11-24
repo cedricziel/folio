@@ -15,6 +15,7 @@ use testcontainers_modules::testcontainers::ImageExt;
 
 fn input(name: &str) -> WorkflowInput {
     WorkflowInput {
+        cadence: None,
         name: name.into(),
         enabled: true,
         trigger: WorkflowTrigger::DocumentUploaded,

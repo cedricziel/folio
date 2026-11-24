@@ -7,6 +7,10 @@ use tracing::instrument;
 
 use super::insert_domain_event;
 use crate::database::workflow_lifecycle::workflow_event;
+use crate::database::workflow_schedule::{
+    clock_cursor, clock_time, decode_cadence, edited_clock_cursor, encode_cadence,
+    resumed_clock_cursor,
+};
 use folio_core::error::{Error, Result};
 use folio_core::events::EventOrigin;
 use folio_core::models::{
@@ -54,6 +58,7 @@ fn workflow_from_row(row: &SqliteRow) -> Result<Workflow> {
         name: row.get("name"),
         enabled: row.get::<i64, _>("enabled") != 0,
         trigger: parse_trigger(row.get("trigger_event"))?,
+        cadence: decode_cadence(row.get("cadence"))?,
         conditions: serde_json::from_str(row.get("conditions")).map_err(repo_err)?,
         actions: serde_json::from_str(row.get("actions")).map_err(repo_err)?,
         created_at: parse_time(row.get("created_at"))?,
@@ -91,6 +96,52 @@ fn run_from_row(row: &SqliteRow) -> Result<WorkflowRun> {
         created_at: parse_time(row.get("created_at"))?,
         finished_at: finished_at.map(parse_time).transpose()?,
     })
+}
+
+async fn insert_run(
+    conn: &mut SqliteConnection,
+    run: &WorkflowRun,
+    revision: i64,
+    scheduled_at: Option<DateTime<Utc>>,
+) -> Result<bool> {
+    let mutation_id = run.source_identity()?.map(|source| source.mutation_id);
+    let result = sqlx::query(
+        "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts, completed_actions, \
+         last_error, response_status, payload, actions, source_event_id, created_at, finished_at, mutation_id, definition_revision, scheduled_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+    )
+    .bind(run.id.to_string())
+    .bind(run.workflow_id.to_string())
+    .bind(run.event.as_str())
+    .bind(run.document_id.map(|d| d.to_string()))
+    .bind(run.status.as_str())
+    .bind(run.attempts)
+    .bind(run.completed_actions)
+    .bind(&run.last_error)
+    .bind(run.response_status)
+    .bind(&run.payload)
+    .bind(serde_json::to_string(&run.actions).map_err(repo_err)?)
+    .bind(run.source_event_id)
+    .bind(run.created_at.to_rfc3339())
+    .bind(run.finished_at.map(|t| t.to_rfc3339()))
+    .bind(mutation_id.map(|id| id.to_string()))
+    .bind(revision)
+    .bind(scheduled_at.map(clock_time))
+    .execute(&mut *conn)
+    .await
+    .map_err(repo_err)?;
+    if result.rows_affected() == 0 {
+        return Ok(false);
+    }
+    insert_job(
+        conn,
+        JobType::ExecuteWorkflowRun { run_id: run.id },
+        Utc::now(),
+        MAX_ATTEMPTS as i32,
+        crate::queue::JobTraceContext::current().as_ref(),
+    )
+    .await?;
+    Ok(true)
 }
 
 #[async_trait]
@@ -184,7 +235,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
             .await
             .map_err(repo_err)?;
         let row = sqlx::query(
-            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, conditions, actions, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, conditions, actions, created_at, updated_at, created_by, updated_by, cadence, next_run_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -197,6 +248,8 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .bind(&now)
         .bind(actor.as_ref().map(UserId::as_str))
         .bind(actor.as_ref().map(UserId::as_str))
+        .bind(encode_cadence(input.cadence)?)
+        .bind(input.cadence.map(|cadence| clock_time(cadence.first_at())))
         .fetch_one(&mut *tx)
         .await
         .map_err(repo_err)?;
@@ -228,28 +281,34 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .await
         .map_err(repo_err)?
         .ok_or_else(|| not_found(id))?;
+        let stored_cursor = row.get::<Option<String>, _>("next_run_at");
         let existing = workflow_from_row(&row)?;
         existing.check_revision(expected_revision)?;
         input.validate()?;
         if existing.name == input.name
             && existing.enabled == input.enabled
             && existing.trigger == input.trigger
+            && existing.cadence == input.cadence
             && existing.conditions == input.conditions
             && existing.actions == input.actions
         {
             return Ok(existing);
         }
+        let now = Utc::now();
+        let cursor = edited_clock_cursor(&existing, &input, stored_cursor.as_deref(), now)?;
         let actor = folio_core::mutation::current_actor();
         let row = sqlx::query(
-            "UPDATE workflows SET revision = revision + 1, name = ?, enabled = ?, trigger_event = ?, conditions = ?, actions = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, name = ?, enabled = ?, trigger_event = ?, conditions = ?, actions = ?, updated_at = ?, updated_by = ?, cadence = ?, next_run_at = ? WHERE id = ? AND vault_id = ? RETURNING *",
         )
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.trigger.as_str())
         .bind(serde_json::to_string(&input.conditions).map_err(repo_err)?)
         .bind(serde_json::to_string(&input.actions).map_err(repo_err)?)
-        .bind(Utc::now().to_rfc3339())
+        .bind(now.to_rfc3339())
         .bind(actor.as_ref().map(UserId::as_str))
+        .bind(encode_cadence(input.cadence)?)
+        .bind(cursor)
         .bind(id.to_string())
         .bind(vault.to_string())
         .fetch_one(&mut *tx)
@@ -334,18 +393,21 @@ impl WorkflowRepository for SqliteWorkflowRepository {
             .await
             .map_err(repo_err)?
             .ok_or_else(|| not_found(id))?;
+        let stored_cursor = row.get::<Option<String>, _>("next_run_at");
         let existing = workflow_from_row(&row)?;
         if existing.deleted_at.is_none() {
             return Ok(existing);
         }
         let actor = folio_core::mutation::current_actor();
-        let now = Utc::now().to_rfc3339();
+        let now = Utc::now();
+        let cursor = resumed_clock_cursor(existing.cadence, stored_cursor.as_deref(), now)?;
         let row = sqlx::query(
-            "UPDATE workflows SET revision = revision + 1, deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, deleted_at = ?, updated_at = ?, updated_by = ?, next_run_at = ? WHERE id = ? AND vault_id = ? RETURNING *",
         )
         .bind(None::<String>)
-        .bind(&now)
+        .bind(now.to_rfc3339())
         .bind(actor.as_ref().map(UserId::as_str))
+        .bind(cursor)
         .bind(id.to_string())
         .bind(vault.to_string())
         .fetch_one(&mut *tx)
@@ -386,44 +448,49 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         {
             return Ok(false);
         }
-        let mutation_id = run.source_identity()?.map(|source| source.mutation_id);
-        let result = sqlx::query(
-            "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts, completed_actions, \
-             last_error, response_status, payload, actions, source_event_id, created_at, finished_at, mutation_id, definition_revision) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+        let inserted = insert_run(&mut tx, run, revision, None).await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(inserted)
+    }
+
+    async fn enqueue_due_schedules(&self, now: DateTime<Utc>, limit: u32) -> Result<usize> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
+        let rows = sqlx::query(
+            "SELECT w.* FROM workflows w JOIN vaults v ON v.id = w.vault_id
+             WHERE w.enabled = 1 AND w.deleted_at IS NULL AND v.deleted_at IS NULL
+               AND w.next_run_at IS NOT NULL AND w.next_run_at <= ?
+             ORDER BY w.next_run_at, w.id LIMIT ?",
         )
-        .bind(run.id.to_string())
-        .bind(run.workflow_id.to_string())
-        .bind(run.event.as_str())
-        .bind(run.document_id.map(|d| d.to_string()))
-        .bind(run.status.as_str())
-        .bind(run.attempts)
-        .bind(run.completed_actions)
-        .bind(&run.last_error)
-        .bind(run.response_status)
-        .bind(&run.payload)
-        .bind(serde_json::to_string(&run.actions).map_err(repo_err)?)
-        .bind(run.source_event_id)
-        .bind(run.created_at.to_rfc3339())
-        .bind(run.finished_at.map(|t| t.to_rfc3339()))
-        .bind(mutation_id.map(|id| id.to_string()))
-        .bind(revision)
-        .execute(&mut *tx)
+        .bind(clock_time(now))
+        .bind(i64::from(limit))
+        .fetch_all(&mut *tx)
         .await
         .map_err(repo_err)?;
-        if result.rows_affected() == 0 {
-            return Ok(false);
+        let mut count = 0;
+        for row in rows {
+            let cursor = clock_cursor(row.get::<Option<String>, _>("next_run_at").as_deref())?;
+            let workflow = workflow_from_row(&row)?;
+            let cadence = workflow
+                .cadence
+                .ok_or_else(|| repo_err("A clock cursor needs a cadence"))?;
+            let window = cadence.claim_window(cursor, now)?;
+            for at in window.due {
+                let run = WorkflowRun::for_clock(&workflow, at)?;
+                count += usize::from(insert_run(&mut tx, &run, workflow.revision, Some(at)).await?);
+            }
+            sqlx::query("UPDATE workflows SET next_run_at = ? WHERE id = ?")
+                .bind(window.next_at.map(clock_time))
+                .bind(workflow.id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(repo_err)?;
         }
-        insert_job(
-            &mut tx,
-            JobType::ExecuteWorkflowRun { run_id: run.id },
-            Utc::now(),
-            MAX_ATTEMPTS as i32,
-            crate::queue::JobTraceContext::current().as_ref(),
-        )
-        .await?;
         tx.commit().await.map_err(repo_err)?;
-        Ok(true)
+        Ok(count)
     }
 
     #[instrument(skip(self))]

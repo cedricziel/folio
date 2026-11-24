@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use folio_api::{create_router, AppState, AuthState, IngestionState};
-use folio_core::ports::{HealthCheck, RepositoryDocuments, SettingsRepository};
+use folio_core::ports::{HealthCheck, RepositoryDocuments, SettingsRepository, WorkflowRepository};
 use folio_core::services::notifications::{NotificationPlanner, NotificationSender, SenderConfig};
 use folio_core::services::{
     backfill_file_sizes, backfill_original_identities, BroadcastConsumer, DispatcherConfig,
@@ -31,6 +31,29 @@ use folio_infra::{
     WebhookClient, Worker, WorkerConfig, WorkflowRunner,
 };
 use folio_mcp::McpOptions;
+
+async fn run_workflow_schedules(
+    workflows: Arc<dyn WorkflowRepository>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut ticks = tokio::time::interval(Duration::from_secs(5));
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    while !*shutdown.borrow() {
+        tokio::select! {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+            }
+            _ = ticks.tick() => {
+                if let Err(error) = workflows.enqueue_due_schedules(chrono::Utc::now(), 16).await {
+                    tracing::warn!(%error, "Could not enqueue due workflows");
+                }
+            }
+        }
+    }
+}
 
 /// What the binary was asked to do
 enum Mode {
@@ -245,6 +268,10 @@ async fn main() -> Result<()> {
     .with_archive_service(archive_service.clone());
 
     background.spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
+    background.spawn(run_workflow_schedules(
+        workflow_repo.clone(),
+        shutdown_tx.subscribe(),
+    ));
 
     let (sized_documents, sized_store) = (document_repo.clone(), store.clone());
     background.spawn(async move {

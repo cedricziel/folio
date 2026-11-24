@@ -294,6 +294,7 @@ pub(crate) async fn update_workflow_trigger(
         name: existing.name,
         enabled: existing.enabled,
         trigger: input.trigger,
+        cadence: existing.cadence,
         conditions: existing.conditions,
         actions: existing.actions,
     };

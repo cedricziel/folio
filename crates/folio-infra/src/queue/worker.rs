@@ -3110,6 +3110,7 @@ mod tests {
                     .create(
                         vault,
                         WorkflowInput {
+                            cadence: None,
                             name: trigger.as_str().into(),
                             enabled: true,
                             trigger,
@@ -3331,6 +3332,7 @@ mod tests {
             .create(
                 crate::database::test_vault(),
                 WorkflowInput {
+                    cadence: None,
                     name: "hook".into(),
                     enabled: true,
                     trigger: WorkflowTrigger::DocumentUploaded,
