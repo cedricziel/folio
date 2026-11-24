@@ -6,21 +6,19 @@ import Foundation
 #endif
 
 /// Continues user-started work after Folio leaves the foreground, with system progress the user can cancel.
-/// Uses continued-processing tasks on iOS 26; elsewhere the work runs only in the foreground, as before.
+/// Uses continued-processing tasks on iOS; macOS work remains in the foreground.
 struct SystemContinuedWork: ContinuedWorkScheduling {
     func begin(title: String, total: Int, onCancel: @escaping @MainActor @Sendable () -> Void) -> (any ContinuedWork)? {
         #if os(iOS)
-            if #available(iOS 26, *) {
-                return ContinuedProcessingWork.submit(title: title, total: total, onCancel: onCancel)
-            }
+            return ContinuedProcessingWork.submit(title: title, total: total, onCancel: onCancel)
+        #else
+            return nil
         #endif
-        return nil
     }
 }
 
 #if os(iOS)
     /// Each request registers its own identifier under the permitted `<bundle id>.continued.*` pattern.
-    @available(iOS 26, *)
     @MainActor private final class ContinuedProcessingWork: ContinuedWork {
         private let title: String
         private let total: Int

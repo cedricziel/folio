@@ -5,8 +5,8 @@ include:
 options:
   bundleIdPrefix: com.cedricziel
   deploymentTarget:
-    iOS: '18.0'
-    macOS: '15.0'
+    iOS: '27.2'
+    macOS: '27.2'
   createIntermediateGroups: true
 configFiles:
   Debug: Config/Folio.xcconfig
