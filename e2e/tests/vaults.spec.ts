@@ -121,18 +121,14 @@ with sqlite3.connect(sys.argv[1]) as db:
       household.id,
       "Household energy statement",
     );
-    if (process.env.FOLIO_REVISION_PUBLICATION_TEST === "1") {
-      const upload = await context.request.post(`/vaults/${reference.id}/api/documents/upload`, {
-        multipart: {
-          title: "Reference handbook",
-          file: { name: "reference.pdf", mimeType: "application/pdf", buffer: readFileSync(samplePdf) },
-        },
-      });
-      await expect(upload).toBeOK();
-      referenceDocument = await upload.json();
-    } else {
-      referenceDocument = await createDocument(reference.id, "Reference handbook");
-    }
+    const upload = await context.request.post(`/vaults/${reference.id}/api/documents/upload`, {
+      multipart: {
+        title: "Reference handbook",
+        file: { name: "reference.pdf", mimeType: "application/pdf", buffer: readFileSync(samplePdf) },
+      },
+    });
+    await expect(upload).toBeOK();
+    referenceDocument = await upload.json();
     const createWorkflow = await context.request.post(
       `/vaults/${reference.id}/api/workflows`,
       {
@@ -337,12 +333,8 @@ test("viewer controls stay read-only and upload destinations stay writable", asy
   await expect(page.getByLabel("Type", { exact: true })).toBeDisabled();
   await page.getByText("File history", { exact: true }).click();
   const history = page.locator("#document-file-history");
-  if (process.env.FOLIO_REVISION_PUBLICATION_TEST === "1") {
-    await expect(history).toContainText("Verified original");
-    await expect(history.getByRole("link", { name: "Download original", exact: true })).toBeVisible();
-  } else {
-    await expect(history).toContainText("No file revisions yet.");
-  }
+  await expect(history).toContainText("Verified original");
+  await expect(history.getByRole("link", { name: "Download original", exact: true })).toBeVisible();
   await expect(history.getByRole("button", { name: "Replace file", exact: true })).toHaveCount(0);
   expect(
     (await page.request.get(`/vaults/${reference.id}/documents/${personalDocument.id}/file-history`)).status(),
