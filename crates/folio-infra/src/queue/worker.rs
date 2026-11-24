@@ -3101,6 +3101,7 @@ mod tests {
                             name: trigger.as_str().into(),
                             enabled: true,
                             trigger,
+                            triggers: Vec::new(),
                             conditions: WorkflowConditions::default(),
                             actions: vec![WorkflowAction::Webhook {
                                 url: "http://127.0.0.1:1/hook".into(),
@@ -3323,6 +3324,7 @@ mod tests {
                     name: "hook".into(),
                     enabled: true,
                     trigger: WorkflowTrigger::DocumentUploaded,
+                    triggers: Vec::new(),
                     conditions: WorkflowConditions::default(),
                     actions: vec![WorkflowAction::Webhook {
                         url: "http://127.0.0.1:1/hook".into(),

@@ -14,6 +14,7 @@ fn configuration(cadence: WorkflowCadence) -> WorkflowInput {
         name: "Clock workflow".into(),
         enabled: true,
         trigger: WorkflowTrigger::Scheduled,
+        triggers: Vec::new(),
         cadence: Some(cadence),
         conditions: WorkflowConditions::default(),
         actions: vec![WorkflowAction::Webhook {

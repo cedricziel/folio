@@ -185,6 +185,7 @@ async fn contract(r: &Repositories, kind: EntryKind, other_kind: EntryKind, pref
                     name: transition.event_type().into(),
                     enabled: true,
                     trigger,
+                    triggers: Vec::new(),
                     conditions: folio_core::models::WorkflowConditions {
                         event: Some(WorkflowEventConditions {
                             subject_id: Some(entry.id),

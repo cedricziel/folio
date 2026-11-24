@@ -429,6 +429,7 @@ async fn uploaded_workflows_see_the_source_in_conditions_and_payload() {
                 name: "w".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUploaded,
+                triggers: Vec::new(),
                 conditions: WorkflowConditions {
                     source,
                     ..Default::default()

@@ -32,6 +32,7 @@ async fn upload_listener(
                 name: "uploaded".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUploaded,
+                triggers: Vec::new(),
                 conditions: Default::default(),
                 actions: vec![WorkflowAction::Webhook {
                     url: "http://127.0.0.1:1/unused".into(),

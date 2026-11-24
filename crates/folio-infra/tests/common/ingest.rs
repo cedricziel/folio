@@ -128,6 +128,7 @@ impl Harness {
                     name: name.into(),
                     enabled: true,
                     trigger: WorkflowTrigger::IngestReceived,
+                    triggers: Vec::new(),
                     conditions: WorkflowConditions {
                         source,
                         ..Default::default()

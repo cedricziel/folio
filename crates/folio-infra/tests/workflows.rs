@@ -216,6 +216,7 @@ impl Harness {
                     name: "test".into(),
                     enabled: true,
                     trigger,
+                    triggers: Vec::new(),
                     conditions,
                     actions,
                 },
@@ -405,6 +406,7 @@ async fn engine_only_queues_workflows_whose_conditions_match() {
                 name: disabled.name,
                 enabled: false,
                 trigger: disabled.trigger,
+                triggers: Vec::new(),
                 conditions: disabled.conditions,
                 actions: disabled.actions,
             },
@@ -1225,6 +1227,7 @@ async fn editing_a_workflow_cancels_queued_runs_and_retains_their_inputs() {
                 name: workflow.name,
                 enabled: true,
                 trigger: workflow.trigger,
+                triggers: Vec::new(),
                 conditions: workflow.conditions,
                 actions: vec![webhook(server.url("after"), None)],
             },
@@ -1522,6 +1525,7 @@ async fn moving_before_dispatch_never_routes_an_event_to_destination_workflows()
                 name: "destination hook".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUpdated,
+                triggers: Vec::new(),
                 conditions: Default::default(),
                 actions: unreachable_hook(),
             },
@@ -1843,6 +1847,7 @@ async fn clock_run_delivers_the_scheduled_instant_without_a_document() {
                 name: "Scheduled export".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::Scheduled,
+                triggers: Vec::new(),
                 cadence: Some(WorkflowCadence::Once { at }),
                 conditions: WorkflowConditions::default(),
                 actions: vec![WorkflowAction::Webhook {
@@ -2482,6 +2487,22 @@ async fn a_domain_and_compatibility_projection_each_keep_their_selected_trigger(
             unreachable_hook(),
         )
         .await;
+    let both = h
+        .workflows
+        .create(
+            h.vault,
+            WorkflowInput {
+                cadence: None,
+                name: "Both projections".into(),
+                enabled: true,
+                trigger: compatibility.trigger,
+                triggers: vec![compatibility.trigger, precise.trigger],
+                conditions: Default::default(),
+                actions: unreachable_hook(),
+            },
+        )
+        .await
+        .unwrap();
     h.documents
         .update(
             h.vault,
@@ -2498,17 +2519,24 @@ async fn a_domain_and_compatibility_projection_each_keep_their_selected_trigger(
     let mut combined = events.iter().find(|event| {
         matches!(&event.event, Some(DocumentEvent::Updated { document_id }) if *document_id == doc.id)
     }).unwrap().clone();
-    combined.envelope = events
-        .into_iter()
-        .filter_map(|event| event.envelope)
-        .find(|event| event.event_type() == "document.title_changed");
-    assert!(combined.envelope.is_some());
+    let precise_occurrence = events
+        .iter()
+        .find(|event| {
+            event
+                .envelope
+                .as_ref()
+                .is_some_and(|envelope| envelope.event_type() == "document.title_changed")
+        })
+        .unwrap();
+    assert_ne!(combined.id, precise_occurrence.id);
+    combined.envelope.clone_from(&precise_occurrence.envelope);
 
     let runs = h.engine.handle(&combined).await.unwrap();
-    assert_eq!(runs.len(), 2);
-    for (workflow, trigger) in [precise, compatibility].into_iter().zip([
+    assert_eq!(runs.len(), 3);
+    for (workflow, trigger) in [precise, compatibility, both].into_iter().zip([
         WorkflowTrigger::DocumentTitleChanged,
         WorkflowTrigger::DocumentUpdated,
+        WorkflowTrigger::DocumentTitleChanged,
     ]) {
         let run = runs
             .iter()
@@ -2520,6 +2548,12 @@ async fn a_domain_and_compatibility_projection_each_keep_their_selected_trigger(
         assert_eq!(payload["document"]["title"], "after");
     }
     assert!(h.engine.handle(&combined).await.unwrap().is_empty());
+    assert!(h
+        .engine
+        .handle(precise_occurrence)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]

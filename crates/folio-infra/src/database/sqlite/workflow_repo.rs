@@ -52,12 +52,16 @@ fn parse_trigger(value: &str) -> Result<WorkflowTrigger> {
 }
 
 fn workflow_from_row(row: &SqliteRow) -> Result<Workflow> {
+    let trigger = parse_trigger(row.get("trigger_event"))?;
+    let additional: Vec<WorkflowTrigger> =
+        serde_json::from_str(row.get("additional_triggers")).map_err(repo_err)?;
     Ok(Workflow {
         id: parse_id(row.get("id"))?,
         vault_id: VaultId(parse_id(row.get("vault_id"))?),
         name: row.get("name"),
         enabled: row.get::<i64, _>("enabled") != 0,
-        trigger: parse_trigger(row.get("trigger_event"))?,
+        trigger,
+        triggers: std::iter::once(trigger).chain(additional).collect(),
         cadence: decode_cadence(row.get("cadence"))?,
         conditions: serde_json::from_str(row.get("conditions")).map_err(repo_err)?,
         actions: serde_json::from_str(row.get("actions")).map_err(repo_err)?,
@@ -189,7 +193,9 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         trigger: WorkflowTrigger,
     ) -> Result<Vec<Workflow>> {
         let rows = sqlx::query(
-            "SELECT * FROM workflows WHERE vault_id = ? AND enabled = 1 AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL) AND trigger_event = ?
+            "SELECT * FROM workflows WHERE vault_id = ?1 AND enabled = 1 AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL) AND (trigger_event = ?2 OR EXISTS (
+                 SELECT 1 FROM json_each(workflows.additional_triggers) WHERE value = ?2
+             ))
              ORDER BY created_at",
         )
         .bind(vault.to_string())
@@ -235,13 +241,14 @@ impl WorkflowRepository for SqliteWorkflowRepository {
             .await
             .map_err(repo_err)?;
         let row = sqlx::query(
-            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, conditions, actions, created_at, updated_at, created_by, updated_by, cadence, next_run_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, additional_triggers, conditions, actions, created_at, updated_at, created_by, updated_by, cadence, next_run_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.trigger.as_str())
+        .bind(serde_json::to_string(&input.selected_triggers()[1..]).map_err(repo_err)?)
         .bind(serde_json::to_string(&input.conditions).map_err(repo_err)?)
         .bind(serde_json::to_string(&input.actions).map_err(repo_err)?)
         .bind(&now)
@@ -264,7 +271,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         &self,
         vault: VaultId,
         id: Id,
-        input: WorkflowInput,
+        mut input: WorkflowInput,
         expected_revision: Option<i64>,
     ) -> Result<Workflow> {
         let mut tx = self
@@ -284,10 +291,11 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         let stored_cursor = row.get::<Option<String>, _>("next_run_at");
         let existing = workflow_from_row(&row)?;
         existing.check_revision(expected_revision)?;
+        input.keep_legacy_trigger_selection(&existing);
         input.validate()?;
         if existing.name == input.name
             && existing.enabled == input.enabled
-            && existing.trigger == input.trigger
+            && existing.triggers.as_slice() == input.selected_triggers()
             && existing.cadence == input.cadence
             && existing.conditions == input.conditions
             && existing.actions == input.actions
@@ -298,11 +306,12 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         let cursor = edited_clock_cursor(&existing, &input, stored_cursor.as_deref(), now)?;
         let actor = folio_core::mutation::current_actor();
         let row = sqlx::query(
-            "UPDATE workflows SET revision = revision + 1, name = ?, enabled = ?, trigger_event = ?, conditions = ?, actions = ?, updated_at = ?, updated_by = ?, cadence = ?, next_run_at = ? WHERE id = ? AND vault_id = ? RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, name = ?, enabled = ?, trigger_event = ?, additional_triggers = ?, conditions = ?, actions = ?, updated_at = ?, updated_by = ?, cadence = ?, next_run_at = ? WHERE id = ? AND vault_id = ? RETURNING *",
         )
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.trigger.as_str())
+        .bind(serde_json::to_string(&input.selected_triggers()[1..]).map_err(repo_err)?)
         .bind(serde_json::to_string(&input.conditions).map_err(repo_err)?)
         .bind(serde_json::to_string(&input.actions).map_err(repo_err)?)
         .bind(now.to_rfc3339())

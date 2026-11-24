@@ -251,6 +251,272 @@ async fn workflow_api_rejects_a_rename_title_with_nul() {
 }
 
 #[tokio::test]
+async fn ordered_web_form_moves_webhook_credentials_with_the_saved_row() {
+    use folio_core::models::WorkflowAction;
+
+    let app = test_app().await;
+    let url = "https://example.test/hook";
+    let input = json!({
+        "name": "Two deliveries",
+        "trigger": "document.uploaded",
+        "actions": [
+            {"type": "webhook", "url": url, "secret": "first-secret", "headers": {"Authorization": "first-token"}},
+            {"type": "webhook", "url": url, "secret": "second-secret", "headers": {"Authorization": "second-token"}}
+        ]
+    });
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(input)).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = Uuid::parse_str(created["id"].as_str().unwrap()).unwrap();
+    let before = app
+        .state
+        .workflow_repo
+        .find_by_id(app.vault, id)
+        .await
+        .unwrap()
+        .unwrap();
+    let rows = json!([
+        {"kind": "webhook", "existing": 1, "value": url, "headers": "Authorization: ********"},
+        {"kind": "webhook", "existing": 0, "value": url, "headers": "Authorization: ********"}
+    ]);
+    let form = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("name", "Two deliveries")
+        .append_pair("trigger", "document.uploaded")
+        .append_pair("enabled", "on")
+        .append_pair("revision", &before.revision.to_string())
+        .append_pair("ordered_actions", &rows.to_string())
+        .finish();
+    let path = format!("/workflows/{id}");
+    let (status, page) = post_form(&app, &path, form.clone()).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{page}");
+    let after = app
+        .state
+        .workflow_repo
+        .find_by_id(app.vault, id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after.actions,
+        [before.actions[1].clone(), before.actions[0].clone()]
+    );
+    assert!(
+        matches!(&after.actions[0], WorkflowAction::Webhook { secret: Some(value), .. } if value == "second-secret")
+    );
+
+    let (status, page) = post_form(&app, &path, form).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    for private in [
+        "first-secret",
+        "second-secret",
+        "first-token",
+        "second-token",
+    ] {
+        assert!(!page.contains(private));
+    }
+    let unchanged = app
+        .state
+        .workflow_repo
+        .find_by_id(app.vault, id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.actions, after.actions);
+    assert_eq!(unchanged.revision, after.revision);
+}
+
+#[tokio::test]
+async fn ordered_web_form_rejects_mask_reuse_at_a_new_destination() {
+    let app = test_app().await;
+    let (status, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(workflow_body("https://example.test/current")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = Uuid::parse_str(created["id"].as_str().unwrap()).unwrap();
+    let before = app
+        .state
+        .workflow_repo
+        .find_by_id(app.vault, id)
+        .await
+        .unwrap()
+        .unwrap();
+    let path = format!("/workflows/{id}");
+    for (headers, secret) in [
+        ("X-Source: ********", ""),
+        ("Malformed private header", "unsaved-private-secret"),
+    ] {
+        let rows = json!([{
+            "kind": "webhook", "existing": 0, "value": "https://other.test/changed",
+            "headers": headers, "secret": secret,
+        }]);
+        let form = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("name", "Unsaved change")
+            .append_pair("trigger", "document.uploaded")
+            .append_pair("revision", &before.revision.to_string())
+            .append_pair("ordered_actions", &rows.to_string())
+            .finish();
+        let (status, page) = post_form(&app, &path, form).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(page.contains("https://other.test/changed"));
+        for private in [
+            "hunter2",
+            "Malformed private header",
+            "unsaved-private-secret",
+        ] {
+            assert!(!page.contains(private));
+        }
+        let after = app
+            .state
+            .workflow_repo
+            .find_by_id(app.vault, id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.actions, before.actions);
+        assert_eq!(after.revision, before.revision);
+    }
+}
+
+#[tokio::test]
+async fn multiple_trigger_choices_roundtrip_through_legacy_and_new_clients() {
+    let app = test_app().await;
+    let triggers = json!(["document.uploaded", "document.title_changed"]);
+    let actions = json!([{"type": "webhook", "url": "https://example.test/hook"}]);
+    let (status, workflow) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({"name": "Two choices", "triggers": triggers, "actions": actions})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    assert_eq!(workflow["trigger"], triggers[0]);
+    assert_eq!(workflow["triggers"], triggers);
+    let uri = format!("/api/workflows/{}", workflow["id"].as_str().unwrap());
+    let (status, updated) = json_request(
+        &app,
+        "PUT",
+        &uri,
+        Some(json!({"name": "Legacy edit", "trigger": triggers[0], "actions": actions})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["triggers"], triggers);
+
+    let form = "name=Web+edit&trigger=document.uploaded&enabled=on&webhook_url=https%3A%2F%2Fexample.test%2Fhook";
+    let page = uri.strip_prefix("/api").unwrap();
+    let (status, notice) = post_form(&app, page, form.into()).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{notice}");
+    let (status, stored) = json_request(&app, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["triggers"], triggers);
+
+    let (status, updated) = json_request(
+        &app,
+        "PUT",
+        &uri,
+        Some(json!({"name": "One choice", "triggers": [triggers[0]], "actions": actions})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["triggers"], json!([triggers[0]]));
+}
+
+#[tokio::test]
+async fn web_editor_saves_reorders_and_removes_explicit_additional_triggers() {
+    let app = test_app().await;
+    let (status, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(workflow_body("https://example.test/hook")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let page = format!("/workflows/{id}");
+    let api = format!("/api/workflows/{id}");
+    let fields = "name=Multi+trigger&enabled=on&webhook_url=https%3A%2F%2Fexample.test%2Fhook&filename_glob=invoice-*&trigger_selection=on";
+    let (status, body) = post_form(&app, &page,
+        format!("{fields}&trigger=document.updated&trigger_additional_2=document.processed&trigger_additional_1=document.uploaded")
+    ).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let (_, stored) = json_request(&app, "GET", &api, None).await;
+    let ordered = json!([
+        "document.updated",
+        "document.uploaded",
+        "document.processed"
+    ]);
+    assert_eq!(stored["triggers"], ordered);
+    assert_eq!(stored["conditions"]["filename_glob"], "invoice-*");
+
+    let (status, editor_html) = send(&app, "GET", &page, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(editor_html.contains("name=\"trigger_additional_1\""));
+    assert!(editor_html.contains("name=\"trigger_additional_2\""));
+
+    let (status, notice) = post_form(
+        &app,
+        &page,
+        format!("{fields}&trigger=document.updated&trigger_additional_1=document.updated"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(notice.contains("cannot select the same trigger twice"));
+
+    let tag = Uuid::new_v4();
+    let (status, notice) = post_form(
+        &app, &page, format!("{fields}&trigger=document.updated&trigger_additional_1=source.failed&action_tag_{tag}=on")
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(notice.contains("incompatible with workflow trigger"));
+    let (_, unchanged) = json_request(&app, "GET", &api, None).await;
+    assert_eq!(unchanged["triggers"], ordered);
+
+    let (status, _) = post_form(&app, &format!("{page}/toggle"), String::new()).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, toggled) = json_request(&app, "GET", &api, None).await;
+    assert_eq!(toggled["enabled"], false);
+    assert_eq!(toggled["triggers"], ordered);
+
+    let (status, body) = post_form(&app, &page, format!("{fields}&trigger=document.updated")).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let (_, single) = json_request(&app, "GET", &api, None).await;
+    assert_eq!(single["triggers"], json!(["document.updated"]));
+}
+
+#[tokio::test]
+async fn primary_trigger_patch_keeps_other_selections_in_order() {
+    let app = test_app().await;
+    let (status, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Several document events",
+            "triggers": ["document.uploaded", "document_note.created", "document_comment.created"],
+            "actions": [{ "type": "webhook", "url": "https://example.test/hook" }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let path = format!("/api/workflows/{}/trigger", created["id"].as_str().unwrap());
+    let (status, updated) = json_request(
+        &app, "PATCH", &path,
+        Some(json!({"expected_revision": created["revision"], "trigger": "document_comment.created"})),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(
+        updated["triggers"],
+        json!(["document_comment.created", "document_note.created"])
+    );
+    assert_eq!(updated["actions"], created["actions"]);
+}
+
+#[tokio::test]
 async fn condition_groups_survive_api_storage_and_html_edits() {
     let app = test_app().await;
     let groups = json!({
@@ -360,6 +626,146 @@ async fn receiver(status: u16) -> (String, Arc<Mutex<Vec<(HeaderMap, String)>>>)
     let url = format!("http://{}/hook", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (url, log)
+}
+
+#[tokio::test]
+async fn guarded_reorder_keeps_credentials_attached_to_the_original_actions() {
+    let app = test_app().await;
+    let mut draft = workflow_body("https://example.test/shared");
+    let first = draft["actions"][0].clone();
+    let mut second = first.clone();
+    second["secret"] = json!("second secret");
+    second["headers"]["X-Source"] = json!("second header");
+    draft["actions"] = json!([first, second]);
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(draft.clone())).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let path = format!(
+        "/api/workflows/{id}/definition?expected_revision={}",
+        created["revision"]
+    );
+    draft["actions"] = json!([created["actions"][1], created["actions"][0]]);
+    for (sources, expected) in [
+        ("0,0", StatusCode::BAD_REQUEST),
+        ("-,0", StatusCode::BAD_REQUEST),
+        ("1,0", StatusCode::OK),
+    ] {
+        let response = app
+            .router
+            .clone()
+            .oneshot(
+                Request::put(&path)
+                    .header("content-type", "application/json")
+                    .header("x-folio-workflow-action-sources", sources)
+                    .body(Body::from(draft.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+
+    let stored = app
+        .state
+        .workflow_repo
+        .find_by_id(app.vault, id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.actions.len(), 2);
+    for (action, (expected_secret, expected_header)) in stored
+        .actions
+        .iter()
+        .zip([("second secret", "second header"), ("hunter2", "folio")])
+    {
+        match action {
+            WorkflowAction::Webhook {
+                secret, headers, ..
+            } => {
+                assert_eq!(secret.as_deref(), Some(expected_secret));
+                assert_eq!(
+                    headers.get("X-Source").map(String::as_str),
+                    Some(expected_header)
+                );
+            }
+            other => panic!("expected a webhook, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn full_workflow_edit_requires_a_fresh_revision_and_can_retry_after_reload() {
+    let app = test_app().await;
+    let mut stale = workflow_body("https://example.test/original");
+    let (status, opened) = json_request(&app, "POST", "/api/workflows", Some(stale.clone())).await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let id = opened["id"].as_str().unwrap();
+    let path = format!("/api/workflows/{id}");
+    let condition = json!({"filename_glob": "receipts-*"});
+
+    let mut concurrent = workflow_body("https://example.test/rotated");
+    concurrent["enabled"] = json!(false);
+    concurrent["actions"][0]["secret"] = json!("rotated credential");
+    let (status, disabled) = json_request(&app, "PUT", &path, Some(concurrent)).await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    stale["conditions"] = condition.clone();
+    stale["actions"][0]["secret"] = json!("********");
+    let (status, conflict) = json_request(
+        &app,
+        "PUT",
+        &format!("{path}/definition?expected_revision={}", opened["revision"]),
+        Some(stale.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+    for query in ["", "?expected_revision=0"] {
+        let (status, body) = json_request(
+            &app,
+            "PUT",
+            &format!("{path}/definition{query}"),
+            Some(stale.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
+
+    let (_, current) = json_request(&app, "GET", &path, None).await;
+    assert_eq!(current, disabled);
+    let edit = json!({
+        "name": current["name"],
+        "enabled": current["enabled"],
+        "trigger": current["trigger"],
+        "conditions": condition,
+        "actions": current["actions"],
+    });
+    let (status, saved) = json_request(
+        &app,
+        "PUT",
+        &format!(
+            "{path}/definition?expected_revision={}",
+            current["revision"]
+        ),
+        Some(edit),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["revision"], current["revision"].as_i64().unwrap() + 1);
+    assert_eq!(saved["enabled"], false);
+    assert_eq!(saved["actions"], current["actions"]);
+    assert_eq!(saved["conditions"], condition);
+    let stored = app
+        .state
+        .workflow_repo
+        .find_by_id(app.vault, id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    match &stored.actions[0] {
+        WorkflowAction::Webhook { secret, .. } => {
+            assert_eq!(secret.as_deref(), Some("rotated credential"))
+        }
+        other => panic!("expected a webhook, got {other:?}"),
+    }
 }
 
 #[tokio::test]

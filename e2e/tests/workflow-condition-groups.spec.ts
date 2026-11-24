@@ -28,6 +28,8 @@ test("authors nested conditions and removes an empty alternative group", async (
   await exclusions.getByRole("button", { name: "Add branch", exact: true }).click();
   await exclusions.getByRole("textbox", { name: "File name", exact: true }).fill("draft-*");
 
+  await page.getByRole("combobox", { name: "Action to add" }).selectOption("webhook");
+  await page.getByRole("button", { name: "Add action", exact: true }).click();
   await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
   const save = page.getByRole("button", { name: "Save workflow", exact: true });
   await save.click();
@@ -96,7 +98,7 @@ test("edits a shared saved-view trigger with only occurrence filters", async ({ 
   const trigger = page.getByRole("combobox", { name: "When", exact: true });
   await trigger.selectOption({ label: "When a shared saved view is updated" });
   await expect(page.getByRole("group", { name: "Only if the document matches" })).toBeHidden();
-  await expect(page.locator('[data-workflow-form-target="documentAction"]').first()).toBeHidden();
+  await expect(page.getByRole("combobox", { name: "Action to add" }).locator('option[value="add_tags"]')).toBeDisabled();
   await expect(page.getByRole("group", { name: "Only if the event matches" })).toBeVisible();
 
   const subject = "b40ef794-c012-438f-9398-6626c2f30c01";
@@ -145,9 +147,9 @@ test("keeps a document action visible when switching to a saved-view trigger", a
   await page.goto(`/workflows/${id}`);
   const trigger = page.getByRole("combobox", { name: "When", exact: true });
   await trigger.selectOption("saved_view.deleted");
-  const action = page.getByRole("combobox", { name: "Set who it is from" });
-  await expect(action).toHaveValue(correspondentID);
-  await expect(page.getByText("Remove the document actions to use this saved view trigger.")).toBeVisible();
+  const action = page.locator("[data-action-row]").filter({ hasText: "Set correspondent" });
+  await expect(action).toBeVisible();
+  await expect(action.locator("[data-action-incompatible]")).toBeVisible();
 
   const save = page.getByRole("button", { name: "Save workflow", exact: true });
   await save.click();
@@ -155,10 +157,10 @@ test("keeps a document action visible when switching to a saved-view trigger", a
   const rejected = await page.request.get(`/api/workflows/${id}`);
   expect((await rejected.json()).trigger).toBe("document.uploaded");
 
-  await action.selectOption("");
+  await action.getByRole("button", { name: "Remove action", exact: true }).click();
   await save.click();
   await expect(trigger).toHaveValue("saved_view.deleted");
-  await expect(action).toBeHidden();
+  await expect(action).toHaveCount(0);
   const saved = await page.request.get(`/api/workflows/${id}`);
   expect(await saved.json()).toMatchObject({
     trigger: "saved_view.deleted",

@@ -39,6 +39,7 @@ pub(crate) mod trash;
 mod vault_pages;
 pub(crate) mod vaults;
 mod view;
+mod workflow_action_form;
 mod workflow_pages;
 pub(crate) mod workflows;
 

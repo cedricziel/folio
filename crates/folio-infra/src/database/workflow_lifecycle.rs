@@ -12,7 +12,7 @@ pub(super) fn workflow_event(workflow: &Workflow, action: &str) -> Result<Domain
         },
         None,
         EventAudience::Owners,
-        serde_json::json!({"name": workflow.name, "enabled": workflow.enabled, "trigger": workflow.trigger.as_str()}),
+        serde_json::json!({"name": workflow.name, "enabled": workflow.enabled, "trigger": workflow.trigger.as_str(), "triggers": workflow.triggers}),
     )
 }
 

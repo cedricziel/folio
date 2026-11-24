@@ -8921,6 +8921,16 @@
               }
             }
           },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
           },
@@ -9231,6 +9241,137 @@
           },
           "404": {
             "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/workflows/{id}/definition": {
+      "put": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Replace a workflow only if it still matches the editor's last read.",
+        "operationId": "updateWorkflowDefinition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "expected_revision",
+            "in": "query",
+            "description": "Positive revision returned by the workflow read used to start editing.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "X-Folio-Workflow-Action-Sources",
+            "in": "header",
+            "description": "One distinct saved action index per action in the new order, or '-' for a new action.",
+            "required": false,
+            "schema": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated workflow; webhook secrets are masked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The workflow changed after the revision was read",
             "content": {
               "application/json": {
                 "schema": {
@@ -13861,7 +14002,15 @@
             "description": "Revision to send when changing the trigger."
           },
           "trigger": {
-            "$ref": "#/components/schemas/WorkflowTrigger"
+            "$ref": "#/components/schemas/WorkflowTrigger",
+            "description": "First selected trigger, retained for existing clients."
+          },
+          "triggers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowTrigger"
+            },
+            "description": "Selected triggers in the order saved by the owner."
           },
           "updated_at": {
             "type": "string",
@@ -14446,7 +14595,6 @@
         "description": "Fields for creating or replacing a workflow",
         "required": [
           "name",
-          "trigger",
           "actions"
         ],
         "properties": {
@@ -14469,7 +14617,15 @@
             "type": "string"
           },
           "trigger": {
-            "$ref": "#/components/schemas/WorkflowTrigger"
+            "$ref": "#/components/schemas/WorkflowTrigger",
+            "description": "Legacy selection, or the first trigger when both fields are supplied."
+          },
+          "triggers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowTrigger"
+            },
+            "description": "Ordered nonempty trigger list. Omit for a legacy single-trigger request."
           }
         }
       },

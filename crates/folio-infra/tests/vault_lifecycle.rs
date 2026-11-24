@@ -347,6 +347,7 @@ async fn lifecycle_contract(db: Database) {
                 name: "Retained workflow".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUpdated,
+                triggers: Vec::new(),
                 conditions: WorkflowConditions::default(),
                 actions: vec![WorkflowAction::Webhook {
                     url: "http://127.0.0.1:1/never".into(),

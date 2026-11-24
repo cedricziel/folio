@@ -1,3 +1,4 @@
+import FolioAPI
 import Foundation
 
 /// Lifecycle metadata for a workflow, excluding its conditions, actions and stored credentials.
@@ -7,6 +8,8 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
     public let name: String
     public let enabled: Bool
     public let trigger: String
+    public let triggers: [String]?
+    public let cadence: Components.Schemas.WorkflowCadence?
     public let createdAt: Date
     public let updatedAt: Date
     public let revision: Int64?
@@ -15,7 +18,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
     public let updatedBy: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, enabled, trigger, revision
+        case id, name, enabled, trigger, triggers, revision, cadence
         case vaultID = "vault_id"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
@@ -27,13 +30,16 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
     public init(
         id: UUID, vaultID: UUID, name: String, enabled: Bool, trigger: String,
         createdAt: Date, updatedAt: Date, deletedAt: Date? = nil,
-        createdBy: String? = nil, updatedBy: String? = nil, revision: Int64? = nil
+        createdBy: String? = nil, updatedBy: String? = nil, revision: Int64? = nil,
+        cadence: Components.Schemas.WorkflowCadence? = nil, triggers: [String]? = nil
     ) {
         self.id = id
         self.vaultID = vaultID
         self.name = name
         self.enabled = enabled
         self.trigger = trigger
+        self.triggers = triggers
+        self.cadence = cadence
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.revision = revision
@@ -44,6 +50,11 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
 
     public var stateTitle: String {
         deletedAt != nil ? "In Trash" : enabled ? "On" : "Off"
+    }
+
+    public var selectedTriggers: [String] {
+        guard let triggers, !triggers.isEmpty else { return [trigger] }
+        return triggers
     }
 
     public var triggerTitle: String {
@@ -57,6 +68,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         case "document.document_type_changed": "When a document type changes"
         case "document.deleted": "When a document is deleted"
         case "ingest.received": "When a file arrives, before import"
+        case "workflow.scheduled": "On a schedule"
         case "document.metadata.changed": "When custom field values change"
         case "metadata_field.created": "When a custom field is created"
         case "metadata_field.updated": "When a custom field changes"
@@ -133,4 +145,27 @@ public protocol WorkflowLifecycleService: Sendable {
     func workflowHistory(vaultID: UUID, workflowID: UUID) async throws -> [WorkflowExecutionSummary]
     func deleteWorkflow(vaultID: UUID, workflowID: UUID) async throws
     func restoreWorkflow(vaultID: UUID, workflowID: UUID) async throws -> WorkflowConfigurationSummary
+}
+
+protocol WorkflowAuthoringService: WorkflowTriggerEditingService {
+    func createWorkflow(
+        vaultID: UUID, name: String, choices: [WorkflowTriggerChoice], actions: WorkflowActionDraft,
+        cadence: Components.Schemas.WorkflowCadence?
+    ) async throws -> WorkflowConfigurationSummary
+
+    func saveWorkflowTriggers(
+        _ workflow: WorkflowConfigurationSummary, to triggerIDs: [String], cadence: Components.Schemas.WorkflowCadence?
+    ) async throws -> WorkflowConfigurationSummary
+
+    func saveWorkflowSettings(
+        _ workflow: WorkflowConfigurationSummary, name: String, enabled: Bool
+    ) async throws -> WorkflowConfigurationSummary
+}
+
+func validatedWorkflowName(_ name: String) throws -> String {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw FolioError.server(status: 400, message: "Enter a workflow name.")
+    }
+    return trimmed
 }

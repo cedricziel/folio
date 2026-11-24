@@ -69,7 +69,9 @@ public final class WorkflowLifecycleViewModel {
     }
 
     func triggerTitle(for workflow: WorkflowConfigurationSummary) -> String {
-        triggerTitles[workflow.trigger] ?? workflow.triggerTitle
+        workflow.selectedTriggers.map { id in
+            triggerTitles[id] ?? (id == workflow.trigger ? workflow.triggerTitle : id)
+        }.joined(separator: " · ")
     }
 
     func applyTriggerUpdate(_ workflow: WorkflowConfigurationSummary, choice: WorkflowTriggerChoice?)

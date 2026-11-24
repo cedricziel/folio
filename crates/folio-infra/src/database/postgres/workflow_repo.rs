@@ -48,6 +48,7 @@ struct WorkflowRow {
     name: String,
     enabled: bool,
     trigger_event: String,
+    additional_triggers: sqlx::types::Json<Vec<WorkflowTrigger>>,
     cadence: Option<String>,
     next_run_at: Option<String>,
     conditions: String,
@@ -64,12 +65,16 @@ impl TryFrom<WorkflowRow> for Workflow {
     type Error = Error;
 
     fn try_from(row: WorkflowRow) -> Result<Self> {
+        let trigger = parse_trigger(&row.trigger_event)?;
         Ok(Workflow {
             id: row.id,
             vault_id: VaultId(row.vault_id),
             name: row.name,
             enabled: row.enabled,
-            trigger: parse_trigger(&row.trigger_event)?,
+            trigger,
+            triggers: std::iter::once(trigger)
+                .chain(row.additional_triggers.0)
+                .collect(),
             cadence: decode_cadence(row.cadence.as_deref())?,
             conditions: serde_json::from_str(&row.conditions).map_err(repo_err)?,
             actions: serde_json::from_str(&row.actions).map_err(repo_err)?,
@@ -228,7 +233,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         trigger: WorkflowTrigger,
     ) -> Result<Vec<Workflow>> {
         let rows: Vec<WorkflowRow> = sqlx::query_as(
-            "SELECT * FROM workflows WHERE vault_id = $1 AND enabled AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL) AND trigger_event = $2
+            "SELECT * FROM workflows WHERE vault_id = $1 AND enabled AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL) AND (trigger_event = $2 OR additional_triggers ? $2)
              ORDER BY created_at",
         )
         .bind(vault.0)
@@ -270,13 +275,14 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         let actor = folio_core::mutation::current_actor();
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, conditions, actions, created_at, updated_at, created_by, updated_by, cadence, next_run_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *",
+            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, additional_triggers, conditions, actions, created_at, updated_at, created_by, updated_by, cadence, next_run_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *",
         )
         .bind(id)
         .bind(vault.0)
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.trigger.as_str())
+        .bind(sqlx::types::Json(&input.selected_triggers()[1..]))
         .bind(serde_json::to_string(&input.conditions).map_err(repo_err)?)
         .bind(serde_json::to_string(&input.actions).map_err(repo_err)?)
         .bind(now)
@@ -299,7 +305,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         &self,
         vault: VaultId,
         id: Id,
-        input: WorkflowInput,
+        mut input: WorkflowInput,
         expected_revision: Option<i64>,
     ) -> Result<Workflow> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
@@ -315,10 +321,11 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         let stored_cursor = row.next_run_at.clone();
         let existing = Workflow::try_from(row)?;
         existing.check_revision(expected_revision)?;
+        input.keep_legacy_trigger_selection(&existing);
         input.validate()?;
         if existing.name == input.name
             && existing.enabled == input.enabled
-            && existing.trigger == input.trigger
+            && existing.triggers.as_slice() == input.selected_triggers()
             && existing.cadence == input.cadence
             && existing.conditions == input.conditions
             && existing.actions == input.actions
@@ -329,11 +336,12 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         let cursor = edited_clock_cursor(&existing, &input, stored_cursor.as_deref(), now)?;
         let actor = folio_core::mutation::current_actor();
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "UPDATE workflows SET revision = revision + 1, name = $1, enabled = $2, trigger_event = $3, conditions = $4, actions = $5, updated_at = $6, updated_by = $7, cadence = $8, next_run_at = $9 WHERE id = $10 AND vault_id = $11 RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, name = $1, enabled = $2, trigger_event = $3, additional_triggers = $4, conditions = $5, actions = $6, updated_at = $7, updated_by = $8, cadence = $9, next_run_at = $10 WHERE id = $11 AND vault_id = $12 RETURNING *",
         )
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.trigger.as_str())
+        .bind(sqlx::types::Json(&input.selected_triggers()[1..]))
         .bind(serde_json::to_string(&input.conditions).map_err(repo_err)?)
         .bind(serde_json::to_string(&input.actions).map_err(repo_err)?)
         .bind(now)

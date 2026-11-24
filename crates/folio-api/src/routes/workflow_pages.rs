@@ -1,16 +1,18 @@
 //! Server-rendered workflow pages: list, create/edit form, test, and run history
 
 use crate::vault::filters;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Form, Router,
 };
 use chrono::SecondsFormat;
+use folio_core::Error;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -19,9 +21,11 @@ use folio_core::models::{
     TextMatch, UserId, WebhookMethod, Workflow, WorkflowAction, WorkflowActorCondition,
     WorkflowCadence, WorkflowConditionField, WorkflowConditionType, WorkflowConditions,
     WorkflowEventConditions, WorkflowIngestConditions, WorkflowInput, WorkflowMetadataConditions,
-    WorkflowProcessingConditions, WorkflowRun, WorkflowTrigger, WorkflowTriggerRegistry,
+    WorkflowProcessingConditions, WorkflowRun, WorkflowTarget, WorkflowTrigger,
+    WorkflowTriggerRegistry,
 };
 
+use super::workflow_action_form::{action_fields, parse_headers, resolve_actions};
 use super::workflows::{
     find, find_retained, history_error, send_test, WorkflowListQuery, SECRET_MASK,
 };
@@ -49,6 +53,19 @@ struct Choice {
     value: String,
     label: String,
     selected: bool,
+}
+
+struct TriggerChoice {
+    value: String,
+    label: String,
+    selected: bool,
+    processing_keys: String,
+    document_actions: bool,
+}
+
+struct AdditionalTrigger {
+    position: usize,
+    choices: Vec<TriggerChoice>,
 }
 
 struct Notice {
@@ -106,7 +123,7 @@ struct WorkflowRow {
     id: String,
     name: String,
     enabled: bool,
-    trigger: &'static str,
+    trigger_labels: Vec<&'static str>,
     last_run: Option<RunView>,
 }
 
@@ -142,7 +159,11 @@ async fn list_page(
             id: workflow.id.to_string(),
             name: workflow.name,
             enabled: workflow.enabled,
-            trigger: workflow.trigger.label(),
+            trigger_labels: workflow
+                .triggers
+                .iter()
+                .map(WorkflowTrigger::label)
+                .collect(),
             last_run,
         });
     }
@@ -222,8 +243,11 @@ async fn restore(
 #[derive(Default, Deserialize, Clone)]
 #[serde(default)]
 struct FormValues {
+    revision: Option<i64>,
+    ordered_actions: Option<String>,
     name: String,
     trigger: String,
+    trigger_selection: Option<String>,
     cadence_mode: String,
     cadence_start: String,
     cadence_interval: String,
@@ -268,7 +292,7 @@ struct FormValues {
     webhook_headers: String,
     action_correspondent_id: String,
     action_document_type_id: String,
-    /// Tag selections and named processing predicates use distinct form keys.
+    /// Indexed triggers, tag selections, and processing predicates use distinct form keys.
     #[serde(flatten)]
     extra_fields: HashMap<String, String>,
 }
@@ -365,6 +389,7 @@ impl ConditionGroups {
 }
 
 const TAG_FIELD: &str = "action_tag_";
+const ADDITIONAL_TRIGGER_FIELD: &str = "trigger_additional_";
 
 const METADATA_KINDS: [(MetadataKind, &str); 10] = [
     (MetadataKind::Text, "Text"),
@@ -503,6 +528,45 @@ impl FormValues {
             .collect()
     }
 
+    fn additional_triggers(&self) -> Vec<(usize, &str)> {
+        (1..WorkflowTrigger::ALL.len())
+            .filter_map(|position| {
+                self.extra_fields
+                    .get(&format!("{ADDITIONAL_TRIGGER_FIELD}{position}"))
+                    .map(|value| (position, value.as_str()))
+            })
+            .collect()
+    }
+
+    fn explicit_triggers(&self, trigger: WorkflowTrigger) -> Result<Vec<WorkflowTrigger>, String> {
+        if self.trigger_selection.is_none() {
+            return Ok(Vec::new());
+        }
+        for suffix in self
+            .extra_fields
+            .keys()
+            .filter_map(|key| key.strip_prefix(ADDITIONAL_TRIGGER_FIELD))
+        {
+            let position: usize = suffix
+                .parse()
+                .map_err(|_| "The additional trigger position is invalid.")?;
+            if !(1..WorkflowTrigger::ALL.len()).contains(&position)
+                || suffix != position.to_string()
+            {
+                return Err("The additional trigger position is invalid.".into());
+            }
+        }
+        let mut triggers = vec![trigger];
+        for (_, value) in self.additional_triggers() {
+            if !value.is_empty() {
+                triggers.push(
+                    WorkflowTrigger::parse(value).ok_or("Choose a valid additional trigger.")?,
+                );
+            }
+        }
+        Ok(triggers)
+    }
+
     fn blank() -> Self {
         Self {
             trigger: WorkflowTrigger::DocumentUploaded.as_str().into(),
@@ -535,7 +599,18 @@ impl FormValues {
             ),
             _ => Default::default(),
         };
-        let mut extra_fields = HashMap::new();
+        let mut extra_fields: HashMap<_, _> = workflow
+            .triggers
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(position, trigger)| {
+                (
+                    format!("{ADDITIONAL_TRIGGER_FIELD}{position}"),
+                    trigger.as_str().into(),
+                )
+            })
+            .collect();
         let (mut action_correspondent_id, mut action_document_type_id) = Default::default();
         for action in &workflow.actions {
             match action {
@@ -587,6 +662,7 @@ impl FormValues {
         };
         Self {
             extra_fields,
+            revision: Some(workflow.revision),
             action_correspondent_id,
             action_document_type_id,
             name: workflow.name.clone(),
@@ -706,7 +782,25 @@ impl FormValues {
 
     /// Turn the submission into a workflow, keeping any actions the form cannot edit
     fn into_input(self, existing: Option<&Workflow>) -> Result<WorkflowInput, String> {
+        if self.ordered_actions.is_some()
+            && existing.is_some_and(|workflow| self.revision != Some(workflow.revision))
+        {
+            return Err(
+                "The workflow changed. Review the saved settings before trying again.".into(),
+            );
+        }
         let trigger = WorkflowTrigger::parse(&self.trigger).ok_or("Choose a trigger.")?;
+        let triggers = self.explicit_triggers(trigger)?;
+        let selected = if triggers.is_empty() {
+            std::slice::from_ref(&trigger)
+        } else {
+            &triggers
+        };
+        let metadata_trigger = selected
+            .iter()
+            .copied()
+            .find(|trigger| trigger.is_custom_metadata())
+            .unwrap_or(trigger);
         let cadence = self.cadence(trigger)?;
         let optional = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
         let id = |s: &str, what: &str| -> Result<Option<Id>, String> {
@@ -718,7 +812,11 @@ impl FormValues {
         let processing = if clear_clock_filters {
             None
         } else {
-            processing_condition(&self, existing, trigger)?
+            let processing_trigger = selected
+                .iter()
+                .copied()
+                .find(|trigger| trigger.is_processing_outcome());
+            processing_condition(&self, existing, processing_trigger.unwrap_or(trigger))?
         };
         let mut event = match self.event_actor.as_deref() {
             _ if clear_clock_filters => None,
@@ -741,7 +839,7 @@ impl FormValues {
                 let previous_ingest = existing
                     .and_then(|workflow| workflow.conditions.event.as_ref())
                     .and_then(|event| event.ingest.as_ref());
-                let ingest = if !trigger.is_ingest_outcome() {
+                let ingest = if !selected.iter().any(|trigger| trigger.is_ingest_outcome()) {
                     None
                 } else if let Some(kind) = self.ingest_source_kind.as_deref() {
                     let source_kind = match kind {
@@ -767,7 +865,7 @@ impl FormValues {
                 } else {
                     previous_ingest.cloned()
                 };
-                let metadata = metadata_condition(&self, trigger)?;
+                let metadata = metadata_condition(&self, metadata_trigger)?;
                 (subject_id.is_some() || actor.is_some() || ingest.is_some() || metadata.is_some())
                     .then_some(WorkflowEventConditions {
                         subject_id,
@@ -807,10 +905,13 @@ impl FormValues {
                 .apply(&mut conditions);
         }
         if cadence.is_none()
-            && trigger.entry_transition().is_none()
-            && !trigger.is_ingest_outcome()
-            && !trigger.is_custom_metadata()
-            && !trigger.is_saved_view()
+            && (selected.iter().any(|trigger| {
+                trigger.entry_transition().is_none()
+                    && !trigger.is_ingest_outcome()
+                    && !trigger.is_custom_metadata()
+                    && !trigger.is_saved_view()
+            }) || (self.trigger_selection.is_some()
+                && selected.iter().any(|trigger| trigger.is_saved_view())))
         {
             conditions.mime_type = optional(&self.mime_type);
             conditions.tag_id = id(&self.tag_id, "tag")?;
@@ -827,6 +928,7 @@ impl FormValues {
                 email_mailbox_glob: optional(&self.email_mailbox_glob),
             };
         } else if cadence.is_none()
+            && self.trigger_selection.is_none()
             && existing.is_some_and(|workflow| {
                 workflow.trigger.entry_transition().is_none()
                     && !workflow.trigger.is_ingest_outcome()
@@ -842,27 +944,41 @@ impl FormValues {
             conditions.source = SourceConditions::default();
         }
 
+        if let Some(plan) = &self.ordered_actions {
+            let actions = resolve_actions(plan, existing)?;
+            let actions = if trigger == WorkflowTrigger::IngestReceived && actions.is_empty() {
+                vec![WorkflowAction::SkipImport]
+            } else {
+                actions
+            };
+            let input = WorkflowInput {
+                name: self.name.trim().to_owned(),
+                enabled: self.enabled.is_some(),
+                trigger,
+                triggers,
+                cadence,
+                conditions,
+                actions,
+            };
+            input.validate().map_err(|error| match error {
+                Error::Validation(message) => message,
+                other => other.to_string(),
+            })?;
+            return Ok(input);
+        }
+
         if trigger == WorkflowTrigger::IngestReceived {
             return Ok(WorkflowInput {
                 cadence: None,
                 name: self.name.trim().to_string(),
                 enabled: self.enabled.is_some(),
                 trigger,
+                triggers,
                 conditions,
                 actions: vec![WorkflowAction::SkipImport],
             });
         }
-        let mut headers = BTreeMap::new();
-        for line in self
-            .webhook_headers
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-        {
-            let (name, value) = line
-                .split_once(':')
-                .ok_or_else(|| format!("Header '{line}' needs the form Name: value."))?;
-            headers.insert(name.trim().to_string(), value.trim().to_string());
-        }
+        let mut headers = parse_headers(&self.webhook_headers)?;
         // Masked values from the edit form stand for the stored ones.
         let new_url = self.webhook_url.trim();
         let stored_hook = match existing.and_then(|w| first_webhook(&w.actions)) {
@@ -946,6 +1062,7 @@ impl FormValues {
             name: self.name.trim().to_string(),
             enabled: self.enabled.is_some(),
             trigger,
+            triggers,
             conditions,
             actions,
         })
@@ -1005,11 +1122,27 @@ fn first_webhook(actions: &[WorkflowAction]) -> Option<(usize, &WorkflowAction)>
     actions.iter().enumerate().find(|(_, a)| a.is_webhook())
 }
 
-struct TriggerChoice {
-    value: String,
-    label: String,
-    selected: bool,
-    processing_keys: String,
+fn trigger_choices(selected: &str) -> Vec<TriggerChoice> {
+    WorkflowTriggerRegistry::built_in()
+        .definitions()
+        .iter()
+        .map(|trigger| TriggerChoice {
+            value: trigger.event_type.clone(),
+            label: trigger.label.clone(),
+            selected: trigger.event_type == selected,
+            document_actions: trigger.target == WorkflowTarget::Document,
+            processing_keys: if trigger.event_type.starts_with("document.processing.") {
+                trigger
+                    .condition_fields
+                    .iter()
+                    .map(processing_key)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            } else {
+                String::new()
+            },
+        })
+        .collect()
 }
 
 struct ProcessingControl {
@@ -1031,7 +1164,10 @@ struct FormTemplate {
     has_secret: bool,
     secret_mask: &'static str,
     triggers: Vec<TriggerChoice>,
+    additional_triggers: Vec<AdditionalTrigger>,
     processing_fields: Vec<ProcessingControl>,
+    action_fields: String,
+    reenter_credentials: bool,
     has_saved_root_filters: bool,
     has_saved_non_webhook_actions: bool,
     condition_groups: String,
@@ -1055,9 +1191,12 @@ async fn build_form(
     DefaultVault(vault): DefaultVault,
     state: &AppState,
     workflow: Option<&Workflow>,
-    values: FormValues,
+    mut values: FormValues,
     notice: Option<Notice>,
 ) -> ApiResult<FormTemplate> {
+    if values.ordered_actions.is_none() {
+        values.revision = workflow.map(|workflow| workflow.revision);
+    }
     let choices = |items: Vec<(String, String)>, current: &str| {
         items
             .into_iter()
@@ -1068,6 +1207,30 @@ async fn build_form(
             })
             .collect::<Vec<_>>()
     };
+    let additional =
+        if values.trigger_selection.is_none() && values.additional_triggers().is_empty() {
+            workflow
+                .filter(|workflow| workflow.trigger.as_str() == values.trigger)
+                .map(|workflow| {
+                    workflow
+                        .triggers
+                        .iter()
+                        .enumerate()
+                        .skip(1)
+                        .map(|(position, trigger)| (position, trigger.as_str()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            values.additional_triggers()
+        };
+    let additional_triggers = additional
+        .into_iter()
+        .map(|(position, value)| AdditionalTrigger {
+            position,
+            choices: trigger_choices(value),
+        })
+        .collect();
     let chosen_tags = values.action_tag_ids();
     let pairs = |names: Vec<(Id, String)>| -> Vec<(String, String)> {
         names
@@ -1113,6 +1276,8 @@ async fn build_form(
         .map_err(|error| ApiError::internal(error.to_string()))?,
     };
 
+    let (action_fields, reenter_credentials) =
+        action_fields(values.ordered_actions.as_deref(), workflow)?;
     let has_saved_root_filters = workflow.is_some_and(|workflow| {
         let mut root = workflow.conditions.clone();
         ConditionGroups::default().apply(&mut root);
@@ -1122,6 +1287,8 @@ async fn build_form(
         workflow.is_some_and(|workflow| workflow.actions.iter().any(|action| !action.is_webhook()));
     Ok(FormTemplate {
         condition_groups,
+        action_fields,
+        reenter_credentials,
         has_saved_root_filters,
         has_saved_non_webhook_actions,
         sidebar: Sidebar::load(state, vault, Nav::Workflows).await?,
@@ -1134,25 +1301,8 @@ async fn build_form(
             }
         ),
         workflow_id: workflow.map(|w| w.id.to_string()),
-        triggers: WorkflowTriggerRegistry::built_in()
-            .definitions()
-            .iter()
-            .map(|trigger| TriggerChoice {
-                value: trigger.event_type.clone(),
-                label: trigger.label.clone(),
-                selected: trigger.event_type == values.trigger,
-                processing_keys: if trigger.event_type.starts_with("document.processing.") {
-                    trigger
-                        .condition_fields
-                        .iter()
-                        .map(processing_key)
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                } else {
-                    String::new()
-                },
-            })
-            .collect(),
+        triggers: trigger_choices(&values.trigger),
+        additional_triggers,
         processing_fields: processing_fields()
             .map(|field| {
                 let key = processing_key(field);
@@ -1333,23 +1483,44 @@ async fn update(
     Form(values): Form<FormValues>,
 ) -> ApiResult<Response> {
     let workflow = find(vault, &*state.workflow_repo, id).await?;
-    let saved = match values.clone().into_input(Some(&workflow)) {
-        Ok(input) => state
-            .workflow_repo
-            .update(vault, id, input)
-            .await
-            .map_err(|e| e.to_string()),
-        Err(message) => Err(message),
+    let saved = if values.ordered_actions.is_some() && values.revision != Some(workflow.revision) {
+        Err(Error::Conflict(
+            "The workflow changed. Review the saved settings before trying again.".into(),
+        ))
+    } else {
+        match values.clone().into_input(Some(&workflow)) {
+            Ok(input) => {
+                state
+                    .workflow_repo
+                    .replace(vault, id, input, Some(workflow.revision))
+                    .await
+            }
+            Err(message) => Err(Error::Validation(message)),
+        }
     };
     match saved {
         Ok(_) => Ok(Redirect::to(&format!("/workflows/{id}")).into_response()),
-        Err(message) => Ok(render(
+        Err(Error::Conflict(message)) => {
+            let latest = find(vault, &*state.workflow_repo, id).await?;
+            let html = render(
+                build_form(
+                    DefaultVault(vault),
+                    &state,
+                    Some(&latest),
+                    FormValues::from_workflow(&latest),
+                    danger(message),
+                )
+                .await?,
+            )?;
+            Ok((StatusCode::CONFLICT, html).into_response())
+        }
+        Err(error) => Ok(render(
             build_form(
                 DefaultVault(vault),
                 &state,
                 Some(&workflow),
                 values,
-                danger(message),
+                danger(error.to_string()),
             )
             .await?,
         )?
@@ -1373,6 +1544,7 @@ async fn toggle(
                 name: workflow.name,
                 enabled: !workflow.enabled,
                 trigger: workflow.trigger,
+                triggers: workflow.triggers,
                 conditions: workflow.conditions,
                 actions: workflow.actions,
             },

@@ -27,10 +27,38 @@
         </div>
 
         <div class="field">
+            <input type="hidden" name="trigger_selection" value="on">
             <label for="trigger">When</label>
             <select class="select" id="trigger" name="trigger" data-workflow-form-target="trigger" data-action="change->workflow-form#sync">
-                {% for t in triggers %}<option value="{{ t.value }}"{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}{% if t.selected %} selected{% endif %}>{{ t.label }}</option>{% endfor %}
+                {% for t in triggers %}<option value="{{ t.value }}"{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}{% if t.selected %} selected{% endif %} data-document-actions="{{ t.document_actions }}">{{ t.label }}</option>{% endfor %}
             </select>
+            <div data-workflow-form-target="additionalTriggers">
+                {% for row in additional_triggers %}
+                <div class="workflow-trigger-row">
+                    <select class="select" aria-label="Additional trigger {{ row.position }}" name="trigger_additional_{{ row.position }}"
+                            data-action="change->workflow-form#sync">
+                        <option value="">Choose a trigger</option>
+                        {% for t in row.choices %}<option value="{{ t.value }}"{% if t.selected %} selected{% endif %} data-document-actions="{{ t.document_actions }}"{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}>{{ t.label }}</option>{% endfor %}
+                    </select>
+                    <button type="button" class="f-btn f-btn-quiet" data-action="workflow-form#moveTriggerUp" hidden>Move up</button>
+                    <button type="button" class="f-btn f-btn-quiet" data-action="workflow-form#removeTrigger" hidden>Remove</button>
+                </div>
+                {% endfor %}
+            </div>
+            <template data-workflow-form-target="triggerRow">
+                <div class="workflow-trigger-row">
+                    <select class="select" data-action="change->workflow-form#sync">
+                        <option value="">Choose a trigger</option>
+                        {% for t in triggers %}<option value="{{ t.value }}" data-document-actions="{{ t.document_actions }}"{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}>{{ t.label }}</option>{% endfor %}
+                    </select>
+                    <button type="button" class="f-btn f-btn-quiet" data-action="workflow-form#moveTriggerUp">Move up</button>
+                    <button type="button" class="f-btn f-btn-quiet" data-action="workflow-form#removeTrigger">Remove</button>
+                </div>
+            </template>
+            <div>
+                <button type="button" class="f-btn f-btn-quiet" data-workflow-form-target="addTrigger"
+                        data-action="workflow-form#addTrigger" hidden>Add trigger</button>
+            </div>
         </div>
 
         <fieldset class="field" data-workflow-form-target="cadence"{% if values.trigger != "workflow.scheduled" %} hidden disabled{% endif %}>
@@ -50,7 +78,7 @@
             <label class="check"><input type="checkbox" name="clear_clock_filters" value="on"{% if values.clear_clock_filters.is_some() %} checked{% endif %}> Remove saved filters outside groups</label>
             {% endif %}
             {% if has_saved_non_webhook_actions %}
-            <label class="check"><input type="checkbox" name="clear_clock_actions" value="on"{% if values.clear_clock_actions.is_some() %} checked{% endif %}> Remove saved actions other than webhooks</label>
+            <noscript><label class="check"><input type="checkbox" name="clear_clock_actions" value="on"{% if values.clear_clock_actions.is_some() %} checked{% endif %}> Remove saved actions other than webhooks</label></noscript>
             {% endif %}
         </fieldset>
 
@@ -224,10 +252,11 @@
         </p>
 
         <div data-workflow-form-target="actions">
+            {% include "workflow_action_editor.html" %}
+            <noscript>
             <fieldset class="field">
                 <legend class="legend">Then Folio does</legend>
                 <p class="hint">Every step runs, in this order. Leave a step empty to skip it.</p>
-                <p class="f-notice" data-workflow-form-target="savedViewActionHint" hidden>Remove the document actions to use this saved view trigger.</p>
 
                 <div class="action-card" data-workflow-form-target="documentAction">
                     <p class="heading">Add tags</p>
@@ -271,6 +300,7 @@
                     <textarea class="input" id="webhook_headers" name="webhook_headers" rows="3" placeholder="Authorization: Bearer ...">{{ values.webhook_headers }}</textarea>
                 </div>
             </fieldset>
+            </noscript>
         </div>
 
         <div class="field">

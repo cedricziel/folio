@@ -30,6 +30,24 @@ public struct WorkflowTriggerChoice: Identifiable, Equatable, Sendable {
         self.target = target
         self.conditionFields = conditionFields
     }
+
+    var requiresSingleSelection: Bool {
+        target == .ingestCandidate || WorkflowCadenceDraft.Trigger(rawValue: id) != nil
+    }
+
+    static func matching(_ ids: [String], in catalog: [Self]) -> Self? {
+        let selected = ids.compactMap { id in catalog.first { $0.id == id } }
+        guard let primary = selected.first, selected.count == ids.count, Set(ids).count == ids.count,
+            selected.count == 1 || !selected.contains(where: \.requiresSingleSelection)
+        else { return nil }
+        let target: Target = selected.allSatisfy { $0.target == primary.target } ? primary.target : .event
+        let fields = primary.conditionFields.filter { field in
+            selected.dropFirst().allSatisfy { choice in
+                choice.conditionFields.contains { $0.id == field.id && $0.valueType == field.valueType }
+            }
+        }
+        return .init(id: primary.id, title: primary.title, target: target, conditionFields: fields)
+    }
 }
 
 public protocol WorkflowTriggerEditingService: Sendable {

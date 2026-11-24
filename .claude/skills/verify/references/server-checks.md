@@ -448,6 +448,16 @@ cancellation, concurrent scopes, detached tasks, actor independence, and envelop
 validation. Workflow actions must scope server-owned correlation and causation
 before repository mutations; request bodies cannot establish this context.
 
+## Verify multiple workflow triggers
+
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-api -p folio-infra --test workflows --test workflow_lifecycle --test openapi`
+with a dedicated target directory. Check that a legacy workflow upgrades to one
+selected trigger, secondary choices match on both databases, and separate outbox
+rows for one mutation produce one run. The workflow API suite also checks that
+legacy updates and HTML edits keep additional triggers while the primary stays
+selected. Run `swift test --filter WorkflowTriggerSelectionTests` in
+`apple/FolioKit` for the generated ordered and legacy request shapes.
+
 ## Verify workflow configuration lifecycle
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_lifecycle --test workflows --test repository_contract`
@@ -463,6 +473,13 @@ HTML escaping. Run the `workflows` screen tour, then inspect a retained history
 page on desktop and mobile in both themes. Check long actor labels for wrapping.
 Regenerate OpenAPI after response or route changes. Never verify workflow delivery
 against an existing webhook receiver or user archive.
+
+In a disposable instance, run `npx playwright test workflow-actions.spec.ts` from
+`e2e/` to check that adding, moving, and removing rows preserves the saved action
+order. The API workflow suite checks that reordering webhooks at the same URL
+keeps each masked credential with its original row, changing destinations
+rejects masked values, and stale revisions cannot overwrite a newer definition.
+The lifecycle test verifies the conditional update on both databases.
 
 ## Verify ordered document workflow actions
 
