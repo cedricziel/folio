@@ -5,8 +5,10 @@ use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use super::{repo_err, Failure, JobRow, StageRow};
-use crate::database::sqlite::{capture_document, insert_domain_event_with_origin};
-use crate::queue::{FailOutcome, Job};
+use crate::database::sqlite::{
+    capture_document, fail_pending_workflow_run, insert_domain_event_with_origin,
+};
+use crate::queue::{FailOutcome, Job, JobType};
 
 async fn load(conn: &mut SqliteConnection, id: Uuid) -> Result<Option<JobRow>> {
     sqlx::query_as(
@@ -79,13 +81,13 @@ async fn settle(pool: &SqlitePool, id: Uuid, failure: Failure<'_>) -> Result<Opt
     let Some(decision) = failure.decision(&row, now)? else {
         return Ok(None);
     };
-    let running = match (document_id, job) {
+    let running = match (document_id, &job) {
         (Some(document_id), Some(job)) => {
             let mut running = stages(&mut tx, id, document_id, job.revision_id()).await?;
             running.retain(|stage| {
                 stage
                     .stage()
-                    .is_ok_and(|stage| super::super::stages::supports_stage(&job, stage))
+                    .is_ok_and(|stage| super::super::stages::supports_stage(job, stage))
             });
             running
         }
@@ -117,6 +119,9 @@ async fn settle(pool: &SqlitePool, id: Uuid, failure: Failure<'_>) -> Result<Opt
     .map_err(repo_err)?;
     if changed.rows_affected() != 1 {
         return Ok(None);
+    }
+    if let (None, Some(JobType::ExecuteWorkflowRun { run_id })) = (decision.retry_at, job) {
+        fail_pending_workflow_run(&mut tx, run_id, &decision.error, now).await?;
     }
     for stage in running {
         stage.occurrence(&decision)?;

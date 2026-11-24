@@ -266,21 +266,6 @@ impl WorkflowRunner {
         Ok(RunOutcome::Succeeded)
     }
 
-    /// Mark a run failed because its job gave up, unless it already ended
-    pub async fn abandon(&self, run_id: Id, reason: &str) -> folio_core::Result<()> {
-        let Some(mut run) = self.workflows.find_run(run_id).await? else {
-            return Ok(());
-        };
-        if run.status.is_terminal() {
-            return Ok(());
-        }
-        // Keep the action's own error if there is one; it says more than the job's.
-        let error = run.last_error.take().unwrap_or_else(|| reason.to_string());
-        self.finish(&mut run, RunStatus::Failed, Some(error))
-            .await
-            .map(|_| ())
-    }
-
     async fn active_definition(&self, run: &WorkflowRun) -> folio_core::Result<Option<Workflow>> {
         Ok(self
             .workflows

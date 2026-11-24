@@ -52,6 +52,7 @@ pub use search::SqliteSearchService;
 pub use settings_repo::SqliteSettingsRepository;
 pub use upload_receipts::SqliteUploadReceiptRepository;
 pub use vault_repo::SqliteVaultRepository;
+pub(crate) use workflow_repo::fail_pending_workflow_run;
 pub use workflow_repo::SqliteWorkflowRepository;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);

@@ -425,26 +425,13 @@ impl Worker {
                     .instrument(span.clone())
                     .await
                 {
-                    Ok(FailOutcome::GaveUp) => self.abandon_run(&job.job_type, &error_msg).await,
-                    Ok(FailOutcome::Retrying) => {}
+                    Ok(FailOutcome::GaveUp | FailOutcome::Retrying) => {}
                     Ok(FailOutcome::LostLease) => {
                         warn!(job.id = %job.id, "Failure rejected after losing job lease")
                     }
                     Err(e) => error!("Failed to mark job {} as failed: {}", job.id, e),
                 }
             }
-        }
-    }
-
-    /// A workflow job that gave up leaves its run pending forever unless the run is closed
-    async fn abandon_run(&self, job_type: &JobType, reason: &str) {
-        let (JobType::ExecuteWorkflowRun { run_id }, Some(runner)) =
-            (job_type, &self.workflow_runner)
-        else {
-            return;
-        };
-        if let Err(e) = runner.abandon(*run_id, reason).await {
-            error!("Failed to mark workflow run {run_id} as failed: {e}");
         }
     }
 

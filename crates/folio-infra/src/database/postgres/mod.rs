@@ -50,6 +50,7 @@ pub use search::PostgresSearchService;
 pub use settings_repo::PostgresSettingsRepository;
 pub use upload_receipts::PostgresUploadReceiptRepository;
 pub use vault_repo::PostgresVaultRepository;
+pub(crate) use workflow_repo::fail_pending_workflow_run;
 pub use workflow_repo::PostgresWorkflowRepository;
 
 /// Create a new PostgreSQL connection pool
