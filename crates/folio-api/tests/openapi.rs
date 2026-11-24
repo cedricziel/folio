@@ -166,6 +166,39 @@ fn processing_reason_uses_nullable_string_for_generated_clients() {
 }
 
 #[test]
+fn workflow_processing_properties_are_optional_typed_references() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let schemas = &spec["components"]["schemas"];
+    for (schema, property, target) in [
+        ("WebhookPayload", "processing", "WebhookProcessing"),
+        ("WebhookProcessing", "reason_code", "ProcessingReason"),
+        (
+            "WorkflowEventConditions",
+            "processing",
+            "WorkflowProcessingConditions",
+        ),
+        (
+            "WorkflowProcessingConditions",
+            "stage",
+            "ProcessingEventStage",
+        ),
+        (
+            "WorkflowProcessingConditions",
+            "reason_code",
+            "ProcessingReason",
+        ),
+    ] {
+        assert_eq!(
+            schemas[schema]["properties"][property]["$ref"],
+            format!("#/components/schemas/{target}"),
+        );
+        assert!(schemas[schema]["required"]
+            .as_array()
+            .is_none_or(|fields| fields.iter().all(|field| field != property)));
+    }
+}
+
+#[test]
 fn document_metadata_updates_require_explicit_nullable_values_and_revision() {
     let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
     let schemas = &spec["components"]["schemas"];

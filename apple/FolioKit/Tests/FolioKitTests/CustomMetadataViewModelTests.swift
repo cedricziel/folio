@@ -26,6 +26,60 @@ struct CustomMetadataViewModelTests {
         try await model.save(fieldID: field, value: .decimal("9007199254740993.01"))
         #expect(model.snapshot.values == [.init(fieldID: field, value: .decimal("9007199254740993.01"))])
     }
+
+    @Test func aCancelledReloadKeepsTheSnapshotAndCanBeRetried() async throws {
+        let service = MetadataReloadFixture()
+        let model = CustomMetadataViewModel(documentID: UUID(), service: service)
+        await model.load()
+        let original = model.snapshot
+        let newer = CustomMetadataSnapshot(
+            revision: UUID(), values: [.init(fieldID: UUID(), value: .boolean(false))]
+        )
+        await service.replaceSnapshot(newer)
+        await service.pauseNextRead()
+
+        let reload = Task { try await model.reload() }
+        await service.waitForPausedRead()
+        reload.cancel()
+        await service.resumeRead()
+
+        await #expect(throws: CancellationError.self) { try await reload.value }
+        #expect(!model.isReloading)
+        #expect(model.snapshot == original)
+
+        try await model.reload()
+        #expect(model.snapshot == newer)
+    }
+
+    @Test func aConflictRequiresReloadBeforeRetryingTheExactDraft() async throws {
+        let service = MetadataReloadFixture()
+        let field = UUID()
+        let draft = CustomFieldValue.decimal("9007199254740993.01")
+        let model = CustomMetadataViewModel(documentID: UUID(), service: service)
+        await model.load()
+        let original = model.snapshot
+        let newer = CustomMetadataSnapshot(
+            revision: UUID(), values: [.init(fieldID: field, value: .decimal("9007199254740993.02"))]
+        )
+        await service.replaceSnapshot(newer)
+
+        await #expect(throws: FolioError.server(status: 409, message: "Custom fields changed.")) {
+            try await model.save(fieldID: field, value: draft)
+        }
+        #expect(model.needsReload)
+        #expect(model.snapshot == original)
+        await #expect(throws: FolioError.self) {
+            try await model.save(fieldID: field, value: draft)
+        }
+        #expect(await service.writes == 1)
+
+        try await model.reload()
+        #expect(!model.needsReload)
+        #expect(model.snapshot == newer)
+        try await model.save(fieldID: field, value: draft)
+        #expect(model.snapshot.values == [.init(fieldID: field, value: draft)])
+        #expect(await service.writes == 2)
+    }
 }
 
 private actor MetadataReloadFixture: CustomMetadataService {
@@ -37,6 +91,8 @@ private actor MetadataReloadFixture: CustomMetadataService {
     private var activeRead: CheckedContinuation<Void, Never>?
 
     func pauseNextRead() { pause = true }
+
+    func replaceSnapshot(_ value: CustomMetadataSnapshot) { snapshot = value }
 
     func waitForPausedRead() async {
         if activeRead != nil { return }
@@ -66,6 +122,9 @@ private actor MetadataReloadFixture: CustomMetadataService {
         documentID: UUID, revision: UUID?, fieldID: UUID, value: CustomFieldValue?
     ) async throws -> CustomMetadataSnapshot {
         writes += 1
+        guard revision == snapshot.revision else {
+            throw FolioError.server(status: 409, message: "Custom fields changed.")
+        }
         snapshot = .init(revision: UUID(), values: [.init(fieldID: fieldID, value: value)])
         return snapshot
     }

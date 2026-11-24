@@ -24,6 +24,8 @@ typealias Document = FolioKit.Document
                 HandoffFixture(service: service, documentID: Self.firstDocumentID)
             } else if ProcessInfo.processInfo.arguments.contains("--processing-state") {
                 ProcessingStateFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--custom-metadata-workflow") {
+                CustomMetadataWorkflowFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--custom-metadata") {
                 CustomMetadataFixture(
                     documents: service,
@@ -50,20 +52,35 @@ typealias Document = FolioKit.Document
 
 extension FixtureApp {
     private static func makeService(arguments: [String]) -> MockFolioService {
+        let savedViewID = ProcessInfo.processInfo.environment["FOLIO_FIXTURE_SAVED_VIEW_ID"]
+            .flatMap(UUID.init(uuidString:))
+        if arguments.contains("--slow-saved-view") {
+            let view = SavedView(
+                id: savedViewID ?? UUID(), vaultID: MockFolioService.defaultVault.id, ownerID: "test-user",
+                name: "Saved fixture", query: .init(), createdAt: .distantPast, updatedAt: .distantPast,
+                createdBy: "test-user", updatedBy: "test-user")
+            return MockFolioService(savedViews: [view], savedViewDelay: .seconds(12), documents: documents)
+        }
         guard arguments.contains("--classification") else {
             return MockFolioService(
-                documents: documents, loseFirstEntryResponse: arguments.contains("--discussion-save-failure"))
+                documents: documents, loseFirstEntryResponse: arguments.contains("--discussion-save-failure"),
+                nextSavedViewID: savedViewID)
         }
+        let correspondent = Correspondent(name: "City utilities")
+        let type = DocumentType(name: "Invoice")
+        let tag = FolioKit.Tag(name: "Taxes")
+        let classified = arguments.contains("--classification-saved")
         // Processed but not reviewed, so the inbox holds it until it is marked reviewed.
         let letter = Document(
-            title: "Unfiled letter", originalFilename: "letter.pdf", ocrStatus: .done, embedStatus: .done,
+            title: "Unfiled letter", originalFilename: "letter.pdf",
+            correspondentID: classified ? correspondent.id : nil, documentTypeID: classified ? type.id : nil,
+            ocrStatus: .done, embedStatus: .done, tags: classified ? [tag] : [],
             canEditDocumentDate: true, reviewed: false, canReviewDocument: true)
         let kept = Document(
             title: "Second fixture", originalFilename: "second.pdf", ocrStatus: .done, embedStatus: .done,
             reviewed: false)
         return MockFolioService(
-            documents: [letter, kept], correspondents: [Correspondent(name: "City utilities")],
-            types: [DocumentType(name: "Invoice")], tags: [FolioKit.Tag(name: "Taxes")],
+            documents: [letter, kept], correspondents: [correspondent], types: [type], tags: [tag],
             failFirstClassificationSave: arguments.contains("--classification-save-failure"))
     }
 
@@ -142,10 +159,6 @@ private struct SavedViewsFixture: View {
             serverURL: URL(string: "https://unused.invalid")!, service: service, onSignOut: {}, workspace: workspace
         )
         .task {
-            if ProcessInfo.processInfo.arguments.contains("--slow-saved-view"), let mock = service as? MockFolioService
-            {
-                await mock.delaySavedViewResponses(by: .seconds(12))
-            }
             await workspace.loadVaults()
             workspace.destination = .all
         }

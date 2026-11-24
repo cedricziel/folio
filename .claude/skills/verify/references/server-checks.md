@@ -124,6 +124,13 @@ On SQLite and PostgreSQL, the lifecycle tests cover migration of retained runs,
 stale matches after editing or re-enabling, no-op edits, and rollback. The workflow
 suite checks that history retains the captured actions and edited runs send no webhooks.
 
+For processing outcome workflows, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ocr_stage_transactions --test workflows`
+and `cargo test -p folio-api --test workflows --test openapi`. The SQLite and
+PostgreSQL fixtures dispatch a committed OCR completion, match its captured
+processing fields, preserve the missing source, and verify origin suppression
+and replay.
+
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run

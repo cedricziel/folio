@@ -21,6 +21,7 @@ mod saved_view;
 mod source_lifecycle;
 pub mod sqlite;
 mod workflow_lifecycle;
+mod workflow_schedule;
 
 use std::sync::Arc;
 

@@ -212,6 +212,7 @@ async fn workflow_outcome_contract(repos: &folio_infra::Repositories, input: Ing
     )
     .with_ingest_access(access);
     let definition = WorkflowInput {
+        cadence: None,
         name: "Failed item delivery".into(),
         enabled: true,
         trigger: WorkflowTrigger::IngestFailed,

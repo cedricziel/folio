@@ -729,14 +729,10 @@ private struct UploadBatch: Identifiable {
 }
 
 #if os(iOS)
-    /// The Scan inset floats over the list, so it takes the system glass where available.
+    /// The Scan inset floats over the list using the system glass style.
     private struct FloatingActionStyle: ViewModifier {
         func body(content: Content) -> some View {
-            if #available(iOS 26, *) {
-                content.buttonStyle(.glassProminent)
-            } else {
-                content.buttonStyle(.borderedProminent)
-            }
+            content.buttonStyle(.glassProminent)
         }
     }
 #endif

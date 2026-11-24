@@ -5,8 +5,8 @@ include:
 options:
   bundleIdPrefix: com.cedricziel
   deploymentTarget:
-    iOS: '18.0'
-    macOS: '15.0'
+    iOS: '27.2'
+    macOS: '27.2'
   createIntermediateGroups: true
 configFiles:
   Debug: Config/Folio.xcconfig
@@ -14,7 +14,7 @@ configFiles:
 settings:
   base:
     SWIFT_VERSION: '6.0'
-    MARKETING_VERSION: 0.17.0
+    MARKETING_VERSION: 0.18.1
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: 'YES'
     DEVELOPMENT_TEAM: $(FOLIO_DEVELOPMENT_TEAM)

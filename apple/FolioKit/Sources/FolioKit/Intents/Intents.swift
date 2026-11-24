@@ -7,7 +7,7 @@ private func countText(_ count: Int, _ noun: String) -> String {
     "\(count) \(noun)\(count == 1 ? "" : "s")"
 }
 
-/// Reports progress to the system, and from iOS and macOS 27 keeps running in the background for as long as it
+/// Reports progress to the system and keeps running in the background for as long as it
 /// keeps reporting. Cancelling stops before the next file; running it again resumes instead of uploading twice.
 public struct UploadFileIntent: AppIntent, ProgressReportingIntent {
     public static let title: LocalizedStringResource = "Upload to Folio"
@@ -51,16 +51,7 @@ public struct UploadFileIntent: AppIntent, ProgressReportingIntent {
     public func perform() async throws -> some IntentResult & ReturnsValue<[DocumentEntity]> & ProvidesDialog {
         IntentEnvironment.ran(.uploadFile)
         guard !files.isEmpty else { throw ShortcutError("Choose at least one file to upload.") }
-        #if compiler(>=6.4)
-            let summaries: [DocumentSummary]
-            if #available(iOS 27, macOS 27, *) {
-                summaries = try await performBackgroundTask { try await upload() }
-            } else {
-                summaries = try await upload()
-            }
-        #else
-            let summaries = try await upload()
-        #endif
+        let summaries = try await performBackgroundTask { try await upload() }
         return .result(
             value: summaries.map(DocumentEntity.init),
             dialog: "Filed \(countText(summaries.count, "document")) in Folio."
@@ -78,10 +69,7 @@ public struct UploadFileIntent: AppIntent, ProgressReportingIntent {
     }
 }
 
-#if compiler(>=6.4)
-    @available(iOS 27, macOS 27, *)
-    extension UploadFileIntent: LongRunningIntent {}
-#endif
+extension UploadFileIntent: LongRunningIntent {}
 
 /// Shows how many of an upload's files are done, the way the in-app upload reports it.
 struct UploadProgressReporter: Sendable {
@@ -337,25 +325,19 @@ public struct RemoveTagIntent: AppIntent {
     }
 }
 
-@available(iOS 26, macOS 26, *)
 extension AddTagIntent: UndoableIntent {}
 
 extension AddTagIntent {
     @MainActor private func registerUndo(of change: TagChange) {
-        if #available(iOS 26, macOS 26, *) {
-            TagUndo.register(change, with: undoManager, revert: TagUndo.revert)
-        }
+        TagUndo.register(change, with: undoManager, revert: TagUndo.revert)
     }
 }
 
-@available(iOS 26, macOS 26, *)
 extension RemoveTagIntent: UndoableIntent {}
 
 extension RemoveTagIntent {
     @MainActor private func registerUndo(of change: TagChange) {
-        if #available(iOS 26, macOS 26, *) {
-            TagUndo.register(change, with: undoManager, revert: TagUndo.revert)
-        }
+        TagUndo.register(change, with: undoManager, revert: TagUndo.revert)
     }
 }
 

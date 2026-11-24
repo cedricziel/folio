@@ -165,6 +165,35 @@ test("review can retry a failed write and keeps the selected document", async ({
   }
 });
 
+test("file history downloads the original without leaving the document", async ({ page, request }) => {
+  const title = uniqueTitle("file-history");
+  const bytes = readFileSync(samplePdf);
+  const response = await request.post("/api/documents/upload", {
+    multipart: { title, file: { name: "statement.pdf", mimeType: "application/pdf", buffer: bytes } },
+  });
+  expect(response.ok()).toBeTruthy();
+  const { id } = await response.json();
+  try {
+    await page.goto(`/documents/${id}`);
+    const summary = page.getByText("File history", { exact: true });
+    const history = page.locator("#document-file-history");
+    await expect(history).toBeHidden();
+    await summary.click();
+    await expect(history.getByText("Revision 1", { exact: true })).toBeVisible();
+    await expect(history.getByText("Current", { exact: true })).toBeVisible();
+    await expect(history.getByText("statement.pdf", { exact: true })).toBeVisible();
+
+    const downloaded = page.waitForEvent("download");
+    await history.getByRole("link", { name: "Download original", exact: true }).click();
+    const download = await downloaded;
+    expect(download.suggestedFilename()).toBe("statement.pdf");
+    expect(readFileSync((await download.path())!)).toEqual(bytes);
+    await expect(page).toHaveURL(new RegExp(`/documents/${id}$`));
+  } finally {
+    await request.delete(`/api/documents/${id}`);
+  }
+});
+
 // A PDF of blank pages; poppler rebuilds the missing cross-reference table
 function blankPdf(pages: number): Buffer {
   const kids = Array.from({ length: pages }, (_, i) => `${i + 3} 0 R`).join(" ");

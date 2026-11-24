@@ -105,6 +105,8 @@ import XCTest
     func testCompactSidebarOpensASavedViewAfterReturning() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
+        let savedViewID = UUID()
+        app.launchEnvironment["FOLIO_FIXTURE_SAVED_VIEW_ID"] = savedViewID.uuidString
         app.launchArguments = ["--saved-views"]
         app.launch()
         try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
@@ -117,14 +119,17 @@ import XCTest
         name.typeText("Saved fixture")
         app.buttons["Save"].tap()
         XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
-        for destination in ["Inbox", "Saved fixture", "All documents", "Saved fixture", "Saved fixture"] {
+        let inbox = ("workspace-destination-inbox", "Inbox")
+        let all = ("workspace-destination-all", "All documents")
+        let saved = ("workspace-saved-view-\(savedViewID)", "Saved fixture")
+        for (identifier, title) in [inbox, saved, all, saved, saved] {
             returnToSidebar(in: app)
-            let row = app.buttons[destination].firstMatch
-            XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+            let row = app.buttons[identifier]
+            XCTAssertTrue(row.waitForExistence(timeout: 5), "The sidebar must show \(title).")
             row.tap()
             XCTAssertTrue(
-                app.navigationBars[destination].waitForExistence(timeout: 5),
-                "Tapping \(destination) in the sidebar must open it.\n\(app.debugDescription)"
+                app.navigationBars[title].waitForExistence(timeout: 5),
+                "Tapping \(title) in the sidebar must open it."
             )
         }
     }
@@ -177,25 +182,30 @@ import XCTest
     func testALateSavedViewResponseDoesNotOverrideALaterChoice() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
+        let savedViewID = UUID()
+        app.launchEnvironment["FOLIO_FIXTURE_SAVED_VIEW_ID"] = savedViewID.uuidString
         app.launchArguments = ["--saved-views", "--slow-saved-view"]
         app.launch()
         try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
-        let saveCurrent = app.buttons["Save current view"]
-        XCTAssertTrue(saveCurrent.waitForExistence(timeout: 10), app.debugDescription)
-        saveCurrent.tap()
-        let name = app.textFields["Name"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
-        name.tap()
-        name.typeText("Saved fixture")
-        app.buttons["Save"].tap()
-        XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.navigationBars["All documents"].waitForExistence(timeout: 10), app.debugDescription)
         returnToSidebar(in: app)
-        app.buttons["Inbox"].firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
-        returnToSidebar(in: app)
-        app.buttons["Saved fixture"].firstMatch.tap()
-        returnToSidebar(in: app)
-        app.buttons["Inbox"].firstMatch.tap()
+        let view = app.buttons["workspace-saved-view-\(savedViewID)"]
+        XCTAssertTrue(view.waitForExistence(timeout: 5), "The sidebar must show the seeded saved view.")
+        view.tap()
+        let inbox = app.buttons["workspace-destination-inbox"]
+        if !inbox.isHittable {
+            let back = app.buttons["BackButton"]
+            if back.isHittable {
+                back.tap()
+            } else {
+                swipeBack(in: app)
+            }
+        }
+        guard inbox.waitForExistence(timeout: 5) else {
+            XCTFail("Inbox must be available while the saved view loads.")
+            return
+        }
+        inbox.tap()
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertFalse(
             app.navigationBars["Saved fixture"].waitForExistence(timeout: 14),
@@ -255,7 +265,7 @@ import XCTest
         XCTAssertTrue(app.staticTexts["first.pdf"].exists)
     }
 
-    func testClassifyingRecoversFromAFailedSaveAndReviewingFilesTheDocument() throws {
+    func testClassifyingRecoversFromAFailedSave() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = launchClassification()
         try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
@@ -266,6 +276,15 @@ import XCTest
         classifyWithRetry(app)
         XCTAssertEqual(app.staticTexts["metadata-From"].label, "City utilities")
         XCTAssertEqual(app.staticTexts["metadata-Type"].label, "Invoice")
+    }
+
+    func testReviewingAClassifiedDocumentFilesIt() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = launchClassification("--classification-saved")
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Unfiled letter")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "The classified document remains in Inbox until reviewed.")
+        row.tap()
         markReviewed(app)
         navigateBack(in: app)
         let kept = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Second fixture")).firstMatch
@@ -290,9 +309,9 @@ import XCTest
         XCTAssertTrue(app.staticTexts["letter.pdf"].exists, "The filed document stays open beside the list.")
     }
 
-    private func launchClassification() -> XCUIApplication {
+    private func launchClassification(_ scenario: String = "--classification-save-failure") -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["--classification", "--classification-save-failure"]
+        app.launchArguments = ["--classification", scenario]
         app.launch()
         return app
     }
@@ -308,7 +327,7 @@ import XCTest
         let city = app.buttons["City utilities"]
         XCTAssertTrue(city.waitForExistence(timeout: 5), app.debugDescription)
         city.tap()
-        let retry = app.buttons["Retry save"].firstMatch
+        let retry = app.buttons["classification-retry-save"]
         XCTAssertTrue(retry.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.staticTexts["Couldn't reach the server."].firstMatch.exists, app.debugDescription)
         capture(app, name: "Failed classification save with Retry")
@@ -364,6 +383,10 @@ import XCTest
             back.tap()
             return
         }
+        swipeBack(in: app)
+    }
+
+    private func swipeBack(in app: XCUIApplication) {
         let window = app.windows.firstMatch
         let edge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
         edge.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))

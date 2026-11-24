@@ -169,6 +169,12 @@
                     </dd>
                 </dl>
                 {% include "partials/document_history.html" %}
+                <details>
+                    <summary class="hint">File history</summary>
+                    <turbo-frame id="document-file-history" src="{{ "/documents"|vault_url }}/{{ document.id }}/file-history" loading="lazy">
+                        <a href="{{ "/documents"|vault_url }}/{{ document.id }}/file-history">Load file history</a>
+                    </turbo-frame>
+                </details>
             </section>
 
             <turbo-frame id="custom-fields" src="{{ "/documents"|vault_url }}/{{ document.id }}/custom-fields?return_to={{ return_to|urlencode }}"></turbo-frame>

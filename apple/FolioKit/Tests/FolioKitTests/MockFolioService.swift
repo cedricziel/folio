@@ -4,6 +4,7 @@ import Foundation
 
 actor MockFolioService: FolioService {
     private var savedViewValues: [SavedView] = []
+    private var nextSavedViewID: UUID?
     private var savedViewsGate: CheckedContinuation<Void, Never>?
     private var savedViewsStarted: CheckedContinuation<Void, Never>?
     private var suspendSavedViewRequests = false
@@ -56,9 +57,7 @@ actor MockFolioService: FolioService {
         return values
     }
 
-    private var savedViewDelay: Duration?
-
-    func delaySavedViewResponses(by delay: Duration) { savedViewDelay = delay }
+    private let savedViewDelay: Duration?
 
     func savedView(id: UUID) async throws -> SavedView {
         if let savedViewDelay { try? await Task.sleep(for: savedViewDelay) }
@@ -71,10 +70,11 @@ actor MockFolioService: FolioService {
     func saveView(_ draft: SavedViewDraft) async throws -> SavedView {
         if let failure { throw failure }
         let view = SavedView(
-            id: UUID(), vaultID: vaultCatalog.defaultVaultID ?? Self.defaultVault.id,
+            id: nextSavedViewID ?? UUID(), vaultID: vaultCatalog.defaultVaultID ?? Self.defaultVault.id,
             ownerID: "test-user", name: draft.name, visibility: draft.visibility, query: draft.query,
             presentation: draft.presentation, createdAt: .distantPast, updatedAt: .distantPast,
             createdBy: "test-user", updatedBy: "test-user")
+        nextSavedViewID = nil
         savedViewValues.append(view)
         return view
     }
@@ -145,10 +145,13 @@ actor MockFolioService: FolioService {
     private var suspendUploadRequests = false
 
     init(
+        savedViews: [SavedView] = [], savedViewDelay: Duration? = nil,
         documents: [Document] = [], correspondents: [Correspondent] = [], types: [DocumentType] = [],
         vaults: VaultCatalog = MockFolioService.defaultCatalog, vaultServices: [UUID: any FolioService] = [:],
-        tags: [Tag] = [], loseFirstEntryResponse: Bool = false, failFirstClassificationSave: Bool = false
+        tags: [Tag] = [], loseFirstEntryResponse: Bool = false, failFirstClassificationSave: Bool = false,
+        nextSavedViewID: UUID? = nil
     ) {
+        self.nextSavedViewID = nextSavedViewID
         self.loseFirstEntryResponse = loseFirstEntryResponse
         self.failFirstClassificationSave = failFirstClassificationSave
         tagList = tags
@@ -157,6 +160,8 @@ actor MockFolioService: FolioService {
         documentList = documents
         correspondentList = correspondents
         typeList = types
+        savedViewValues = savedViews
+        self.savedViewDelay = savedViewDelay
     }
 
     func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) throws -> DocumentEntryPage {

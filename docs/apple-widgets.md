@@ -4,7 +4,7 @@ The Apple app ships an optional WidgetKit extension, `FolioWidgets` (`com.cedric
 
 - **Inbox** (small; Lock Screen circular and rectangular on iPhone): how many documents still need review. Tapping it opens the Inbox.
 - **Latest document** (small, medium): the newest document's title and date. Tapping it opens the document. The medium size has a Scan button.
-- **Scan to Folio** control (iOS 18, macOS 26): a Control Center, Lock Screen and Action button control that runs `ScanDocumentIntent`. It opens Folio, which shows the scanner after App lock is unlocked. On a Mac it opens the file picker, because Macs have no scanner. The review sheet still asks for the destination vault.
+- **Scan to Folio** control (iOS 27.2, macOS 27.2): a Control Center, Lock Screen and Action button control that runs `ScanDocumentIntent`. It opens Folio, which shows the scanner after App lock is unlocked. On a Mac it opens the file picker, because Macs have no scanner. The review sheet still asks for the destination vault.
 
 The extension registers only `ScanDocumentIntent` (the `FolioScanIntent` module), not FolioKit's data intents or entity queries, so its process never answers them.
 

@@ -156,7 +156,7 @@ impl WorkflowTriggerRegistry {
         REGISTRY.get_or_init(|| {
             let mut definitions: Vec<_> = WorkflowTrigger::ALL
                 .into_iter()
-                .filter(|trigger| !trigger.is_ingest_outcome())
+                .filter(|trigger| !trigger.is_ingest_outcome() && !trigger.is_processing_outcome())
                 .map(|trigger| {
                     let event_type = trigger.as_str();
                     let mut definition = WorkflowTriggerDefinition {
@@ -168,7 +168,10 @@ impl WorkflowTriggerRegistry {
                             .expect("built-in event type")
                             .into(),
                         target: trigger.target(),
-                        condition_fields: if trigger == WorkflowTrigger::IngestReceived {
+                        condition_fields: if matches!(
+                            trigger,
+                            WorkflowTrigger::IngestReceived | WorkflowTrigger::Scheduled
+                        ) {
                             Vec::new()
                         } else {
                             vec![
@@ -218,6 +221,7 @@ impl WorkflowTriggerRegistry {
                 })
                 .collect();
             definitions.extend(crate::ingestion_triggers::workflow_trigger_definitions());
+            definitions.extend(crate::processing_triggers::workflow_trigger_definitions());
             Self::new(definitions).expect("valid built-in workflow triggers")
         })
     }

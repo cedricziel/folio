@@ -139,12 +139,10 @@ private func signedInTracker(_ server: URL = serverA, handoff: Bool = false) -> 
         #expect(!activity.isEligibleForSearch)
         #expect(!activity.isEligibleForHandoff)
         #expect(activity.targetContentIdentifier == letter.id.uuidString.lowercased())
-        if #available(iOS 26, macOS 26, *) {
-            #expect(
-                activity.appEntityIdentifier
-                    == EntityIdentifier(
-                        for: DocumentEntity.self, identifier: DocumentEntityID(documentID: letter.id, vaultID: vault)))
-        }
+        #expect(
+            activity.appEntityIdentifier
+                == EntityIdentifier(
+                    for: DocumentEntity.self, identifier: DocumentEntityID(documentID: letter.id, vaultID: vault)))
     }
 
     @Test func handoffIsOfferedOnlyWhenTheSceneAllowsItAndADocumentIsOpen() {
@@ -173,9 +171,7 @@ private func signedInTracker(_ server: URL = serverA, handoff: Bool = false) -> 
 
         #expect(activity.userInfo?.isEmpty ?? true)
         #expect(activity.targetContentIdentifier == nil)
-        if #available(iOS 26, macOS 26, *) {
-            #expect(activity.appEntityIdentifier == nil)
-        }
+        #expect(activity.appEntityIdentifier == nil)
     }
 
     @Test func deletingThroughTheListClearsTheActivityIncludingARedo() async {

@@ -4,14 +4,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use tracing::{debug, error};
 
 use super::IngestWorkflowAccess;
 use crate::error::{Error, Result};
 use crate::events::{DocumentEvent, EventOrigin, EventSnapshot, OutboxEvent};
 use crate::models::{
-    WebhookDocument, WebhookEntry, WebhookIngest, WebhookMetadata, WebhookPayload, WorkflowRun,
-    WorkflowTarget, WorkflowTrigger, WorkflowTriggerRegistry,
+    WebhookDocument, WebhookEntry, WebhookIngest, WebhookMetadata, WebhookPayload,
+    WebhookProcessing, WorkflowRun, WorkflowTarget, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 use crate::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, FileMetadata,
@@ -243,15 +244,17 @@ impl WorkflowEngine {
                     None,
                     envelope.occurred_at(),
                 )
-            } else if matches!(
-                trigger,
-                WorkflowTrigger::DocumentTitleChanged
-                    | WorkflowTrigger::DocumentTagsChanged
-                    | WorkflowTrigger::DocumentCorrespondentChanged
-                    | WorkflowTrigger::DocumentTypeChanged
-                    | WorkflowTrigger::DocumentMovedOut
-                    | WorkflowTrigger::DocumentMovedIn
-            ) {
+            } else if trigger.is_processing_outcome()
+                || matches!(
+                    trigger,
+                    WorkflowTrigger::DocumentTitleChanged
+                        | WorkflowTrigger::DocumentTagsChanged
+                        | WorkflowTrigger::DocumentCorrespondentChanged
+                        | WorkflowTrigger::DocumentTypeChanged
+                        | WorkflowTrigger::DocumentMovedOut
+                        | WorkflowTrigger::DocumentMovedIn
+                )
+            {
                 let ctx = Self::metadata_context(envelope)?;
                 (
                     Some(ctx.document_id),
@@ -508,6 +511,29 @@ impl WorkflowEngine {
             occurred_at,
             WebhookDocument::from_snapshot(ctx, size, &self.public_url),
         );
+        if trigger.is_processing_outcome() {
+            let occurrence = source_event
+                .ok_or_else(|| Error::Repository("Missing processing occurrence".into()))?;
+            let details = WebhookProcessing::deserialize(occurrence.data()).map_err(|error| {
+                Error::Repository(format!("Invalid processing occurrence: {error}"))
+            })?;
+            if details.payload_version != 1
+                || details.attempt == 0
+                || details.run_id.is_nil()
+                || details.revision_id.is_some_and(|id| id.is_nil())
+                || occurrence.event_type()
+                    != format!(
+                        "document.processing.{}.{}",
+                        details.stage.as_str(),
+                        details.outcome
+                    )
+            {
+                return Err(Error::Repository(
+                    "Invalid processing occurrence identity".into(),
+                ));
+            }
+            payload.processing = Some(details);
+        }
         payload.source_event = source_event.map(Into::into);
         serde_json::to_string(&payload)
             .map_err(|e| Error::Repository(format!("Failed to encode payload: {e}")))

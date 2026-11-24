@@ -29,9 +29,30 @@
         <div class="field">
             <label for="trigger">When</label>
             <select class="select" id="trigger" name="trigger" data-workflow-form-target="trigger" data-action="change->workflow-form#sync">
-                {% for t in triggers %}<option value="{{ t.value }}"{% if t.selected %} selected{% endif %}>{{ t.label }}</option>{% endfor %}
+                {% for t in triggers %}<option value="{{ t.value }}"{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}{% if t.selected %} selected{% endif %}>{{ t.label }}</option>{% endfor %}
             </select>
         </div>
+
+        <fieldset class="field" data-workflow-form-target="cadence"{% if values.trigger != "workflow.scheduled" %} hidden disabled{% endif %}>
+            <legend class="legend">Schedule</legend>
+            <label for="cadence-mode">Frequency</label>
+            <select class="select" id="cadence-mode" name="cadence_mode" data-workflow-form-target="cadenceMode" data-action="change->workflow-form#sync">
+                <option value="once"{% if values.cadence_mode == "once" %} selected{% endif %}>Once</option>
+                <option value="recurring"{% if values.cadence_mode == "recurring" %} selected{% endif %}>Repeat</option>
+            </select>
+            <label for="cadence-start">First run (UTC)</label>
+            <input class="input" type="text" id="cadence-start" name="cadence_start" value="{{ values.cadence_start }}" placeholder="2026-12-01T09:00:00Z">
+            <div data-workflow-form-target="cadenceRepeat"{% if values.cadence_mode != "recurring" %} hidden{% endif %}>
+                <label for="cadence-interval">Repeat every (seconds)</label>
+                <input class="input" type="number" id="cadence-interval" name="cadence_interval" value="{{ values.cadence_interval }}" min="1" step="1"{% if values.cadence_mode != "recurring" %} disabled{% endif %}>
+            </div>
+            {% if has_saved_root_filters %}
+            <label class="check"><input type="checkbox" name="clear_clock_filters" value="on"{% if values.clear_clock_filters.is_some() %} checked{% endif %}> Remove saved filters outside groups</label>
+            {% endif %}
+            {% if has_saved_non_webhook_actions %}
+            <label class="check"><input type="checkbox" name="clear_clock_actions" value="on"{% if values.clear_clock_actions.is_some() %} checked{% endif %}> Remove saved actions other than webhooks</label>
+            {% endif %}
+        </fieldset>
 
         <fieldset class="field" data-workflow-form-target="documentFilter">
             <legend class="legend">Only if the document matches</legend>
@@ -140,6 +161,25 @@
                 <option value="true"{% if values.ingest_retryable == "true" %} selected{% endif %}>Yes</option>
                 <option value="false"{% if values.ingest_retryable == "false" %} selected{% endif %}>No</option>
             </select>
+        </fieldset>
+
+        <fieldset class="field" data-workflow-form-target="processingFilter" hidden disabled>
+            <legend class="legend">Processing conditions</legend>
+            <input type="hidden" name="processing_form" value="1">
+            {% for field in processing_fields %}
+            <div data-processing-key="{{ field.key }}">
+                <label for="processing_{{ field.key }}">{{ field.label }}</label>
+                {% if field.boolean %}
+                <select class="select" id="processing_{{ field.key }}" name="processing_{{ field.key }}">
+                    <option value="">Any</option>
+                    <option value="true"{% if field.value == "true" %} selected{% endif %}>Yes</option>
+                    <option value="false"{% if field.value == "false" %} selected{% endif %}>No</option>
+                </select>
+                {% else %}
+                <input class="input" type="text" id="processing_{{ field.key }}" name="processing_{{ field.key }}" value="{{ field.value }}"{% if field.integer %} inputmode="numeric"{% endif %}{% if field.timestamp %} placeholder="2040-01-03T09:30:00Z"{% endif %}>
+                {% endif %}
+            </div>
+            {% endfor %}
         </fieldset>
 
         <fieldset class="field" data-workflow-form-target="metadataFilter" hidden disabled>

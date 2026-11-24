@@ -140,6 +140,7 @@ pub fn render_tokens_css(json: &str) -> Result<String> {
         ":root[data-theme=\"dark\"] {{\n  color-scheme: dark;\n{}}}\n",
         declarations(&dark, "  ")
     );
+    css.push_str("\n:root[data-theme=\"light\"] {\n  color-scheme: light;\n}\n");
     Ok(css)
 }
 
