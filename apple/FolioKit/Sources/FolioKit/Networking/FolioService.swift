@@ -28,6 +28,12 @@ public protocol FolioService: DocumentEntryService {
     /// Nil when the server does not expose file history.
     func fileRevisions(for documentID: Document.ID, before: Int64?) async throws -> DocumentFileRevisionPage?
     func downloadFile(for documentID: Document.ID, revision: DocumentFileRevision) async throws -> URL
+    func replaceDocumentFile(
+        _ file: UploadFile, for documentID: Document.ID, expectedCurrentRevisionID: UUID, idempotencyKey: UUID
+    ) async throws -> DocumentFileRevision
+    func restoreDocumentFile(
+        _ revisionID: UUID, for documentID: Document.ID, expectedCurrentRevisionID: UUID, idempotencyKey: UUID
+    ) async throws -> DocumentFileRevision
     /// Returns a bounded JPEG preview, or nil when the document or thumbnail is unavailable.
     func thumbnail(id: Document.ID) async throws -> Data?
     func upload(_ file: UploadFile) async throws -> Document
@@ -202,6 +208,18 @@ public extension FolioService {
 
     func downloadFile(for documentID: Document.ID, revision: DocumentFileRevision) async throws -> URL {
         throw FolioError.server(status: 501, message: "File history is unavailable.")
+    }
+
+    func replaceDocumentFile(
+        _ file: UploadFile, for documentID: Document.ID, expectedCurrentRevisionID: UUID, idempotencyKey: UUID
+    ) async throws -> DocumentFileRevision {
+        throw FolioError.server(status: 501, message: "File replacement is unavailable on this server.")
+    }
+
+    func restoreDocumentFile(
+        _ revisionID: UUID, for documentID: Document.ID, expectedCurrentRevisionID: UUID, idempotencyKey: UUID
+    ) async throws -> DocumentFileRevision {
+        throw FolioError.server(status: 501, message: "File replacement is unavailable on this server.")
     }
 
     func documentIDs(filter: DocumentFilter) async throws -> [Document.ID] {
