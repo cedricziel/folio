@@ -389,6 +389,75 @@ private let documentJSON = """
         _ = try await makeService().scoped(to: vault).documentPage(query: view.query, cursor: nil)
     }
 
+    @Test func savedCustomFieldFilterUsesVersionThreeAndRequiresBrowseSupport() async throws {
+        let vault = UUID(), field = UUID()
+        let fieldID = field.uuidString.lowercased()
+        let metadata = #"{"field_id":"\#(fieldID)","value":{"kind":"boolean","value":false}}"#
+        let response = Data(
+            savedViewJSON.replacingOccurrences(
+                of: #""version":1,"filters":{"reviewed":false"#,
+                with: #""version":3,"filters":{"metadata_exact":\#(metadata),"inbox_only":true"#
+            ).utf8
+        )
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "POST")
+            let object = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let query = object?["query"] as? [String: Any]
+            let filters = query?["filters"] as? [String: Any]
+            let exact = filters?["metadata_exact"] as? [String: Any]
+            #expect(query?["version"] as? Int == 3)
+            #expect(filters?["inbox_only"] as? Bool == true)
+            #expect(exact?["field_id"] as? String == fieldID)
+            #expect((exact?["value"] as? [String: Any])?["value"] as? Bool == false)
+            return .init(status: 201, body: response)
+        }
+        let service = makeService().scoped(to: vault)
+        let exact = ExactCustomFieldFilter(fieldID: field, value: .boolean(false))
+        let view = try await service.saveView(
+            .init(name: "Unpaid", query: .init(filter: .init(inboxOnly: true, metadataExact: exact)))
+        )
+        #expect(view.query.filter.metadataExact == exact)
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Saved-View-Query-Version") == "3")
+            return .init(body: response)
+        }
+        let reopened = try await service.savedView(id: view.id)
+        #expect(reopened.query == view.query)
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url?.path == "/api/documents/browse")
+            #expect(request.url?.query == nil)
+            let object = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let query = object?["query"] as? [String: Any]
+            let filters = query?["filters"] as? [String: Any]
+            let exact = filters?["metadata_exact"] as? [String: Any]
+            #expect(exact?["field_id"] as? String == fieldID)
+            #expect((exact?["value"] as? [String: Any])?["value"] as? Bool == false)
+            return .init(
+                body: Data(#"{"vault_id":"\#(vault)","documents":[],"supports_document_review_filters":true}"#.utf8)
+            )
+        }
+        _ = try await service.documentPage(query: reopened.query, cursor: nil)
+        StubURLProtocol.handler = { _, _ in
+            .init(status: 405, body: Data())
+        }
+        await #expect(throws: FolioError.server(status: 501, message: "This server does not support custom field filters.")) {
+            try await service.documentPage(query: reopened.query, cursor: nil)
+        }
+    }
+
+    @Test func documentListsRejectExactCustomFieldFiltersBeforeMakingARequest() async {
+        StubURLProtocol.handler = { _, _ in
+            Issue.record("List endpoints cannot apply exact custom field filters.")
+            return .init(status: 500)
+        }
+        let service = makeService().scoped(to: UUID())
+        let filter = DocumentFilter(metadataExact: .init(fieldID: UUID(), value: .boolean(false)))
+        let error = FolioError.server(status: 501, message: "Custom field filters require the document browse API.")
+        await #expect(throws: error) { try await service.documents(filter: filter) }
+        await #expect(throws: error) { try await service.documentIDs(filter: filter) }
+    }
+
     @Test func renamingViewOmitsUnchangedQuery() async throws {
         let vault = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!

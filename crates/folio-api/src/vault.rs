@@ -344,7 +344,7 @@ async fn action(state: &AppState, request: &mut Request, vault: VaultId) -> ApiR
     {
         return Ok(VaultAction::ManageVocabulary);
     }
-    if !mutation || path == "/documents/search" {
+    if !mutation || matches!(path, "/documents/search" | "/documents/browse") {
         return Ok(VaultAction::Read);
     }
     if matches!(

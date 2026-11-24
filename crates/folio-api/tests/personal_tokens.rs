@@ -265,6 +265,21 @@ async fn explicit_credentials_override_cookies_and_are_scoped_in_optional_auth()
     assert_eq!(
         h.app
             .clone()
+            .oneshot(req(
+                "POST",
+                "/api/documents/browse",
+                "",
+                token,
+                json!({"query":{"version":1,"filters":{"search_query":"invoice"}}}),
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        h.app
+            .clone()
             .oneshot(req("GET", "/api/sources", &alice, token, Value::Null))
             .await
             .unwrap()

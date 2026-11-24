@@ -452,7 +452,7 @@ async fn enforce_auth_inner(auth: AuthState, mut request: Request, next: Next) -
                     VAULT_MANAGEMENT_SCOPE
                 } else if is_read_method(request.method())
                     || path.starts_with("/api/telemetry/")
-                    || (request.method() == Method::POST && path == "/api/documents/search")
+                    || is_document_query(request.method(), &path)
                 {
                     "documents:read"
                 } else {
@@ -610,8 +610,8 @@ fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
             *method == Method::POST
         }
         ["", "api", "documents"] => read || *method == Method::POST,
-        ["", "api", "documents", "search"] => read || *method == Method::POST,
-        ["", "api", "documents", "browse" | "trash" | "ids"] => read,
+        ["", "api", "documents", "search" | "browse"] => read || *method == Method::POST,
+        ["", "api", "documents", "trash" | "ids"] => read,
         ["", "api", "documents", document] if id(document) => read || *method == Method::DELETE,
         ["", "api", "documents", "upload"] => *method == Method::POST,
         ["", "api", "documents", document, "download" | "export" | "thumbnail" | "revisions"]
@@ -664,13 +664,21 @@ fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
     if !classified {
         return None;
     }
-    if read || (*method == Method::POST && path.trim_end_matches('/') == "/api/documents/search") {
+    if read || is_document_query(method, path) {
         Some("documents:read")
     } else if write {
         Some("documents:write")
     } else {
         None
     }
+}
+
+fn is_document_query(method: &Method, path: &str) -> bool {
+    *method == Method::POST
+        && matches!(
+            path.trim_end_matches('/'),
+            "/api/documents/search" | "/api/documents/browse"
+        )
 }
 
 fn is_read_method(method: &Method) -> bool {
