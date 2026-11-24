@@ -54,7 +54,14 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/review", axum::routing::put(set_document_review))
         .route("/{id}/download", get(download_document))
         .route("/{id}/export", get(super::document_export::export_document))
-        .route("/{id}/revisions", get(super::document_revisions::list))
+        .route(
+            "/{id}/revisions",
+            get(super::document_revisions::list).post(super::document_revisions::replace),
+        )
+        .route(
+            "/{id}/revisions/{revision_id}/restore",
+            post(super::document_revisions::restore),
+        )
         .route(
             "/{id}/revisions/{revision_id}/download",
             get(super::document_revisions::download),

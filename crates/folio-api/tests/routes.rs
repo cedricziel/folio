@@ -1221,6 +1221,111 @@ async fn original_exports_keep_both_revisions_after_the_current_pointer_changes(
 }
 
 #[tokio::test]
+async fn replacement_validates_the_expected_revision_and_keeps_the_original_when_gated() {
+    let h = test_app().await;
+    let document = h
+        .state
+        .document_repo
+        .create_for_upload(h.vault, Default::default())
+        .await
+        .unwrap();
+    let original_key = keys::original(document.id);
+    let original = b"first original";
+    h.state
+        .store
+        .put(&original_key, original.as_slice().into())
+        .await
+        .unwrap();
+    let identity =
+        folio_core::models::FileIdentity::from_bytes(&original_key, "application/pdf", original);
+    h.state
+        .document_repo
+        .finalize_verified_upload(h.vault, document.id, &identity)
+        .await
+        .unwrap();
+
+    let default_path = format!("/api/documents/{}/revisions", document.id);
+    let scoped_path = format!(
+        "/api/vaults/{}/documents/{}/revisions",
+        h.vault, document.id
+    );
+    let send = |path: &str, expected: Uuid, key: Option<Uuid>| {
+        let multipart = format!(
+            "--revision-boundary\r\nContent-Disposition: form-data; name=\"expected_current_revision_id\"\r\n\r\n{expected}\r\n\
+             --revision-boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"replacement.pdf\"\r\n\
+             Content-Type: application/pdf\r\n\r\nreplacement bytes\r\n--revision-boundary--\r\n",
+        );
+        let mut request = Request::post(path).header(
+            "content-type",
+            "multipart/form-data; boundary=revision-boundary",
+        );
+        if let Some(key) = key {
+            request = request.header("Idempotency-Key", key.to_string());
+        }
+        h.router
+            .clone()
+            .oneshot(request.body(Body::from(multipart)).unwrap())
+    };
+    let key = Uuid::new_v4();
+    let inaccessible_path = format!(
+        "/api/vaults/{}/documents/{}/revisions",
+        Uuid::new_v4(),
+        document.id
+    );
+    assert_eq!(
+        send(&inaccessible_path, document.id, Some(key))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    assert_eq!(
+        send(&default_path, document.id, None)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(&default_path, Uuid::nil(), Some(key))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    for path in [&default_path, &scoped_path] {
+        assert_eq!(
+            send(path, document.id, Some(key)).await.unwrap().status(),
+            StatusCode::CONFLICT
+        );
+    }
+
+    let revisions = h
+        .state
+        .document_repo
+        .list_revisions(h.vault, document.id, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(revisions.len(), 1);
+    assert_eq!(revisions[0].id, document.id);
+    assert!(revisions[0].is_current);
+    assert_eq!(
+        h.state.store.get_bytes(&original_key).await.unwrap(),
+        original
+    );
+    assert_eq!(
+        h.state
+            .store
+            .list(&keys::document_prefix(document.id))
+            .await
+            .unwrap()
+            .as_slice(),
+        std::slice::from_ref(&original_key)
+    );
+}
+
+#[tokio::test]
 async fn revision_history_lists_metadata_and_downloads_the_original() {
     let h = test_app().await;
     let doc = h
