@@ -10,14 +10,15 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
+use chrono::SecondsFormat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use folio_core::models::{
     Id, MetadataChangeState, MetadataKind, MetadataValue, RunStatus, SourceConditions, SourceKind,
     TextMatch, UserId, WebhookMethod, Workflow, WorkflowAction, WorkflowActorCondition,
-    WorkflowConditionField, WorkflowConditionType, WorkflowConditions, WorkflowEventConditions,
-    WorkflowIngestConditions, WorkflowInput, WorkflowMetadataConditions,
+    WorkflowCadence, WorkflowConditionField, WorkflowConditionType, WorkflowConditions,
+    WorkflowEventConditions, WorkflowIngestConditions, WorkflowInput, WorkflowMetadataConditions,
     WorkflowProcessingConditions, WorkflowRun, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 
@@ -223,6 +224,11 @@ async fn restore(
 struct FormValues {
     name: String,
     trigger: String,
+    cadence_mode: String,
+    cadence_start: String,
+    cadence_interval: String,
+    clear_clock_filters: Option<String>,
+    clear_clock_actions: Option<String>,
     enabled: Option<String>,
     condition_groups: Option<String>,
     mime_type: String,
@@ -563,12 +569,31 @@ impl FormValues {
         let after = metadata.and_then(|metadata| metadata.after.as_ref());
         let (metadata_before, metadata_before_currency) = metadata_value_text(before);
         let (metadata_after, metadata_after_currency) = metadata_value_text(after);
+        let (cadence_mode, cadence_start, cadence_interval) = match workflow.cadence {
+            Some(WorkflowCadence::Once { at }) => (
+                "once",
+                at.to_rfc3339_opts(SecondsFormat::AutoSi, true),
+                String::new(),
+            ),
+            Some(WorkflowCadence::Recurring {
+                first_at,
+                interval_seconds,
+            }) => (
+                "recurring",
+                first_at.to_rfc3339_opts(SecondsFormat::AutoSi, true),
+                interval_seconds.to_string(),
+            ),
+            None => ("once", String::new(), String::new()),
+        };
         Self {
             extra_fields,
             action_correspondent_id,
             action_document_type_id,
             name: workflow.name.clone(),
             trigger: workflow.trigger.as_str().into(),
+            cadence_mode: cadence_mode.into(),
+            cadence_start,
+            cadence_interval,
             enabled: workflow.enabled.then(|| "on".to_string()),
             mime_type: c.mime_type.clone().unwrap_or_default(),
             tag_id: c.tag_id.map(|i| i.to_string()).unwrap_or_default(),
@@ -654,17 +679,49 @@ impl FormValues {
         }
     }
 
+    fn cadence(&self, trigger: WorkflowTrigger) -> Result<Option<WorkflowCadence>, String> {
+        if trigger != WorkflowTrigger::Scheduled {
+            return Ok(None);
+        }
+        let start = self
+            .cadence_start
+            .trim()
+            .parse()
+            .map_err(|_| "Enter a UTC date and time such as 2026-12-01T09:00:00Z.")?;
+        let cadence = match self.cadence_mode.as_str() {
+            "once" => WorkflowCadence::Once { at: start },
+            "recurring" => WorkflowCadence::Recurring {
+                first_at: start,
+                interval_seconds: self
+                    .cadence_interval
+                    .trim()
+                    .parse()
+                    .map_err(|_| "Enter a positive interval in whole seconds.")?,
+            },
+            _ => return Err("Choose a schedule frequency.".into()),
+        };
+        cadence.validate().map_err(|err| err.to_string())?;
+        Ok(Some(cadence))
+    }
+
     /// Turn the submission into a workflow, keeping any actions the form cannot edit
     fn into_input(self, existing: Option<&Workflow>) -> Result<WorkflowInput, String> {
         let trigger = WorkflowTrigger::parse(&self.trigger).ok_or("Choose a trigger.")?;
+        let cadence = self.cadence(trigger)?;
         let optional = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
         let id = |s: &str, what: &str| -> Result<Option<Id>, String> {
             optional(s)
                 .map(|v| Uuid::parse_str(&v).map_err(|_| format!("The {what} is not valid.")))
                 .transpose()
         };
-        let processing = processing_condition(&self, existing, trigger)?;
+        let clear_clock_filters = cadence.is_some() && self.clear_clock_filters.is_some();
+        let processing = if clear_clock_filters {
+            None
+        } else {
+            processing_condition(&self, existing, trigger)?
+        };
         let mut event = match self.event_actor.as_deref() {
+            _ if clear_clock_filters => None,
             None if trigger == WorkflowTrigger::IngestReceived => None,
             None => existing.and_then(|workflow| workflow.conditions.event.clone()),
             Some(mode) => {
@@ -734,13 +791,23 @@ impl FormValues {
         let mut conditions = existing
             .map(|workflow| workflow.conditions.clone())
             .unwrap_or_default();
-        conditions.event = event;
+        if clear_clock_filters {
+            conditions = WorkflowConditions {
+                all: conditions.all,
+                any: conditions.any,
+                none: conditions.none,
+                ..WorkflowConditions::default()
+            };
+        } else if cadence.is_none() {
+            conditions.event = event;
+        }
         if let Some(groups) = &self.condition_groups {
             serde_json::from_str::<ConditionGroups>(groups)
                 .map_err(|_| "Check the values in the nested condition groups.")?
                 .apply(&mut conditions);
         }
-        if trigger.entry_transition().is_none()
+        if cadence.is_none()
+            && trigger.entry_transition().is_none()
             && !trigger.is_ingest_outcome()
             && !trigger.is_custom_metadata()
         {
@@ -758,11 +825,13 @@ impl FormValues {
                 email_attachment_glob: optional(&self.email_attachment_glob),
                 email_mailbox_glob: optional(&self.email_mailbox_glob),
             };
-        } else if existing.is_some_and(|workflow| {
-            workflow.trigger.entry_transition().is_none()
-                && !workflow.trigger.is_ingest_outcome()
-                && !workflow.trigger.is_custom_metadata()
-        }) {
+        } else if cadence.is_none()
+            && existing.is_some_and(|workflow| {
+                workflow.trigger.entry_transition().is_none()
+                    && !workflow.trigger.is_ingest_outcome()
+                    && !workflow.trigger.is_custom_metadata()
+            })
+        {
             conditions.mime_type = None;
             conditions.tag_id = None;
             conditions.correspondent_id = None;
@@ -773,6 +842,7 @@ impl FormValues {
 
         if trigger == WorkflowTrigger::IngestReceived {
             return Ok(WorkflowInput {
+                cadence: None,
                 name: self.name.trim().to_string(),
                 enabled: self.enabled.is_some(),
                 trigger,
@@ -834,23 +904,27 @@ impl FormValues {
         // The form edits one action of each kind: it replaces the first stored
         // one, or removes it when the section was emptied. Anything else stays.
         let mut actions = existing.map(|w| w.actions.clone()).unwrap_or_default();
-        set_action(
-            &mut actions,
-            |a| matches!(a, WorkflowAction::AddTags { .. }),
-            (!tag_ids.is_empty()).then_some(WorkflowAction::AddTags { tag_ids }),
-        );
-        set_action(
-            &mut actions,
-            |a| matches!(a, WorkflowAction::SetCorrespondent { .. }),
-            id(&self.action_correspondent_id, "correspondent")?
-                .map(|correspondent_id| WorkflowAction::SetCorrespondent { correspondent_id }),
-        );
-        set_action(
-            &mut actions,
-            |a| matches!(a, WorkflowAction::SetDocumentType { .. }),
-            id(&self.action_document_type_id, "document type")?
-                .map(|document_type_id| WorkflowAction::SetDocumentType { document_type_id }),
-        );
+        if cadence.is_some() && self.clear_clock_actions.is_some() {
+            actions.retain(WorkflowAction::is_webhook);
+        } else if cadence.is_none() {
+            set_action(
+                &mut actions,
+                |a| matches!(a, WorkflowAction::AddTags { .. }),
+                (!tag_ids.is_empty()).then_some(WorkflowAction::AddTags { tag_ids }),
+            );
+            set_action(
+                &mut actions,
+                |a| matches!(a, WorkflowAction::SetCorrespondent { .. }),
+                id(&self.action_correspondent_id, "correspondent")?
+                    .map(|correspondent_id| WorkflowAction::SetCorrespondent { correspondent_id }),
+            );
+            set_action(
+                &mut actions,
+                |a| matches!(a, WorkflowAction::SetDocumentType { .. }),
+                id(&self.action_document_type_id, "document type")?
+                    .map(|document_type_id| WorkflowAction::SetDocumentType { document_type_id }),
+            );
+        }
         set_action(
             &mut actions,
             WorkflowAction::is_webhook,
@@ -866,6 +940,7 @@ impl FormValues {
         }
 
         Ok(WorkflowInput {
+            cadence,
             name: self.name.trim().to_string(),
             enabled: self.enabled.is_some(),
             trigger,
@@ -949,6 +1024,8 @@ struct FormTemplate {
     secret_mask: &'static str,
     triggers: Vec<TriggerChoice>,
     processing_fields: Vec<ProcessingControl>,
+    has_saved_root_filters: bool,
+    has_saved_non_webhook_actions: bool,
     condition_groups: String,
     metadata_fields: Vec<Choice>,
     metadata_kinds: Vec<Choice>,
@@ -1028,8 +1105,17 @@ async fn build_form(
         .map_err(|error| ApiError::internal(error.to_string()))?,
     };
 
+    let has_saved_root_filters = workflow.is_some_and(|workflow| {
+        let mut root = workflow.conditions.clone();
+        ConditionGroups::default().apply(&mut root);
+        root != WorkflowConditions::default()
+    });
+    let has_saved_non_webhook_actions =
+        workflow.is_some_and(|workflow| workflow.actions.iter().any(|action| !action.is_webhook()));
     Ok(FormTemplate {
         condition_groups,
+        has_saved_root_filters,
+        has_saved_non_webhook_actions,
         sidebar: Sidebar::load(state, vault, Nav::Workflows).await?,
         title: format!(
             "{} - Folio",
@@ -1275,6 +1361,7 @@ async fn toggle(
             vault,
             id,
             WorkflowInput {
+                cadence: workflow.cadence,
                 name: workflow.name,
                 enabled: !workflow.enabled,
                 trigger: workflow.trigger,

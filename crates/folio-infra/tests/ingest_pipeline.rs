@@ -425,6 +425,7 @@ async fn uploaded_workflows_see_the_source_in_conditions_and_payload() {
         h.workflows.create(
             h.vault,
             WorkflowInput {
+                cadence: None,
                 name: "w".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUploaded,

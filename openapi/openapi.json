@@ -12896,6 +12896,9 @@
               "$ref": "#/components/schemas/WorkflowAction"
             }
           },
+          "cadence": {
+            "$ref": "#/components/schemas/WorkflowCadence"
+          },
           "conditions": {
             "$ref": "#/components/schemas/WorkflowConditions"
           },
@@ -13099,6 +13102,57 @@
               },
               "user_id": {
                 "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "WorkflowCadence": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "at",
+              "type"
+            ],
+            "properties": {
+              "at": {
+                "type": "string",
+                "description": "RFC 3339 UTC instant, with up to nine fractional digits.",
+                "example": "2026-12-01T09:00:00Z"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "once"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "first_at",
+              "interval_seconds",
+              "type"
+            ],
+            "properties": {
+              "first_at": {
+                "type": "string",
+                "description": "RFC 3339 UTC instant with up to nine fractional digits. Leap seconds are unsupported for recurring clocks.",
+                "example": "2026-12-01T09:00:00Z"
+              },
+              "interval_seconds": {
+                "type": "integer",
+                "format": "int64",
+                "maximum": 4294967295,
+                "minimum": 1
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "recurring"
+                ]
               }
             }
           }
@@ -13330,6 +13384,9 @@
             "items": {
               "$ref": "#/components/schemas/WorkflowAction"
             }
+          },
+          "cadence": {
+            "$ref": "#/components/schemas/WorkflowCadence"
           },
           "conditions": {
             "$ref": "#/components/schemas/WorkflowConditions"
@@ -13565,7 +13622,8 @@
           "document.processing.thumbnail.completed",
           "document.processing.thumbnail.failed",
           "document.processing.thumbnail.skipped",
-          "document.processing.thumbnail.retry_scheduled"
+          "document.processing.thumbnail.retry_scheduled",
+          "workflow.scheduled"
         ]
       },
       "WorkflowTriggerDefinition": {
@@ -13653,7 +13711,7 @@
     },
     {
       "name": "workflows",
-      "description": "Automations that react to document events, such as webhooks"
+      "description": "Automations that react to events or run on a schedule"
     },
     {
       "name": "sources",

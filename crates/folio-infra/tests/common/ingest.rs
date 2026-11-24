@@ -124,6 +124,7 @@ impl Harness {
             .create(
                 self.vault,
                 WorkflowInput {
+                    cadence: None,
                     name: name.into(),
                     enabled: true,
                     trigger: WorkflowTrigger::IngestReceived,
