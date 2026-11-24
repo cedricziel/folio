@@ -42,7 +42,7 @@ impl folio_core::ports::DocumentImporter for GatedImporter {
         vault: folio_core::models::VaultId,
         id: folio_core::models::Id,
         upload: folio_core::services::NewUpload,
-    ) -> folio_core::Result<folio_core::models::Document> {
+    ) -> folio_core::Result<()> {
         self.inner.import_as(vault, id, upload).await
     }
 
