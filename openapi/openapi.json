@@ -12358,6 +12358,10 @@
             ],
             "format": "int64"
           },
+          "publication_enabled": {
+            "type": "boolean",
+            "description": "This server is accepting replacement and restoration requests."
+          },
           "revisions": {
             "type": "array",
             "items": {

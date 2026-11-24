@@ -12,6 +12,7 @@ use folio_core::models::{
 };
 use folio_core::mutation::{current_actor, current_lineage, with_actor, with_lineage};
 use folio_core::services::{replace_document_original, NewRevisionOriginal};
+use folio_infra::queue::REVISION_DISPATCH_ENABLED;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use utoipa::{IntoParams, ToSchema};
@@ -83,6 +84,10 @@ impl From<DocumentRevision> for RevisionView {
 pub struct RevisionPageView {
     revisions: Vec<RevisionView>,
     next_before: Option<i64>,
+    /// This server is accepting replacement and restoration requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = bool, required = false)]
+    publication_enabled: Option<bool>,
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -173,6 +178,7 @@ async fn list_in_vault(
     Ok(Json(RevisionPageView {
         revisions: revisions.into_iter().map(RevisionView::from).collect(),
         next_before,
+        publication_enabled: REVISION_DISPATCH_ENABLED.then_some(true),
     }))
 }
 
@@ -183,10 +189,12 @@ struct FileHistoryTemplate {
     revisions: Vec<DocumentRevision>,
     next_before: Option<i64>,
     show_latest: bool,
+    editable_current_revision: Option<Uuid>,
 }
 
 pub(super) async fn panel(
     DefaultVault(vault): DefaultVault,
+    uploader: Uploader,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<RevisionQuery>,
@@ -196,15 +204,65 @@ pub(super) async fn panel(
         revisions,
         next_before,
     } = revision_page(&state, vault, id, query).await?;
+    let editable_current_revision = if REVISION_DISPATCH_ENABLED {
+        let current = if show_latest {
+            state
+                .document_repo
+                .list_revisions(vault, id, None, 1)
+                .await?
+        } else {
+            Vec::new()
+        };
+        let latest = if show_latest {
+            current.first()
+        } else {
+            revisions.first()
+        };
+        editable_revision(&state, vault, id, &uploader, latest).await?
+    } else {
+        None
+    };
     FileHistoryTemplate {
         document_id: id,
         revisions,
         next_before,
         show_latest,
+        editable_current_revision,
     }
     .render()
     .map(Html)
     .map_err(|_| ApiError::internal("Could not render file history"))
+}
+
+async fn editable_revision(
+    state: &AppState,
+    vault: VaultId,
+    id: Uuid,
+    uploader: &Uploader,
+    current: Option<&DocumentRevision>,
+) -> ApiResult<Option<Uuid>> {
+    let Some(current) = current.filter(|revision| {
+        revision.is_current && revision.original.verification == OriginalVerification::Verified
+    }) else {
+        return Ok(None);
+    };
+    if let Some(user) = &uploader.0 {
+        let document = state
+            .document_repo
+            .find_by_id(vault, id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("Document not found"))?;
+        let action = VaultAction::EditDocument {
+            uploaded_by: document.uploaded_by,
+        };
+        if !matches!(
+            state.access.can(user, vault, action).await?,
+            Access::Allowed(_)
+        ) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(current.id))
 }
 
 async fn revision_page(
