@@ -5,7 +5,9 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, Utc};
-use folio_core::models::{Access, DocumentRevision, OriginalVerification, VaultAction, VaultId};
+use folio_core::models::{
+    Access, DocumentRevision, DocumentRevisionPage, OriginalVerification, VaultAction, VaultId,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -159,7 +161,10 @@ async fn list_in_vault(
     id: Uuid,
     query: RevisionQuery,
 ) -> ApiResult<Json<RevisionPageView>> {
-    let (revisions, next_before) = revision_page(state, vault, id, query).await?;
+    let DocumentRevisionPage {
+        revisions,
+        next_before,
+    } = revision_page(state, vault, id, query).await?;
     Ok(Json(RevisionPageView {
         revisions: revisions.into_iter().map(RevisionView::from).collect(),
         next_before,
@@ -182,7 +187,10 @@ pub(super) async fn panel(
     ApiQuery(query): ApiQuery<RevisionQuery>,
 ) -> ApiResult<Html<String>> {
     let show_latest = query.before.is_some();
-    let (revisions, next_before) = revision_page(&state, vault, id, query).await?;
+    let DocumentRevisionPage {
+        revisions,
+        next_before,
+    } = revision_page(&state, vault, id, query).await?;
     FileHistoryTemplate {
         document_id: id,
         revisions,
@@ -199,26 +207,12 @@ async fn revision_page(
     vault: VaultId,
     id: Uuid,
     query: RevisionQuery,
-) -> ApiResult<(Vec<DocumentRevision>, Option<i64>)> {
-    let limit = query.limit.unwrap_or(25);
-    if !(1..=100).contains(&limit) || query.before.is_some_and(|before| before <= 0) {
-        return Err(ApiError::bad_request("Invalid revision page"));
-    }
-    if state.document_repo.locate(id).await? != Some(vault) {
-        return Err(ApiError::not_found("Document not found"));
-    }
-
-    let mut revisions = state
+) -> ApiResult<DocumentRevisionPage> {
+    state
         .document_repo
-        .list_revisions(vault, id, query.before, limit + 1)
-        .await?;
-    let has_more = revisions.len() > limit as usize;
-    revisions.truncate(limit as usize);
-    let next_before = revisions
-        .last()
-        .filter(|_| has_more)
-        .map(|revision| revision.number);
-    Ok((revisions, next_before))
+        .revision_page(vault, id, query.before, query.limit)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Document not found"))
 }
 
 #[utoipa::path(

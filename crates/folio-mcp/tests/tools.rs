@@ -295,6 +295,67 @@ async fn resources_expose_document_text_and_file() {
 }
 
 #[tokio::test]
+async fn file_history_exposes_bounded_original_resources_for_live_documents() {
+    let fx = Fixture::new().await;
+    let client = fx.in_process_client().await;
+    let content = base64::engine::general_purpose::STANDARD.encode(b"first original");
+    let uploaded = call_ok(
+        &client,
+        "upload_document",
+        json!({"filename": "statement.txt", "content_base64": content, "mime_type": "text/plain"}),
+    )
+    .await;
+    let id = uploaded["id"].as_str().unwrap();
+    let history = call_ok(
+        &client,
+        "list_file_revisions",
+        json!({"id": id, "limit": 1}),
+    )
+    .await;
+    let revisions = history["revisions"].as_array().unwrap();
+    assert_eq!(revisions.len(), 1);
+    let revision = &revisions[0];
+    assert_eq!(revision["number"], 1);
+    assert_eq!(revision["is_current"], true);
+    assert_eq!(revision["filename"], "statement.txt");
+    assert_eq!(revision["verification"], "verified");
+    assert_eq!(revision["byte_size"], 14);
+    assert!(revision.get("storage_key").is_none());
+    assert!(history["next_before"].is_null());
+
+    let uri = revision["resource_uri"].as_str().unwrap();
+    let request = || rmcp::model::ReadResourceRequestParams::new(uri.to_owned());
+    let read = client.read_resource(request()).await.unwrap();
+    let data = serde_json::to_value(&read.contents).unwrap();
+    assert_eq!(data[0]["blob"], content);
+    assert_eq!(data[0]["mimeType"], "text/plain");
+
+    let another = fx.insert("Another document", "").await;
+    let wrong_document_uri = uri.replacen(id, &another.id.to_string(), 1);
+    assert!(client
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(
+            wrong_document_uri
+        ))
+        .await
+        .is_err());
+
+    let older = call_ok(
+        &client,
+        "list_file_revisions",
+        json!({"id": id, "before": 1}),
+    )
+    .await;
+    assert_eq!(older["revisions"], json!([]));
+    fx.documents
+        .delete(fx.vault, id.parse().unwrap())
+        .await
+        .unwrap();
+    assert!(client.read_resource(request()).await.is_err());
+    let unavailable = call(&client, "list_file_revisions", json!({"id": id})).await;
+    assert!(unavailable.is_err() || unavailable.unwrap().is_error == Some(true));
+}
+
+#[tokio::test]
 async fn oversized_file_resource_suggests_text_resource() {
     let fx = Fixture::new().await;
     let (document, _) = fx
@@ -327,6 +388,23 @@ async fn oversized_file_resource_suggests_text_resource() {
     assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
     assert!(error.message.contains("5242880"));
     assert!(error.message.contains("use the text resource instead"));
+
+    let history = call_ok(
+        &client,
+        "list_file_revisions",
+        json!({"id": document.id.to_string()}),
+    )
+    .await;
+    let uri = history["revisions"][0]["resource_uri"].as_str().unwrap();
+    let error = client
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(uri.to_owned()))
+        .await
+        .unwrap_err();
+    let rmcp::service::ServiceError::McpError(error) = error else {
+        panic!("expected a protocol error");
+    };
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    assert!(error.message.contains("5242880"));
 }
 
 #[tokio::test]

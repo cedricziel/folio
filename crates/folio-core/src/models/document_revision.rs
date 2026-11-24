@@ -30,3 +30,9 @@ pub struct DocumentRevision {
     pub restored_from_revision_id: Option<Id>,
     pub original: RevisionOriginal,
 }
+
+#[derive(Debug, Clone)]
+pub struct DocumentRevisionPage {
+    pub revisions: Vec<DocumentRevision>,
+    pub next_before: Option<i64>,
+}
