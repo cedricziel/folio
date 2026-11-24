@@ -232,8 +232,9 @@ private struct WorkflowLifecycleDetail: View {
         .sheet(isPresented: $showingTriggerEditor) {
             if let editingService {
                 WorkflowTriggerEditor(workflow: workflow, service: editingService) { saved, choice in
-                    workflow = saved
-                    lifecycle.applyTriggerUpdate(saved, choice: choice)
+                    let current = lifecycle.applyTriggerUpdate(saved, choice: choice)
+                    if let current { workflow = current }
+                    return current
                 }
             }
         }

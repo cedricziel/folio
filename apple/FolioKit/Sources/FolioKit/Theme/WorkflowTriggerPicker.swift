@@ -32,11 +32,11 @@ struct WorkflowTriggerEditor: View {
     @State private var needsReload = false
     @State private var workflow: WorkflowConfigurationSummary
     private let service: any WorkflowTriggerEditingService
-    private let onUpdated: (WorkflowConfigurationSummary, WorkflowTriggerChoice?) -> Void
+    private let onUpdated: (WorkflowConfigurationSummary, WorkflowTriggerChoice?) -> WorkflowConfigurationSummary?
 
     init(
         workflow: WorkflowConfigurationSummary, service: any WorkflowTriggerEditingService,
-        onUpdated: @escaping (WorkflowConfigurationSummary, WorkflowTriggerChoice?) -> Void
+        onUpdated: @escaping (WorkflowConfigurationSummary, WorkflowTriggerChoice?) -> WorkflowConfigurationSummary?
     ) {
         _workflow = State(initialValue: workflow)
         self.service = service
@@ -107,11 +107,12 @@ struct WorkflowTriggerEditor: View {
         defer { isLoading = false }
         do {
             let latest = try await service.workflowConfiguration(vaultID: workflow.vaultID, workflowID: workflow.id)
-            guard latest.revision != nil else { throw FolioError.unreadableResponse }
-            workflow = latest
-            selection = latest.trigger
+            guard latest.revision != nil,
+                let current = onUpdated(latest, choices.first(where: { $0.id == latest.trigger }))
+            else { throw FolioError.unreadableResponse }
+            workflow = current
+            selection = current.trigger
             needsReload = false
-            onUpdated(latest, choices.first(where: { $0.id == latest.trigger }))
         } catch {
             saveError = WorkflowLifecycleViewModel.message(error, fallback: "Couldn't reload the workflow. Try again.")
         }
@@ -125,7 +126,7 @@ struct WorkflowTriggerEditor: View {
         saveError = nil
         defer { isSaving = false }
         do {
-            onUpdated(try await service.changeWorkflowTrigger(workflow, to: choice.id), choice)
+            _ = onUpdated(try await service.changeWorkflowTrigger(workflow, to: choice.id), choice)
             dismiss()
         } catch FolioError.server(status: 400, message: _), FolioError.server(status: 422, message: _) {
             saveError = "Choose a trigger compatible with the workflow's conditions and actions."

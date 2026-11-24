@@ -92,6 +92,33 @@ import Testing
         #expect(history.error == nil)
     }
 
+    @Test func aLateTriggerSaveDoesNotReplaceTheNewerRefreshedConfiguration() async {
+        let fixture = LifecycleFixture()
+        let model = fixture.model()
+        let original = fixture.workflow
+        func revision(_ value: Int64, enabled: Bool, trigger: String) -> WorkflowConfigurationSummary {
+            WorkflowConfigurationSummary(
+                id: original.id, vaultID: original.vaultID, name: original.name, enabled: enabled,
+                trigger: trigger, createdAt: original.createdAt, updatedAt: original.updatedAt, revision: value
+            )
+        }
+        fixture.service.workflow = revision(1, enabled: true, trigger: original.trigger)
+        await model.load()
+        let choice = WorkflowTriggerChoice(
+            id: "document_note.created", title: "When a note is created", target: .document, conditionFields: []
+        )
+        let saved = revision(2, enabled: true, trigger: choice.id)
+        let disabled = revision(3, enabled: false, trigger: choice.id)
+        fixture.service.workflow = disabled
+        await model.load()
+        #expect(model.applyTriggerUpdate(saved, choice: choice) == disabled)
+        #expect(model.workflows == [disabled])
+
+        let latest = revision(4, enabled: false, trigger: choice.id)
+        #expect(model.applyTriggerUpdate(latest, choice: choice) == latest)
+        #expect(model.workflows == [latest])
+    }
+
     @Test func switchingToTrashIgnoresAnOlderActiveListResponse() async {
         let fixture = LifecycleFixture()
         fixture.service.holdActiveList = true
@@ -139,7 +166,7 @@ import Testing
 }
 
 @MainActor private final class LifecycleStore: WorkflowLifecycleService {
-    let workflow: WorkflowConfigurationSummary
+    var workflow: WorkflowConfigurationSummary
     let run: WorkflowExecutionSummary
     var failure: FolioError?
     var requestCount = 0
@@ -209,7 +236,8 @@ import Testing
         WorkflowConfigurationSummary(
             id: workflow.id, vaultID: workflow.vaultID, name: workflow.name, enabled: workflow.enabled,
             trigger: workflow.trigger, createdAt: workflow.createdAt, updatedAt: workflow.updatedAt,
-            deletedAt: trashed ? .distantPast : nil, createdBy: workflow.createdBy, updatedBy: workflow.updatedBy
+            deletedAt: trashed ? .distantPast : nil, createdBy: workflow.createdBy, updatedBy: workflow.updatedBy,
+            revision: workflow.revision
         )
     }
 }
