@@ -78,6 +78,8 @@ struct WorkflowTriggerEditor: View {
     @State private var choices: [WorkflowTriggerChoice] = []
     @State private var selections: [String]
     @State private var cadence: WorkflowCadenceDraft
+    @State private var documentConditions: WorkflowDocumentConditionDraft?
+    @State private var initialDocumentConditions: WorkflowDocumentConditionDraft?
     @State private var isLoading = false
     @State private var isSaving = false
     @State private var loadError: String?
@@ -86,6 +88,18 @@ struct WorkflowTriggerEditor: View {
     @State private var workflow: WorkflowConfigurationSummary
     private let service: any WorkflowTriggerEditingService
     private let onUpdated: (WorkflowConfigurationSummary, WorkflowTriggerChoice?) -> WorkflowConfigurationSummary?
+
+    private var conditionService: (any WorkflowDocumentConditionEditingService)? {
+        service as? any WorkflowDocumentConditionEditingService
+    }
+
+    private var selectedChoice: WorkflowTriggerChoice? {
+        WorkflowTriggerChoice.matching(selections, in: choices)
+    }
+
+    private var hasDocumentConditionEdits: Bool {
+        documentConditions != initialDocumentConditions
+    }
 
     init(
         workflow: WorkflowConfigurationSummary, service: any WorkflowTriggerEditingService,
@@ -129,6 +143,20 @@ struct WorkflowTriggerEditor: View {
                         WorkflowScheduleFields(triggerID: primaryTrigger, cadence: $cadence)
                             .disabled(isSaving || needsReload)
                     }
+                    if let conditions = documentConditions {
+                        Section {
+                            ForEach(conditions.fields) { field in
+                                conditionField(field)
+                            }
+                        } header: {
+                            Text("Document conditions")
+                        } footer: {
+                            if let message = conditions.validationMessage {
+                                Text(message).foregroundStyle(Color.danger)
+                            }
+                        }
+                        .disabled(isSaving || needsReload)
+                    }
                 }
                 if let saveError {
                     Text(saveError).foregroundStyle(Color.danger)
@@ -151,6 +179,10 @@ struct WorkflowTriggerEditor: View {
                 }
             }
             .task { await load() }
+            .onChange(of: selections) {
+                updateDocumentConditions()
+                if !needsReload { saveError = nil }
+            }
         }
         .interactiveDismissDisabled(isSaving || (isLoading && needsReload))
     }
@@ -162,17 +194,76 @@ struct WorkflowTriggerEditor: View {
     }
 
     private var canSave: Bool {
-        guard !isLoading, !isSaving, !needsReload, WorkflowTriggerChoice.matching(selections, in: choices) != nil
+        guard !isLoading, !isSaving, !needsReload, loadError == nil,
+            selectedChoice != nil, documentConditions?.validationMessage == nil
         else { return false }
         if service is any WorkflowAuthoringService {
             do {
                 let draft = try cadence.payload(for: primaryTrigger)
-                return selections != workflow.selectedTriggers || draft != workflow.cadence
+                return selections != workflow.selectedTriggers || draft != workflow.cadence || hasDocumentConditionEdits
             } catch {
                 return false
             }
         }
-        return primaryTrigger != workflow.trigger
+        return primaryTrigger != workflow.trigger || hasDocumentConditionEdits
+    }
+
+    private func updateDocumentConditions() {
+        if selections == workflow.selectedTriggers {
+            documentConditions = initialDocumentConditions
+            return
+        }
+        guard conditionService != nil, let choice = selectedChoice, choice.canEditDocumentConditions,
+            var draft = WorkflowDocumentConditionDraft(choice)
+        else {
+            documentConditions = nil
+            return
+        }
+        if let previous = documentConditions ?? initialDocumentConditions, previous.type == draft.type {
+            if previous.triggerID == draft.triggerID, previous.fields == draft.fields { return }
+            if let value = previous.wireValue {
+                try? draft.load(value)
+            }
+        }
+        documentConditions = draft
+    }
+
+    @ViewBuilder private func conditionField(_ field: WorkflowDocumentConditionDraft.Field) -> some View {
+        let value = Binding(
+            get: { documentConditions?[field.key] ?? "" },
+            set: { documentConditions?[field.key] = $0 }
+        )
+        let options = field.key.options
+        if options.isEmpty {
+            LabeledContent(field.title) {
+                TextField(
+                    field.title, text: value, prompt: Text(field.key.valueType == "date" ? "YYYY-MM-DD" : "Any")
+                )
+                .multilineTextAlignment(.trailing)
+                .autocorrectionDisabled()
+            }
+        } else {
+            Picker(field.title, selection: value) {
+                Text("Any").tag("")
+                if !value.wrappedValue.isEmpty && !options.contains(where: { $0.id == value.wrappedValue }) {
+                    Text("Unavailable value").tag(value.wrappedValue)
+                }
+                ForEach(options) { option in
+                    Text(option.title).tag(option.id)
+                }
+            }
+            .pickerStyle(.menu)
+        }
+    }
+
+    private func loadDocumentConditions(for configuration: WorkflowConfigurationSummary) async throws
+        -> WorkflowDocumentConditionDraft?
+    {
+        guard let conditionService,
+            let choice = WorkflowTriggerChoice.matching(configuration.selectedTriggers, in: choices),
+            choice.canEditDocumentConditions
+        else { return nil }
+        return try await conditionService.loadWorkflowDocumentConditions(configuration, choice: choice)
     }
 
     private func load() async {
@@ -182,6 +273,11 @@ struct WorkflowTriggerEditor: View {
         defer { isLoading = false }
         do {
             choices = try await service.workflowTriggerChoices(vaultID: workflow.vaultID)
+            initialDocumentConditions = try await loadDocumentConditions(for: workflow)
+            documentConditions = initialDocumentConditions
+        } catch FolioError.server(status: 409, message: _) {
+            needsReload = true
+            saveError = "The workflow changed. Reload it before editing."
         } catch {
             guard !Task.isCancelled else { return }
             loadError = WorkflowLifecycleViewModel.message(error, fallback: "Couldn't load triggers. Try again.")
@@ -198,9 +294,12 @@ struct WorkflowTriggerEditor: View {
             guard latest.revision != nil,
                 let current = onUpdated(latest, choices.first(where: { $0.id == latest.trigger }))
             else { throw FolioError.unreadableResponse }
+            let conditions = try await loadDocumentConditions(for: current)
             workflow = current
             selections = current.selectedTriggers
             cadence = WorkflowCadenceDraft(current.cadence)
+            initialDocumentConditions = conditions
+            documentConditions = conditions
             needsReload = false
         } catch {
             saveError = WorkflowLifecycleViewModel.message(error, fallback: "Couldn't reload the workflow. Try again.")
@@ -208,17 +307,22 @@ struct WorkflowTriggerEditor: View {
     }
 
     private func save() async {
-        guard canSave,
-            let choice = choices.first(where: { $0.id == primaryTrigger })
+        guard canSave, let choice = selectedChoice
         else { return }
         isSaving = true
         saveError = nil
         defer { isSaving = false }
         do {
             let saved: WorkflowConfigurationSummary
-            if let authoring = service as? any WorkflowAuthoringService {
+            let predicate = documentConditions.flatMap {
+                $0.shouldSubmit(startingTrigger: workflow.trigger) ? $0 : nil
+            }
+            if let authoring = service as? any WorkflowAuthoringService, workflow.triggers != nil || predicate == nil {
                 saved = try await authoring.saveWorkflowTriggers(
-                    workflow, to: selections, cadence: cadence.payload(for: choice.id))
+                    workflow, to: selections, cadence: cadence.payload(for: choice.id), documentConditions: predicate)
+            } else if let conditionService, let predicate {
+                saved = try await conditionService.saveWorkflowTrigger(
+                    workflow, choice: choice, documentConditions: predicate)
             } else {
                 saved = try await service.changeWorkflowTrigger(workflow, to: choice.id)
             }

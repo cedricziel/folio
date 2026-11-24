@@ -159,7 +159,8 @@ protocol WorkflowAuthoringService: WorkflowTriggerEditingService {
     ) async throws -> WorkflowConfigurationSummary
 
     func saveWorkflowTriggers(
-        _ workflow: WorkflowConfigurationSummary, to triggerIDs: [String], cadence: Components.Schemas.WorkflowCadence?
+        _ workflow: WorkflowConfigurationSummary, to triggerIDs: [String], cadence: Components.Schemas.WorkflowCadence?,
+        documentConditions: WorkflowDocumentConditionDraft?
     ) async throws -> WorkflowConfigurationSummary
 
     func saveWorkflowSettings(

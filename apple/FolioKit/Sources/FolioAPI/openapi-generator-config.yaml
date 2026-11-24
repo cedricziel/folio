@@ -7,3 +7,4 @@ typeOverrides:
   schemas:
     DocumentDatePatch: DocumentDatePatchPayload
     WorkflowConditions: WorkflowConditionsPayload
+    WorkflowTriggerUpdate: WorkflowTriggerUpdatePayload
