@@ -111,7 +111,7 @@ pub use vault::{
 };
 pub use webhook::{
     NamedRef, WebhookDocument, WebhookEntry, WebhookIngest, WebhookMetadata, WebhookPayload,
-    WebhookProcessing, WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
+    WebhookProcessing, WebhookSavedView, WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
 };
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,

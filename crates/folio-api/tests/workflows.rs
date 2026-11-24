@@ -1401,6 +1401,88 @@ async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
 }
 
 #[tokio::test]
+async fn saved_view_triggers_use_event_filters_and_delivery_actions() {
+    let app = test_app().await;
+    let (status, catalog) = json_request(&app, "GET", "/api/workflows/triggers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    for event_type in [
+        "saved_view.created",
+        "saved_view.updated",
+        "saved_view.deleted",
+    ] {
+        let choice = catalog
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|choice| choice["event_type"] == event_type)
+            .expect("shared saved-view trigger is in the catalog");
+        assert_eq!(choice["target"], "event");
+        assert_eq!(choice["subject_type"], "saved_view");
+        let fields = choice["condition_fields"].as_array().unwrap();
+        assert_eq!(fields.len(), 3);
+        assert!(fields
+            .iter()
+            .any(|field| field["key"] == "event.subject_id"));
+    }
+
+    let subject = Uuid::new_v4();
+    let form = format!(
+        "name=View+delivery&trigger=saved_view.updated&enabled=on&event_actor=user&event_user_id=editor&event_subject_id={subject}&webhook_url=https%3A%2F%2Fexample.com%2Fhook"
+    );
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/workflows")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let edit_path = response.headers()["location"].to_str().unwrap();
+    let id = edit_path.rsplit('/').next().unwrap();
+    let (status, workflow) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(workflow["trigger"], "saved_view.updated");
+    assert_eq!(
+        workflow["conditions"]["event"],
+        json!({
+            "subject_id": subject, "actor": {"type": "user", "user_id": "editor"}
+        })
+    );
+    assert_eq!(workflow["actions"][0]["type"], "webhook");
+    let (status, page) = send(&app, "GET", edit_path, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains(&subject.to_string()));
+
+    let incompatible = [
+        (
+            json!({}),
+            json!([{"type": "add_tags", "tag_ids": [Uuid::new_v4()]}]),
+        ),
+        (
+            json!({"all": [{"tag_id": Uuid::new_v4()}]}),
+            json!([{"type": "webhook", "url": "https://example.com/hook"}]),
+        ),
+    ];
+    for (conditions, actions) in incompatible {
+        let (status, _) = json_request(
+            &app,
+            "POST",
+            "/api/workflows",
+            Some(json!({
+                "name": "Invalid view workflow", "trigger": "saved_view.deleted",
+                "conditions": conditions, "actions": actions,
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
 async fn web_editor_configures_typed_ingestion_outcome_filters() {
     let app = test_app().await;
     let source = Uuid::new_v4();

@@ -13046,6 +13046,9 @@
           "processing": {
             "$ref": "#/components/schemas/WebhookProcessing"
           },
+          "saved_view": {
+            "$ref": "#/components/schemas/WebhookSavedView"
+          },
           "source_event": {
             "oneOf": [
               {
@@ -13117,6 +13120,48 @@
           },
           "stage": {
             "$ref": "#/components/schemas/ProcessingEventStage"
+          }
+        }
+      },
+      "WebhookSavedView": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "saved_view_id",
+          "name",
+          "visibility",
+          "presentation"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/ViewPresentation"
+          },
+          "saved_view_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/ViewVisibility"
           }
         }
       },
@@ -13999,6 +14044,9 @@
           "document_comment.created",
           "document_comment.updated",
           "document_comment.deleted",
+          "saved_view.created",
+          "saved_view.updated",
+          "saved_view.deleted",
           "metadata_field.created",
           "metadata_field.updated",
           "metadata_field.deleted",

@@ -105,6 +105,14 @@ body-free delivery and replay deduplication, and fence dispatch and runs after
 a parent move. The web fixture creates an entry workflow with actor and subject
 filters and reads it back through the API.
 
+For shared saved-view triggers, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflows saved_view_events`
+and `cargo test -p folio-api --test workflows --test openapi`. The SQLite and
+PostgreSQL checks exercise private-to-shared transitions, captured shared data,
+duplicate outbox delivery, and access revoked before a webhook runs. The browser
+cases in `workflow-condition-groups.spec.ts` verify the editor keeps a document
+action visible until the user removes it.
+
 For the shared trigger catalog, `cargo test -p folio-api --test workflows --test vaults --test openapi`
 checks that the web choices match the API, an editor cannot fetch the catalog,
 and the generated schema describes the same choices. The infrastructure

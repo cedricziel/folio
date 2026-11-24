@@ -7,7 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Correspondent, Document, DocumentSource, DocumentType, Id, Tag, VaultId, WorkflowTrigger,
+    Correspondent, Document, DocumentSource, DocumentType, Id, Tag, UserId, VaultId,
+    ViewPresentation, ViewVisibility, WorkflowTrigger,
 };
 
 /// Current payload version
@@ -145,6 +146,20 @@ pub struct WebhookProcessing {
     pub has_text: Option<bool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookSavedView {
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    pub saved_view_id: uuid::Uuid,
+    pub name: String,
+    pub visibility: ViewVisibility,
+    pub presentation: ViewPresentation,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub actor_id: Option<UserId>,
+    pub causation_id: Option<uuid::Uuid>,
+}
+
 /// Body of every webhook delivery
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -167,6 +182,9 @@ pub struct WebhookPayload {
     #[cfg_attr(feature = "openapi", schema(value_type = WebhookProcessing, required = false))]
     pub processing: Option<WebhookProcessing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WebhookSavedView, required = false))]
+    pub saved_view: Option<WebhookSavedView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_event: Option<WorkflowEventIdentity>,
 }
 
@@ -185,6 +203,7 @@ impl WebhookPayload {
             ingest: None,
             metadata: None,
             processing: None,
+            saved_view: None,
             source_event: None,
         }
     }
@@ -204,6 +223,7 @@ impl WebhookPayload {
             ingest: None,
             metadata: None,
             processing: None,
+            saved_view: None,
             source_event,
         }
     }
@@ -223,6 +243,7 @@ impl WebhookPayload {
             ingest: Some(ingest),
             metadata: None,
             processing: None,
+            saved_view: None,
             source_event,
         }
     }
@@ -242,6 +263,27 @@ impl WebhookPayload {
             ingest: None,
             metadata: Some(metadata),
             processing: None,
+            saved_view: None,
+            source_event,
+        }
+    }
+
+    pub fn for_saved_view(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        saved_view: WebhookSavedView,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            event,
+            version: PAYLOAD_VERSION,
+            occurred_at,
+            document: None,
+            entry: None,
+            ingest: None,
+            metadata: None,
+            processing: None,
+            saved_view: Some(saved_view),
             source_event,
         }
     }
@@ -256,6 +298,7 @@ impl WebhookPayload {
             ingest: None,
             metadata: None,
             processing: None,
+            saved_view: None,
             source_event: None,
         }
     }
@@ -264,6 +307,22 @@ impl WebhookPayload {
     pub fn sample(event: WorkflowTrigger, base_url: &str) -> Self {
         if event == WorkflowTrigger::Scheduled {
             return Self::for_clock(Utc::now());
+        }
+        if event.is_saved_view() {
+            return Self::for_saved_view(
+                event,
+                Utc::now(),
+                WebhookSavedView {
+                    vault_id: VaultId(Id::nil()),
+                    saved_view_id: Id::nil(),
+                    name: "Sample shared view".into(),
+                    visibility: ViewVisibility::Shared,
+                    presentation: ViewPresentation::List,
+                    actor_id: None,
+                    causation_id: None,
+                },
+                None,
+            );
         }
         if event.is_custom_metadata() {
             let id = Id::nil();
