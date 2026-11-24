@@ -1,6 +1,9 @@
 use chrono::Utc;
 use folio_core::events::decode_stored_outbox_payload;
-use folio_core::models::{CreateDocument, UserId, VaultId};
+use folio_core::models::{
+    CreateDocument, RunStatus, UserId, VaultId, WorkflowAction, WorkflowInput, WorkflowRun,
+    WorkflowTrigger,
+};
 use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::processing_events::ProcessingReason;
 use folio_core::DomainEventEnvelope;
@@ -663,6 +666,95 @@ async fn nonstage_and_prelease_jobs_still_recover(db: &Database) {
     assert!(f.events().await.is_empty());
 }
 
+async fn expired_workflow_job_settles_run_with_outcome(db: &Database) {
+    let f = Fixture::new(db, 3).await;
+    assert!(f.queue.complete(&f.job).await.unwrap());
+    let workflows = db.repositories().await.workflows;
+    let workflow = workflows
+        .create(
+            f.vault,
+            WorkflowInput {
+                name: "Recover a workflow run".into(),
+                enabled: true,
+                trigger: WorkflowTrigger::DocumentUploaded,
+                cadence: None,
+                conditions: Default::default(),
+                actions: vec![WorkflowAction::Webhook {
+                    url: "https://example.test".into(),
+                    method: Default::default(),
+                    headers: Default::default(),
+                    secret: None,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let mut run = WorkflowRun::new(
+        f.vault,
+        workflow.id,
+        workflow.trigger,
+        Some(f.document),
+        "{}".into(),
+    )
+    .with_definition(&workflow);
+    assert!(workflows.create_run(&run).await.unwrap());
+    let first = f.queue.dequeue().await.unwrap().unwrap();
+    assert!(matches!(first.job_type, JobType::ExecuteWorkflowRun { run_id } if run_id == run.id));
+    let expire = format!(
+        "UPDATE jobs SET lease_expires_at = 0 WHERE id = '{}'",
+        first.id
+    );
+    f.update(format!(
+        "UPDATE jobs SET max_attempts = 2 WHERE id = '{}'",
+        first.id
+    ))
+    .await;
+    f.clear_events().await;
+
+    f.update(expire.clone()).await;
+    assert_eq!(f.queue.reset_stuck().await.unwrap(), 1);
+    assert_eq!(
+        workflows.find_run(run.id).await.unwrap().unwrap().status,
+        RunStatus::Pending
+    );
+    assert!(f.events().await.is_empty());
+    let last = f.queue.dequeue().await.unwrap().unwrap();
+    assert_eq!(last.id, first.id);
+    assert_eq!(last.attempts, 2);
+
+    run.attempts = 1;
+    run.response_status = Some(503);
+    run.last_error = Some("Previous action failed".into());
+    workflows.update_run(&run).await.unwrap();
+    f.update(expire).await;
+    refuse_outbox(db).await;
+    assert_eq!(f.queue.reset_stuck().await.unwrap(), 0);
+    assert_eq!(
+        workflows.find_run(run.id).await.unwrap().unwrap().status,
+        RunStatus::Pending
+    );
+    assert!(f.events().await.is_empty());
+
+    allow_outbox(db).await;
+    assert_eq!(f.queue.reset_stuck().await.unwrap(), 1);
+    assert_eq!(f.queue.reset_stuck().await.unwrap(), 0);
+    assert!(f.queue.dequeue().await.unwrap().is_none());
+    let stored = workflows.find_run(run.id).await.unwrap().unwrap();
+    assert_eq!(stored.status, RunStatus::Failed);
+    assert_eq!(stored.attempts, run.attempts);
+    assert_eq!(stored.response_status, run.response_status);
+    assert_eq!(stored.last_error, run.last_error);
+    assert!(stored.finished_at.is_some());
+    let events = f.events().await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_type(), "workflow_run.failed");
+    assert_eq!(events[0].subject().id, run.id);
+    assert_eq!(
+        events[0].data(),
+        &serde_json::json!({"workflow_id": workflow.id})
+    );
+}
+
 async fn unreadable_payload_is_failed_and_skipped(db: &Database) {
     execute(db, "DELETE FROM jobs;", "DELETE FROM jobs;").await;
     let bad = Uuid::new_v4();
@@ -746,6 +838,7 @@ async fn contract(db: &Database) {
     superseded_stage_is_untouched_by_failure(db).await;
     terminal_stage_is_untouched_by_late_failure(db).await;
     nonstage_and_prelease_jobs_still_recover(db).await;
+    expired_workflow_job_settles_run_with_outcome(db).await;
     unreadable_payload_is_failed_and_skipped(db).await;
     listing_skips_unreadable_rows(db).await;
 }

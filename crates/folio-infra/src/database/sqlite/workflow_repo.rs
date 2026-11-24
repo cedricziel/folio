@@ -582,6 +582,38 @@ fn not_found(id: Id) -> Error {
     }
 }
 
+pub(crate) async fn fail_pending_workflow_run(
+    conn: &mut SqliteConnection,
+    run_id: Id,
+    error: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let updated: Option<(String, String, String)> = sqlx::query_as(
+        "UPDATE workflow_runs SET status = 'failed', last_error = COALESCE(last_error, ?),
+                                  finished_at = ?
+         WHERE id = ? AND status = 'pending'
+         RETURNING workflow_id, payload,
+             (SELECT vault_id FROM workflows WHERE id = workflow_runs.workflow_id)",
+    )
+    .bind(error)
+    .bind(now.to_rfc3339())
+    .bind(run_id.to_string())
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(repo_err)?;
+    if let Some((workflow_id, payload, vault_id)) = updated {
+        let event = crate::database::workflow_lifecycle::workflow_run_outcome(
+            VaultId(parse_id(&vault_id)?),
+            run_id,
+            parse_id(&workflow_id)?,
+            RunStatus::Failed,
+            &payload,
+        )?;
+        super::insert_domain_event_with_origin(conn, &event, EventOrigin::Workflow).await?;
+    }
+    Ok(())
+}
+
 pub(super) async fn publish_cancelled_runs(
     conn: &mut SqliteConnection,
     vault: VaultId,

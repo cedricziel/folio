@@ -591,6 +591,37 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     }
 }
 
+pub(crate) async fn fail_pending_workflow_run(
+    conn: &mut PgConnection,
+    run_id: Id,
+    error: &str,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let updated: Option<(Id, String, Id)> = sqlx::query_as(
+        "UPDATE workflow_runs run SET status = 'failed', last_error = COALESCE(run.last_error, $2),
+                                      finished_at = $3
+         FROM workflows w WHERE run.id = $1 AND run.status = 'pending' AND w.id = run.workflow_id
+         RETURNING run.workflow_id, run.payload::text, w.vault_id",
+    )
+    .bind(run_id)
+    .bind(error)
+    .bind(now)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(repo_err)?;
+    if let Some((workflow_id, payload, vault_id)) = updated {
+        let event = crate::database::workflow_lifecycle::workflow_run_outcome(
+            VaultId(vault_id),
+            run_id,
+            workflow_id,
+            RunStatus::Failed,
+            &payload,
+        )?;
+        super::insert_domain_event_with_origin(conn, &event, EventOrigin::Workflow).await?;
+    }
+    Ok(())
+}
+
 pub(super) async fn publish_cancelled_runs(
     conn: &mut PgConnection,
     vault: VaultId,
