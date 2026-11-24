@@ -9,12 +9,13 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
     public let trigger: String
     public let createdAt: Date
     public let updatedAt: Date
+    public let revision: Int64?
     public let deletedAt: Date?
     public let createdBy: String?
     public let updatedBy: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, enabled, trigger
+        case id, name, enabled, trigger, revision
         case vaultID = "vault_id"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
@@ -26,7 +27,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
     public init(
         id: UUID, vaultID: UUID, name: String, enabled: Bool, trigger: String,
         createdAt: Date, updatedAt: Date, deletedAt: Date? = nil,
-        createdBy: String? = nil, updatedBy: String? = nil
+        createdBy: String? = nil, updatedBy: String? = nil, revision: Int64? = nil
     ) {
         self.id = id
         self.vaultID = vaultID
@@ -35,6 +36,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         self.trigger = trigger
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.revision = revision
         self.deletedAt = deletedAt
         self.createdBy = createdBy
         self.updatedBy = updatedBy

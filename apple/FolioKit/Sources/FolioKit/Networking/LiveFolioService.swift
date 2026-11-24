@@ -47,6 +47,10 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     }
 
     public func scoped(to vaultID: UUID) -> any FolioService {
+        scopedClient(to: vaultID)
+    }
+
+    private func scopedClient(to vaultID: UUID) -> LiveFolioService {
         LiveFolioService(
             baseURL: baseURL, tokenProvider: tokenProvider, session: session, telemetry: telemetry,
             downloadDirectory: downloadDirectory, vaultID: vaultID
@@ -900,6 +904,71 @@ extension LiveFolioService: DeviceRegistrationService {
     }
 }
 
+extension LiveFolioService: WorkflowTriggerEditingService {
+    public func workflowTriggerChoices(vaultID: UUID) async throws -> [WorkflowTriggerChoice] {
+        let scoped = scopedClient(to: vaultID)
+        return try await scoped.call("workflows.list_triggers") {
+            let definitions = try await scoped.client.listWorkflowTriggers().ok.body.json
+            return try definitions.map { definition in
+                guard let target = WorkflowTriggerChoice.Target(rawValue: definition.target.rawValue) else {
+                    throw FolioError.unreadableResponse
+                }
+                return WorkflowTriggerChoice(
+                    id: definition.eventType, title: definition.label, target: target,
+                    conditionFields: definition.conditionFields.map { field in
+                        .init(id: field.key, title: field.label, valueType: field.valueType.rawValue)
+                    }
+                )
+            }
+        }
+    }
+
+    public func workflowConfiguration(vaultID: UUID, workflowID: UUID) async throws
+        -> WorkflowConfigurationSummary
+    {
+        let scoped = scopedClient(to: vaultID)
+        let id = workflowID.uuidString.lowercased()
+        return try await scoped.call("workflows.get") {
+            let workflow = try await Self.workflowSummary(scoped.client.getWorkflow(path: .init(id: id)).ok.body.json)
+            guard workflow.id == workflowID, workflow.vaultID == vaultID, workflow.deletedAt == nil else {
+                throw FolioError.unreadableResponse
+            }
+            return workflow
+        }
+    }
+
+    public func changeWorkflowTrigger(_ workflow: WorkflowConfigurationSummary, to triggerID: String) async throws
+        -> WorkflowConfigurationSummary
+    {
+        guard workflow.deletedAt == nil, let revision = workflow.revision,
+            let trigger = Components.Schemas.WorkflowTrigger(rawValue: triggerID)
+        else { throw FolioError.unreadableResponse }
+        let scoped = scopedClient(to: workflow.vaultID)
+        let id = workflow.id.uuidString.lowercased()
+        return try await scoped.call("workflows.change_trigger") {
+            let updated = try await scoped.client.updateWorkflowTrigger(
+                path: .init(id: id),
+                body: .json(.init(expectedRevision: revision, trigger: trigger))
+            ).ok.body.json
+            let result = try Self.workflowSummary(updated)
+            guard result.vaultID == workflow.vaultID, result.id == workflow.id,
+                result.deletedAt == nil, result.trigger == triggerID
+            else {
+                throw FolioError.unreadableResponse
+            }
+            return result
+        }
+    }
+
+    private static func workflowSummary(_ value: Components.Schemas.Workflow) throws -> WorkflowConfigurationSummary {
+        .init(
+            id: try uuid(value.id), vaultID: try uuid(value.vaultId), name: value.name, enabled: value.enabled,
+            trigger: value.trigger.rawValue, createdAt: value.createdAt, updatedAt: value.updatedAt,
+            deletedAt: value.deletedAt, createdBy: value.createdBy, updatedBy: value.updatedBy, revision: value.revision
+        )
+    }
+}
+
 extension LiveFolioService {
     private var metadataVault: String {
         get throws {
@@ -1156,11 +1225,15 @@ extension LiveFolioService: CustomMetadataWorkflowService {
                 kind: draft.kind.flatMap { Components.Schemas.MetadataKind(rawValue: $0.rawValue) },
                 state: draft.state.flatMap { Components.Schemas.MetadataChangeState(rawValue: $0.rawValue) }
             )
+            let event = Components.Schemas.WorkflowEventConditions(metadata: conditions)
+            let payload = try JSONDecoder().decode(
+                WorkflowConditionsPayload.self, from: JSONEncoder().encode(["event": event])
+            )
             let action = Components.Schemas.WorkflowAction.case1(.init(_type: .webhook, url: draft.webhook))
             _ = try await client.createWorkflow(
                 body: .json(
                     .init(
-                        actions: [action], conditions: .init(event: .init(metadata: conditions)),
+                        actions: [action], conditions: payload,
                         enabled: draft.enabled, name: draft.name, trigger: trigger
                     ))
             ).created.body.json

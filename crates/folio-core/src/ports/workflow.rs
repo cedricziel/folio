@@ -33,7 +33,18 @@ pub trait WorkflowRepository: Send + Sync {
     async fn create(&self, vault: VaultId, input: WorkflowInput) -> Result<Workflow>;
 
     /// Replace all fields of a workflow
-    async fn update(&self, vault: VaultId, id: Id, input: WorkflowInput) -> Result<Workflow>;
+    async fn update(&self, vault: VaultId, id: Id, input: WorkflowInput) -> Result<Workflow> {
+        self.replace(vault, id, input, None).await
+    }
+
+    /// Check the expected revision under the same lock used to replace the definition.
+    async fn replace(
+        &self,
+        vault: VaultId,
+        id: Id,
+        input: WorkflowInput,
+        expected_revision: Option<i64>,
+    ) -> Result<Workflow>;
 
     /// Move to trash, retaining history and terminally stopping pending runs
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()>;

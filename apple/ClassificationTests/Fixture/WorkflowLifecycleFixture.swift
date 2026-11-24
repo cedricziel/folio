@@ -13,11 +13,15 @@ struct WorkflowLifecycleFixture: View {
     }
 }
 
-@MainActor final class WorkflowLifecycleFixtureService: WorkflowLifecycleService {
+@MainActor final class WorkflowLifecycleFixtureService: WorkflowLifecycleService, WorkflowTriggerEditingService {
     static let vaultID = UUID(uuidString: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff")!
     private static let workflowID = UUID(uuidString: "00000000-0000-4000-8000-000000000001")!
     private let date = Date(timeIntervalSince1970: 1_793_620_800)
     private var deleted = false
+    private var triggerID = "document.uploaded"
+    private var revision: Int64 = 1
+    private var enabled = true
+    private var concurrentEdit = ProcessInfo.processInfo.arguments.contains("--concurrent-workflow-edit")
     private var failList = ProcessInfo.processInfo.arguments.contains("--initial-load-error")
     private var failHistory = ProcessInfo.processInfo.arguments.contains("--workflow-history-error")
     private var failDelete = ProcessInfo.processInfo.arguments.contains("--workflow-delete-error")
@@ -58,11 +62,43 @@ struct WorkflowLifecycleFixture: View {
         return configuration
     }
 
+    func workflowTriggerChoices(vaultID _: UUID) async throws -> [WorkflowTriggerChoice] {
+        [
+            .init(id: "document.uploaded", title: "When a document is added", target: .document, conditionFields: []),
+            .init(id: "document_note.created", title: "When a note is created", target: .document, conditionFields: []),
+            .init(id: "source.failed", title: "When a source becomes unavailable", target: .event, conditionFields: []),
+        ]
+    }
+
+    func workflowConfiguration(vaultID: UUID, workflowID: UUID) async throws -> WorkflowConfigurationSummary {
+        guard vaultID == Self.vaultID, workflowID == Self.workflowID, !deleted else {
+            throw FolioError.unreadableResponse
+        }
+        return configuration
+    }
+
+    func changeWorkflowTrigger(_ workflow: WorkflowConfigurationSummary, to triggerID: String) async throws
+        -> WorkflowConfigurationSummary
+    {
+        guard workflow.vaultID == Self.vaultID, workflow.id == Self.workflowID, !deleted else {
+            throw FolioError.unreadableResponse
+        }
+        if concurrentEdit {
+            concurrentEdit = false
+            enabled = false
+            revision += 1
+        }
+        guard workflow.revision == revision else { throw FolioError.server(status: 409, message: nil) }
+        self.triggerID = triggerID
+        revision += 1
+        return configuration
+    }
+
     private var configuration: WorkflowConfigurationSummary {
         WorkflowConfigurationSummary(
-            id: Self.workflowID, vaultID: Self.vaultID, name: "Invoice notifications", enabled: true,
-            trigger: "document.uploaded", createdAt: date, updatedAt: date, deletedAt: deleted ? date : nil,
-            createdBy: "Taylor", updatedBy: "Morgan"
+            id: Self.workflowID, vaultID: Self.vaultID, name: "Invoice notifications", enabled: enabled,
+            trigger: triggerID, createdAt: date, updatedAt: date, deletedAt: deleted ? date : nil,
+            createdBy: "Taylor", updatedBy: "Morgan", revision: revision
         )
     }
 }

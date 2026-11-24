@@ -798,8 +798,9 @@ pub struct Workflow {
     pub actions: Vec<WorkflowAction>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    #[serde(skip)]
-    #[cfg_attr(feature = "openapi", schema(ignore))]
+    /// Revision to send when changing the trigger.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(required = false))]
     pub revision: i64,
     #[serde(default)]
     pub deleted_at: Option<DateTime<Utc>>,
@@ -809,6 +810,17 @@ pub struct Workflow {
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub updated_by: Option<UserId>,
+}
+
+impl Workflow {
+    pub fn check_revision(&self, expected: Option<i64>) -> Result<()> {
+        if expected.is_some_and(|revision| revision != self.revision) {
+            return Err(Error::Conflict(
+                "Workflow changed. Reload it before editing.".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Fields for creating or replacing a workflow
