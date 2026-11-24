@@ -115,12 +115,10 @@ public final class DocumentActivityTracker {
         activity.targetContentIdentifier = current?.documentID.uuidString.lowercased()
         activity.requiredUserInfoKeys = current == nil ? [] : DocumentActivityPayload.requiredKeys
         activity.userInfo = current?.userInfo ?? [:]
-        if #available(iOS 26, macOS 26, *) {
-            activity.appEntityIdentifier = current.map {
-                EntityIdentifier(
-                    for: DocumentEntity.self,
-                    identifier: DocumentEntityID(documentID: $0.documentID, vaultID: $0.vaultID))
-            }
+        activity.appEntityIdentifier = current.map {
+            EntityIdentifier(
+                for: DocumentEntity.self,
+                identifier: DocumentEntityID(documentID: $0.documentID, vaultID: $0.vaultID))
         }
         activity.needsSave = true
     }

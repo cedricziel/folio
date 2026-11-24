@@ -29,10 +29,10 @@ permissions:
   contents: read
 
 env:
-  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+  DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
 
 jobs:
-  # The UI lanes compete for the few macos-26 runners, so a PR runs each only when it touches what
+  # The UI lanes compete for Apple runners, so a PR runs each only when it touches what
   # that lane builds: its fixture project, the app view it compiles, or FolioKit.
   changes:
     name: Changed Apple areas
@@ -69,25 +69,13 @@ jobs:
           printf 'classifications=%s\nthumbnails=%s\n' "$classifications" "$thumbnails" | tee -a "$GITHUB_OUTPUT"
 
   test:
-    name: ${{ matrix.toolchain.xcode == '26.6' && 'test' || 'test (Xcode 27.1)' }}
     if: github.event_name == 'pull_request'
     concurrency:
-      group: apple-test-${{ github.ref }}-${{ matrix.toolchain.xcode }}
+      group: apple-test-${{ github.ref }}
       cancel-in-progress: true
-    strategy:
-      fail-fast: false
-      matrix:
-        # Releases stay on 26.6 until #198. The Xcode 27 leg runs the build, FolioKit tests and
-        # navigation on iPhone and iPhone Duo; the other UI lanes stay on 26.6 to save runner time.
-        toolchain:
-          - { runner: macos-26, xcode: "26.6" }
-          - { runner: xcode-27, xcode: "27.1" }
-    runs-on: ${{ matrix.toolchain.runner }}
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.toolchain.xcode }}.app/Contents/Developer
-    # The Xcode 27 leg builds the app and runs two full device suites. FolioKit
-    # and each navigation test still have their own watchdogs.
-    timeout-minutes: ${{ matrix.toolchain.xcode == '27.1' && 110 || 90 }}
+    runs-on: xcode-27
+    # Build the app and run iPhone, iPad and Duo navigation; individual tests keep their watchdogs.
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: apple
@@ -125,7 +113,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: test-hang-${{ matrix.toolchain.xcode }}
+          name: test-hang-27.2
           path: apple/build/test-hang
           if-no-files-found: ignore
       - name: Check the official build's identifiers
@@ -140,7 +128,7 @@ jobs:
           test "$(grep -c 'applinks:' "$RUNNER_TEMP/domains.txt")" = 1
           grep -q 'applinks:folio.example.com' "$RUNNER_TEMP/domains.txt"
           rm "$local_entitlements"
-          FOLIO_ASSOCIATED_DOMAINS= scripts/associated-domains.sh
+          FOLIO_ASSOCIATED_DOMAINS='' scripts/associated-domains.sh
           test ! -e "$local_entitlements"
       - name: Follow the self-build checklist with the example configuration
         run: |
@@ -171,9 +159,9 @@ jobs:
             xcrun xcodebuild build -project Folio.xcodeproj -scheme Folio -destination "$destination" \
               -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO
           done
-      - name: Test navigation on iPhone and iPad (26.6) or iPhone Duo (27.1)
+      - name: Test navigation on iPhone, iPad and iPhone Duo (27.2)
         # Allow for a cold Duo runtime and one fresh simulator after a recognized launch failure.
-        timeout-minutes: ${{ matrix.toolchain.xcode == '27.1' && 65 || 40 }}
+        timeout-minutes: 75
         run: |
           verify_dir=$(mktemp -d)
           verify_device=""
@@ -185,9 +173,9 @@ jobs:
             rm -rf "$verify_dir"
           }
           trap cleanup EXIT
-          # The Xcode 27 image also carries a Duo-only iOS 27.1 runtime, so pick one that runs the device.
-          phone=com.apple.CoreSimulator.SimDeviceType.iPhone-16
-          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"] and any(d["identifier"] == sys.argv[1] for d in r.get("supportedDeviceTypes", []))))' "$phone")
+          # The Xcode 27 image also carries a Duo-only iOS 27.2 runtime, so pick one that runs the device.
+          phone=com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro
+          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"] and r["version"] == "27.2" and any(d["identifier"] == sys.argv[1] for d in r.get("supportedDeviceTypes", []))))' "$phone")
           verify_device=$(xcrun simctl create Folio-Navigation-CI "$phone" "$runtime")
           # A cold simulator can miss the UI-test runner's accessibility handshake; boot it fully first.
           xcrun simctl bootstatus "$verify_device" -b
@@ -208,40 +196,40 @@ jobs:
             -parallel-testing-enabled NO -test-timeouts-enabled YES
             -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180
             CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES)
-          if [ "${{ matrix.toolchain.xcode }}" = "26.6" ]; then
-            tablet=$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; print(next(d["identifier"] for d in json.load(sys.stdin)["devicetypes"] if "iPad Pro" in d["name"] and "13-inch" in d["name"]))')
-            verify_device=$(xcrun simctl create Folio-iPad-Navigation-CI "$tablet" "$runtime")
+          tablet=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(d["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["identifier"] == sys.argv[1] for d in r["supportedDeviceTypes"] if "iPad Pro" in d["name"] and "13-inch" in d["name"]))' "$runtime")
+          verify_device=$(xcrun simctl create Folio-iPad-Navigation-CI "$tablet" "$runtime")
+          xcrun simctl bootstatus "$verify_device" -b
+          xcrun xcodebuild test-without-building "${common[@]}" \
+            -destination "platform=iOS Simulator,id=$verify_device" \
+            -only-testing:NavigationTests/NavigationTests/testWideWindowKeepsDocumentListBesidePreview \
+            -only-testing:NavigationTests/NavigationTests/testRefreshingTheListUpdatesTheSelectedDocumentDetails \
+            -only-testing:NavigationTests/NavigationTests/testFilingBesideTheListKeepsTheDocumentOpen
+          xcrun simctl shutdown "$verify_device" || true
+          xcrun simctl delete "$verify_device"
+          verify_device=""
+          # iPhone Duo ships as its own iOS 27.2 runtime; width-dependent tests skip themselves.
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_duo_navigation_retry.py
+          duo=$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; print(next(d["identifier"] for d in json.load(sys.stdin)["devicetypes"] if d["name"] == "iPhone Duo"))')
+          duo_runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and r["version"] == "27.2" and any(d["identifier"] == sys.argv[1] for d in r.get("supportedDeviceTypes", []))))' "$duo")
+          for duo_attempt in 1 2; do
+            verify_device=$(xcrun simctl create Folio-Duo-Navigation-CI "$duo" "$duo_runtime")
             xcrun simctl bootstatus "$verify_device" -b
-            xcrun xcodebuild test-without-building "${common[@]}" \
-              -destination "platform=iOS Simulator,id=$verify_device" \
-              -only-testing:NavigationTests/NavigationTests/testWideWindowKeepsDocumentListBesidePreview \
-              -only-testing:NavigationTests/NavigationTests/testRefreshingTheListUpdatesTheSelectedDocumentDetails \
-              -only-testing:NavigationTests/NavigationTests/testFilingBesideTheListKeepsTheDocumentOpen
-          else
-            # iPhone Duo ships as its own iOS 27.1 runtime; width-dependent tests skip themselves.
-            PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_duo_navigation_retry.py
-            duo=$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; print(next(d["identifier"] for d in json.load(sys.stdin)["devicetypes"] if d["name"] == "iPhone Duo"))')
-            duo_runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and any(d["identifier"] == sys.argv[1] for d in r.get("supportedDeviceTypes", []))))' "$duo")
-            for duo_attempt in 1 2; do
-              verify_device=$(xcrun simctl create Folio-Duo-Navigation-CI "$duo" "$duo_runtime")
-              xcrun simctl bootstatus "$verify_device" -b
-              duo_log="$verify_dir/duo-$duo_attempt.log"
-              if (set -o pipefail; xcrun xcodebuild test-without-building "${common[@]}" \
-                  -destination "platform=iOS Simulator,id=$verify_device" 2>&1 | tee "$duo_log"); then
-                break
-              else
-                duo_exit=$?
-              fi
-              if [ "$duo_attempt" -ne 1 ] || [ "$duo_exit" -ne 65 ] || \
-                  ! python3 scripts/duo_navigation_retry.py "$duo_log"; then
-                exit "$duo_exit"
-              fi
-              echo '::warning::Duo simulator failed to launch the navigation fixture. Retrying the full suite on a fresh simulator.'
-              xcrun simctl shutdown "$verify_device" || true
-              xcrun simctl delete "$verify_device"
-              verify_device=""
-            done
-          fi
+            duo_log="$verify_dir/duo-$duo_attempt.log"
+            if (set -o pipefail; xcrun xcodebuild test-without-building "${common[@]}" \
+                -destination "platform=iOS Simulator,id=$verify_device" 2>&1 | tee "$duo_log"); then
+              break
+            else
+              duo_exit=$?
+            fi
+            if [ "$duo_attempt" -ne 1 ] || [ "$duo_exit" -ne 65 ] || \
+                ! python3 scripts/duo_navigation_retry.py "$duo_log"; then
+              exit "$duo_exit"
+            fi
+            echo '::warning::Duo simulator failed to launch the navigation fixture. Retrying the full suite on a fresh simulator.'
+            xcrun simctl shutdown "$verify_device" || true
+            xcrun simctl delete "$verify_device"
+            verify_device=""
+          done
 
   thumbnails:
     name: Thumbnail UI
@@ -250,7 +238,7 @@ jobs:
     concurrency:
       group: apple-thumbnails-${{ github.ref }}
       cancel-in-progress: true
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -267,8 +255,8 @@ jobs:
             rm -rf "$verify_dir"
           }
           trap cleanup EXIT
-          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"]))')
-          verify_device=$(xcrun simctl create Folio-Thumbnails-CI com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$runtime")
+          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and r["version"] == "27.2" and any(d["identifier"] == "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro" for d in r.get("supportedDeviceTypes", []))))')
+          verify_device=$(xcrun simctl create Folio-Thumbnails-CI com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro "$runtime")
           xcrun simctl bootstatus "$verify_device" -b
           xcodegen generate --spec apple/ThumbnailTests/project.yml --project "$verify_dir"
           xcrun xcodebuild test -project "$verify_dir/ThumbnailPreview.xcodeproj" -scheme Fixture \
@@ -293,7 +281,7 @@ jobs:
     concurrency:
       group: apple-classifications-${{ github.ref }}
       cancel-in-progress: true
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -310,8 +298,8 @@ jobs:
             rm -rf "$verify_dir"
           }
           trap cleanup EXIT
-          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"]))')
-          verify_device=$(xcrun simctl create Folio-Classifications-CI com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$runtime")
+          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and r["version"] == "27.2" and any(d["identifier"] == "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro" for d in r.get("supportedDeviceTypes", []))))')
+          verify_device=$(xcrun simctl create Folio-Classifications-CI com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro "$runtime")
           xcrun simctl bootstatus "$verify_device" -b
           xcodegen generate --spec apple/ClassificationTests/project.yml --project "$verify_dir"
           xcrun xcodebuild test -project "$verify_dir/ClassificationPreview.xcodeproj" -scheme Fixture \
@@ -332,7 +320,7 @@ jobs:
   beta:
     name: TestFlight (iOS)
     if: github.event_name != 'pull_request'
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 60
     # One TestFlight upload at a time; a queued run waits instead of cancelling a running upload.
     concurrency:
@@ -383,7 +371,7 @@ jobs:
   beta-mac:
     name: TestFlight (macOS)
     if: github.event_name != 'pull_request'
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 60
     # Stays non-blocking until the Mac installer certificate exists in the match repo.
     continue-on-error: true

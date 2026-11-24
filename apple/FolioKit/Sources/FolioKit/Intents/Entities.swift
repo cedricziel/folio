@@ -313,29 +313,24 @@ public struct VaultEntityQuery: EntityStringQuery {
     }
 }
 
-#if compiler(>=6.4)
-    @available(iOS 27, macOS 27, *)
-    extension EntityOwnership {
-        init(_ sharing: VaultSharing) {
-            switch sharing {
-            case .personal: self = []
-            case .shared: self = .shared
-            case .unknown: self = .unknown
-            }
+extension EntityOwnership {
+    init(_ sharing: VaultSharing) {
+        switch sharing {
+        case .personal: self = []
+        case .shared: self = .shared
+        case .unknown: self = .unknown
         }
     }
+}
 
-    @available(iOS 27, macOS 27, *)
-    extension DocumentEntity: OwnershipProvidingEntity {
-        public var ownership: EntityOwnership {
-            EntityOwnership(sharing)
-        }
+extension DocumentEntity: OwnershipProvidingEntity {
+    public var ownership: EntityOwnership {
+        EntityOwnership(sharing)
     }
+}
 
-    @available(iOS 27, macOS 27, *)
-    extension VaultEntity: OwnershipProvidingEntity {
-        public var ownership: EntityOwnership {
-            EntityOwnership(sharing)
-        }
+extension VaultEntity: OwnershipProvidingEntity {
+    public var ownership: EntityOwnership {
+        EntityOwnership(sharing)
     }
-#endif
+}
