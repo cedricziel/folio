@@ -2,31 +2,36 @@ import AppKit
 import FileProvider
 import FolioKit
 import XCTest
+import os
 
 private let thumbnailVault = UUID(uuidString: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")!
 private let thumbnailDocument = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
 
 private struct ThumbnailToken: BearerTokenProvider {
-    func token() async throws -> String? { "thumbnail-test-token" }
+    func token() async throws -> String? {
+        "thumbnail-test-token"
+    }
 }
 
 private final class ThumbnailProtocol: URLProtocol {
-    static let lock = NSLock()
-    static var handlers: [String: (ThumbnailProtocol) -> Void] = [:]
-    static var stopped: [String: () -> Void] = [:]
+    static let handlers = OSAllocatedUnfairLock<[String: @Sendable (ThumbnailProtocol) -> Void]>(initialState: [:])
+    static let stopped = OSAllocatedUnfairLock<[String: @Sendable () -> Void]>(initialState: [:])
 
-    override class func canInit(with _: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override class func canInit(with _: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
     override func stopLoading() {
-        Self.lock.lock()
-        let stopped = Self.stopped.removeValue(forKey: request.url!.host!)
-        Self.lock.unlock()
+        let stopped = Self.stopped.withLock { [host = request.url!.host!] in $0.removeValue(forKey: host) }
         stopped?()
     }
+
     override func startLoading() {
-        Self.lock.lock()
-        let handler = Self.handlers[request.url!.host!]
-        Self.lock.unlock()
+        let handler = Self.handlers.withLock { [host = request.url!.host!] in $0[host] }
         handler?(self)
     }
 
@@ -54,36 +59,34 @@ final class ThumbnailTests: XCTestCase {
         provider = FolioFileProvider(
             domain: NSFileProviderDomain(identifier: .init("thumbnail-test"), displayName: "Test"),
             service: LiveFolioService(
-                baseURL: URL(string: "https://\(host!)/")!, tokenProvider: ThumbnailToken(), session: session)
+                baseURL: URL(string: "https://\(host!)/")!, tokenProvider: ThumbnailToken(), session: session
+            )
         )
     }
 
     override func tearDown() {
         session.invalidateAndCancel()
-        ThumbnailProtocol.lock.lock()
-        ThumbnailProtocol.handlers.removeValue(forKey: host)
-        ThumbnailProtocol.stopped.removeValue(forKey: host)
-        ThumbnailProtocol.lock.unlock()
+        ThumbnailProtocol.handlers.withLock { [host = host!] in _ = $0.removeValue(forKey: host) }
+        ThumbnailProtocol.stopped.withLock { [host = host!] in _ = $0.removeValue(forKey: host) }
     }
 
-    private func handle(_ body: @escaping (ThumbnailProtocol) -> Void) {
-        ThumbnailProtocol.lock.lock()
-        ThumbnailProtocol.handlers[host] = body
-        ThumbnailProtocol.lock.unlock()
+    private func handle(_ body: @escaping @Sendable (ThumbnailProtocol) -> Void) {
+        ThumbnailProtocol.handlers.withLock { [host = host!] in $0[host] = body }
     }
 
     private func identifier(_ id: UUID = thumbnailDocument) -> NSFileProviderItemIdentifier {
         FolioItemID.document(id, in: .scoped(thumbnailVault, .all)).providerIdentifier
     }
 
-    func testBatchReturnsScopedThumbnailMissingFolderAndFailureIndependently() async {
-        let bitmap = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1, bitsPerSample: 8,
-            samplesPerPixel: 3, hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB,
-            bytesPerRow: 3, bitsPerPixel: 24
-        )!
+    func testBatchReturnsScopedThumbnailMissingFolderAndFailureIndependently() async throws {
+        let bitmap = try XCTUnwrap(
+            NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: 1, pixelsHigh: 1, bitsPerSample: 8,
+                samplesPerPixel: 3, hasAlpha: false, isPlanar: false, colorSpaceName: .deviceRGB,
+                bytesPerRow: 3, bitsPerPixel: 24
+            ))
         bitmap.setColor(.white, atX: 0, y: 0)
-        let jpeg = bitmap.representation(using: .jpeg, properties: [:])!
+        let jpeg = try XCTUnwrap(bitmap.representation(using: .jpeg, properties: [:]))
         let missingID = UUID()
         let missing = identifier(missingID)
         let denied = identifier(UUID())
@@ -91,7 +94,8 @@ final class ThumbnailTests: XCTestCase {
         let success = identifier()
         handle { transfer in
             XCTAssertEqual(
-                transfer.request.value(forHTTPHeaderField: "X-Folio-Vault"), thumbnailVault.uuidString.lowercased())
+                transfer.request.value(forHTTPHeaderField: "X-Folio-Vault"), thumbnailVault.uuidString.lowercased()
+            )
             XCTAssertEqual(transfer.request.value(forHTTPHeaderField: "Authorization"), "Bearer thumbnail-test-token")
             if transfer.request.url!.path.contains(thumbnailDocument.uuidString.lowercased()) {
                 transfer.respond(200, data: jpeg)
@@ -102,11 +106,11 @@ final class ThumbnailTests: XCTestCase {
             }
         }
         let completed = expectation(description: "Batch completed")
-        var received: [NSFileProviderItemIdentifier] = []
+        let received = OSAllocatedUnfairLock<[NSFileProviderItemIdentifier]>(initialState: [])
         let progress = provider.fetchThumbnails(
             for: [success, missing, folder, denied], requestedSize: CGSize(width: 128, height: 128)
-        ) { item, data, error in
-            received.append(item)
+        ) { @Sendable item, data, error in
+            received.withLock { $0.append(item) }
             if item == success {
                 XCTAssertEqual(data, jpeg)
                 XCTAssertNil(error)
@@ -117,9 +121,9 @@ final class ThumbnailTests: XCTestCase {
                 XCTAssertNil(data)
                 XCTAssertNil(error)
             }
-        } completionHandler: { error in
+        } completionHandler: { @Sendable error in
             XCTAssertNil(error)
-            XCTAssertEqual(received, [success, missing, folder, denied])
+            XCTAssertEqual(received.withLock { $0 }, [success, missing, folder, denied])
             completed.fulfill()
         }
         await fulfillment(of: [completed], timeout: 5)
@@ -173,9 +177,7 @@ final class ThumbnailTests: XCTestCase {
     func testCancellationCompletesOnceWithoutWaitingForTheServer() async {
         let started = expectation(description: "Request started")
         let stopped = expectation(description: "Network transfer cancelled")
-        ThumbnailProtocol.lock.lock()
-        ThumbnailProtocol.stopped[host] = { stopped.fulfill() }
-        ThumbnailProtocol.lock.unlock()
+        ThumbnailProtocol.stopped.withLock { [host = host!] in $0[host] = { stopped.fulfill() } }
         handle { _ in started.fulfill() }
         let completed = expectation(description: "Cancellation completed")
         completed.assertForOverFulfill = true

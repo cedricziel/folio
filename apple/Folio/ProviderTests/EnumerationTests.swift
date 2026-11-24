@@ -1,33 +1,66 @@
 import FileProvider
 import FolioKit
 import XCTest
+import os
 
 private final class ChangeObserver: NSObject, NSFileProviderChangeObserver {
-    var updated: [NSFileProviderItem] = []
-    var deleted: [NSFileProviderItemIdentifier] = []
-    var error: Error?
-    var anchor: NSFileProviderSyncAnchor?
+    struct UpdatedItem {
+        let itemIdentifier: NSFileProviderItemIdentifier
+        let filename: String
+        let capabilities: NSFileProviderItemCapabilities?
+        let metadataVersion: Data?
+    }
+
+    private struct State {
+        var updated: [UpdatedItem] = []
+        var deleted: [NSFileProviderItemIdentifier] = []
+        var error: Error?
+        var anchor: NSFileProviderSyncAnchor?
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
     let finished: XCTestExpectation
+    var updated: [UpdatedItem] {
+        state.withLock { $0.updated }
+    }
+
+    var deleted: [NSFileProviderItemIdentifier] {
+        state.withLock { $0.deleted }
+    }
+
+    var error: Error? {
+        state.withLock { $0.error }
+    }
+
+    var anchor: NSFileProviderSyncAnchor? {
+        state.withLock { $0.anchor }
+    }
 
     init(_ finished: XCTestExpectation) {
         self.finished = finished
     }
 
     func didUpdate(_ updatedItems: [NSFileProviderItem]) {
-        updated += updatedItems
+        let items = updatedItems.map { item in
+            UpdatedItem(
+                itemIdentifier: item.itemIdentifier, filename: item.filename, capabilities: item.capabilities,
+                metadataVersion: item.itemVersion?.metadataVersion
+            )
+        }
+        state.withLock { $0.updated += items }
     }
 
     func didDeleteItems(withIdentifiers identifiers: [NSFileProviderItemIdentifier]) {
-        deleted += identifiers
+        state.withLock { $0.deleted += identifiers }
     }
 
     func finishEnumeratingChanges(upTo anchor: NSFileProviderSyncAnchor, moreComing _: Bool) {
-        self.anchor = anchor
+        state.withLock { $0.anchor = anchor }
         finished.fulfill()
     }
 
     func finishEnumeratingWithError(_ error: Error) {
-        self.error = error
+        state.withLock { $0.error = error }
         finished.fulfill()
     }
 }
@@ -145,7 +178,8 @@ final class EnumerationTests: XCTestCase {
         let service = MockFolioService(documents: [document])
         let enumerator = FolioEnumerator(
             catalog: FolioCatalog(service: service), container: .scoped(MockFolioService.defaultVault.id, .all),
-            directory: directory)
+            directory: directory
+        )
         let anchor = try await anchor(for: enumerator)
         try await service.deleteDocument(id: document.id)
         let observer = await changes(enumerator, from: anchor)
@@ -153,7 +187,8 @@ final class EnumerationTests: XCTestCase {
         XCTAssertNil(observer.error)
         XCTAssertEqual(
             observer.deleted,
-            [FolioItemID.document(document.id, in: .scoped(MockFolioService.defaultVault.id, .all)).providerIdentifier])
+            [FolioItemID.document(document.id, in: .scoped(MockFolioService.defaultVault.id, .all)).providerIdentifier]
+        )
     }
 
     func testWorkingSetReportsEveryDeletedAliasAfterRestart() async throws {
@@ -190,15 +225,15 @@ final class EnumerationTests: XCTestCase {
         let catalog = FolioCatalog(service: service)
         let original = try await catalog.children(of: .scoped(MockFolioService.defaultVault.id, .tags))[0]
         let enumerator = FolioEnumerator(
-            catalog: catalog, container: .scoped(MockFolioService.defaultVault.id, .tags), directory: directory)
+            catalog: catalog, container: .scoped(MockFolioService.defaultVault.id, .tags), directory: directory
+        )
         let anchor = try await anchor(for: enumerator)
         await service.setTags([Tag(id: tag.id, name: "After")])
         let observer = await changes(enumerator, from: anchor)
 
         XCTAssertNil(observer.error)
         XCTAssertEqual(observer.updated.map(\.filename), ["After"])
-        XCTAssertNotEqual(
-            observer.updated.first?.itemVersion, FolioProviderItem(original, local: LocalItemMetadata()).itemVersion)
+        XCTAssertNotEqual(observer.updated.first?.metadataVersion, FolioSyncState.metadataVersion(original))
         XCTAssertNotEqual(observer.anchor, anchor)
         XCTAssertTrue(observer.deleted.isEmpty)
     }
@@ -219,7 +254,8 @@ final class EnumerationTests: XCTestCase {
             [
                 FolioItemID.document(document.id, in: .scoped(MockFolioService.defaultVault.id, .inbox))
                     .providerIdentifier
-            ])
+            ]
+        )
         XCTAssertEqual(
             observer.updated.map(\.itemIdentifier),
             [
@@ -256,17 +292,20 @@ final class EnumerationTests: XCTestCase {
         let service = MockFolioService(documents: [document])
         let state = FolioSyncState(
             catalog: FolioCatalog(service: service), container: .scoped(MockFolioService.defaultVault.id, .all),
-            directory: directory)
+            directory: directory
+        )
         let before = try await state.initialSnapshot()
         try await service.deleteDocument(id: document.id)
         let enumeration = try await state.initialSnapshot()
         XCTAssertEqual(enumeration.anchor, before.anchor)
         XCTAssertEqual(
-            enumeration.nodes.map(\.id), [.document(document.id, in: .scoped(MockFolioService.defaultVault.id, .all))])
+            enumeration.nodes.map(\.id), [.document(document.id, in: .scoped(MockFolioService.defaultVault.id, .all))]
+        )
         let (_, _, deleted) = try await state.changes(from: before.anchor)
         XCTAssertEqual(
             deleted,
-            [FolioItemID.document(document.id, in: .scoped(MockFolioService.defaultVault.id, .all)).providerIdentifier])
+            [FolioItemID.document(document.id, in: .scoped(MockFolioService.defaultVault.id, .all)).providerIdentifier]
+        )
     }
 
     func testFailedInitialCaptureKeepsTheNewerChangesSnapshot() async throws {

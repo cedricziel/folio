@@ -123,7 +123,6 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: 'YES'
-        SWIFT_VERSION: '5.0'
   FolioShare:
     type: app-extension
     supportedDestinations:
@@ -223,7 +222,6 @@ targets:
         ENABLE_APP_SANDBOX: 'YES'
         ENABLE_OUTGOING_NETWORK_CONNECTIONS: 'YES'
         ENABLE_USER_SELECTED_FILES: readonly
-        SWIFT_VERSION: '5.0'
       configs:
         Release:
           CODE_SIGN_STYLE: $(FOLIO_RELEASE_SIGN_STYLE)
