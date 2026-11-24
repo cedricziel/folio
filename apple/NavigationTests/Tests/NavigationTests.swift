@@ -105,6 +105,8 @@ import XCTest
     func testCompactSidebarOpensASavedViewAfterReturning() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
+        let savedViewID = UUID()
+        app.launchEnvironment["FOLIO_FIXTURE_SAVED_VIEW_ID"] = savedViewID.uuidString
         app.launchArguments = ["--saved-views"]
         app.launch()
         try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
@@ -117,14 +119,17 @@ import XCTest
         name.typeText("Saved fixture")
         app.buttons["Save"].tap()
         XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
-        for destination in ["Inbox", "Saved fixture", "All documents", "Saved fixture", "Saved fixture"] {
+        let inbox = ("workspace-destination-inbox", "Inbox")
+        let all = ("workspace-destination-all", "All documents")
+        let saved = ("workspace-saved-view-\(savedViewID)", "Saved fixture")
+        for (identifier, title) in [inbox, saved, all, saved, saved] {
             returnToSidebar(in: app)
-            let row = app.buttons[destination].firstMatch
-            XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+            let row = app.buttons[identifier]
+            XCTAssertTrue(row.waitForExistence(timeout: 5), "The sidebar must show \(title).")
             row.tap()
             XCTAssertTrue(
-                app.navigationBars[destination].waitForExistence(timeout: 5),
-                "Tapping \(destination) in the sidebar must open it.\n\(app.debugDescription)"
+                app.navigationBars[title].waitForExistence(timeout: 5),
+                "Tapping \(title) in the sidebar must open it."
             )
         }
     }

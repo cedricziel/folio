@@ -52,7 +52,9 @@ extension FixtureApp {
     private static func makeService(arguments: [String]) -> MockFolioService {
         guard arguments.contains("--classification") else {
             return MockFolioService(
-                documents: documents, loseFirstEntryResponse: arguments.contains("--discussion-save-failure"))
+                documents: documents, loseFirstEntryResponse: arguments.contains("--discussion-save-failure"),
+                nextSavedViewID: ProcessInfo.processInfo.environment["FOLIO_FIXTURE_SAVED_VIEW_ID"]
+                    .flatMap(UUID.init(uuidString:)))
         }
         let correspondent = Correspondent(name: "City utilities")
         let type = DocumentType(name: "Invoice")
