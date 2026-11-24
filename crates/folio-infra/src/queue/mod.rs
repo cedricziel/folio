@@ -37,7 +37,7 @@ use folio_core::events::EventOrigin;
 use folio_core::models::VaultId;
 use folio_core::ports::{ProcessingQueue, ProcessingStatus};
 
-const REVISION_DISPATCH_ENABLED: bool = false;
+pub const REVISION_DISPATCH_ENABLED: bool = false;
 
 /// Job status
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

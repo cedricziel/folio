@@ -882,6 +882,83 @@ Stimulus.register(
   },
 );
 
+Stimulus.register("revision-publication", class extends Controller {
+  static targets = ["status"];
+
+  fileChanged(event) {
+    delete event.currentTarget.form.dataset.publicationKey;
+    this.statusTarget.textContent = "";
+  }
+
+  newKey() {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
+  }
+
+  async refreshConflict() {
+    const message = "The file changed while you were editing. Review the current revision before trying again.";
+    this.statusTarget.textContent = message;
+    try {
+      const frame = this.element.closest("turbo-frame");
+      const latest = new URL(frame.src, window.location.href);
+      latest.searchParams.delete("before");
+      const response = await fetch(latest, { headers: { "Turbo-Frame": frame.id } });
+      if (!response.ok) throw new Error("Could not load file history");
+      const page = new DOMParser().parseFromString(await response.text(), "text/html");
+      const replacement = page.getElementById(frame.id)?.firstElementChild;
+      const status = replacement?.querySelector("[data-revision-publication-target='status']");
+      if (!status) throw new Error("File history response is incomplete");
+      status.textContent = message;
+      this.element.replaceWith(replacement);
+      status.scrollIntoView({ block: "center" });
+    } catch {
+      this.statusTarget.textContent = "The file changed while you were editing. Reload to see the latest file.";
+      this.statusTarget.scrollIntoView({ block: "center" });
+    }
+  }
+
+  async submit(event) {
+    event.preventDefault();
+    if (this.publishing) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const headers = { "Idempotency-Key": form.dataset.publicationKey ??= this.newKey() };
+    const controls = this.element.querySelectorAll('button[type="submit"], input[type="file"]');
+    let conflicted = false;
+    this.publishing = true;
+    for (const control of controls) control.disabled = true;
+    this.statusTarget.textContent = "Publishing the file…";
+    try {
+      let body = data;
+      if (form.hasAttribute("data-restore")) {
+        headers["Content-Type"] = "application/json";
+        body = JSON.stringify({ expected_current_revision_id: data.get("expected_current_revision_id") });
+      }
+      const response = await fetch(form.action, { method: "POST", headers, body });
+      if (response.status === 200 || response.status === 201) {
+        window.location.reload();
+        return;
+      }
+      if (response.status === 409) {
+        conflicted = true;
+        await this.refreshConflict();
+        return;
+      }
+      this.statusTarget.textContent = "Couldn’t publish the file. Try again.";
+      this.statusTarget.scrollIntoView({ block: "nearest" });
+    } catch (error) {
+      this.statusTarget.textContent = "Couldn’t publish the file. Try again.";
+      this.statusTarget.scrollIntoView({ block: "nearest" });
+    } finally {
+      this.publishing = false;
+      if (!conflicted) for (const control of controls) control.disabled = false;
+    }
+  }
+});
+
 // Password Toggle Controller
 Stimulus.register(
   "password-toggle",
@@ -930,6 +1007,11 @@ Stimulus.register(
       "metadataValues",
       "metadataHint",
       "metadataCurrency",
+      "dateFilter",
+      "reviewFilter",
+      "unreviewFilter",
+      "revisionFilter",
+      "revisionSourceFilter",
     ];
 
     connect() {
@@ -1025,6 +1107,18 @@ Stimulus.register(
         value !== "document.metadata.changed" && !value.startsWith("metadata_field.") && !value.startsWith("metadata_option."));
       const configured = (section) => [...section.querySelectorAll("input, select")].some((control) =>
         control.type === "checkbox" ? control.checked : !control.name.endsWith("_mode") && Boolean(control.value));
+      const activeTriggers = selected.filter(Boolean);
+      const allTriggersMatch = (...kinds) => activeTriggers.length > 0 && activeTriggers.every((value) => kinds.includes(value));
+      for (const [filter, active] of [
+        [this.dateFilterTarget, allTriggersMatch("document.date_changed")],
+        [this.reviewFilterTarget, allTriggersMatch("document.reviewed", "document.unreviewed")],
+        [this.unreviewFilterTarget, allTriggersMatch("document.unreviewed")],
+        [this.revisionFilterTarget, allTriggersMatch("document.revision_created", "document.revision_restored")],
+        [this.revisionSourceFilterTarget, allTriggersMatch("document.revision_created")],
+      ]) {
+        filter.hidden = !active;
+        filter.disabled = !active;
+      }
       this.conditionEditor.sync({
         trigger,
         scheduled,

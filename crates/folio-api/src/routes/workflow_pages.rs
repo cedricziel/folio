@@ -20,9 +20,9 @@ use folio_core::models::{
     Id, MetadataChangeState, MetadataKind, MetadataValue, RunStatus, SourceConditions, SourceKind,
     TextMatch, UserId, WebhookMethod, Workflow, WorkflowAction, WorkflowActorCondition,
     WorkflowCadence, WorkflowConditionField, WorkflowConditionType, WorkflowConditions,
-    WorkflowEventConditions, WorkflowIngestConditions, WorkflowInput, WorkflowMetadataConditions,
-    WorkflowProcessingConditions, WorkflowRun, WorkflowTarget, WorkflowTrigger,
-    WorkflowTriggerRegistry,
+    WorkflowDocumentConditions, WorkflowEventConditions, WorkflowIngestConditions, WorkflowInput,
+    WorkflowMetadataConditions, WorkflowProcessingConditions, WorkflowRun, WorkflowTarget,
+    WorkflowTrigger, WorkflowTriggerRegistry,
 };
 
 use super::workflow_action_form::{action_fields, parse_headers, resolve_actions};
@@ -276,6 +276,13 @@ struct FormValues {
     metadata_after_enabled: Option<String>,
     metadata_after: String,
     metadata_after_currency: String,
+    document_date_before: String,
+    document_date_after: String,
+    document_date_state: String,
+    review_origin: String,
+    unreview_reason: String,
+    revision_number: String,
+    revision_source: String,
     source_kind: String,
     folder_path_glob: String,
     email_from_mode: String,
@@ -507,7 +514,88 @@ fn metadata_condition(
     Ok((conditions != WorkflowMetadataConditions::default()).then_some(conditions))
 }
 
+fn condition_choice<T: serde::de::DeserializeOwned>(
+    value: &str,
+    label: &str,
+) -> Result<Option<T>, String> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_value(serde_json::Value::String(value.trim().into()))
+        .map(Some)
+        .map_err(|_| format!("The {label} is not valid."))
+}
+
+fn condition_value<T: serde::Serialize>(value: Option<T>) -> String {
+    value
+        .and_then(|value| serde_json::to_value(value).ok())
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
 impl FormValues {
+    fn document_condition(
+        &self,
+        trigger: WorkflowTrigger,
+    ) -> Result<Option<WorkflowDocumentConditions>, String> {
+        use WorkflowDocumentConditions::{Date, Review, Revision};
+        let condition = match trigger {
+            WorkflowTrigger::DocumentDateChanged => Date {
+                before: condition_choice(&self.document_date_before, "previous document date")?,
+                after: condition_choice(&self.document_date_after, "new document date")?,
+                state: condition_choice(&self.document_date_state, "date change")?,
+            },
+            WorkflowTrigger::DocumentReviewed | WorkflowTrigger::DocumentUnreviewed => Review {
+                origin: condition_choice(&self.review_origin, "review origin")?,
+                reason: if trigger == WorkflowTrigger::DocumentUnreviewed {
+                    condition_choice(&self.unreview_reason, "unreview reason")?
+                } else {
+                    None
+                },
+            },
+            WorkflowTrigger::DocumentRevisionCreated
+            | WorkflowTrigger::DocumentRevisionRestored => Revision {
+                number: if self.revision_number.trim().is_empty() {
+                    None
+                } else {
+                    Some(
+                        self.revision_number
+                            .trim()
+                            .parse()
+                            .map_err(|_| "Enter a whole revision number.")?,
+                    )
+                },
+                source: if trigger == WorkflowTrigger::DocumentRevisionCreated {
+                    condition_choice(&self.revision_source, "revision source")?
+                } else {
+                    None
+                },
+            },
+            _ => return Ok(None),
+        };
+        match condition {
+            Date {
+                before: None,
+                after: None,
+                state: None,
+            }
+            | Review {
+                origin: None,
+                reason: None,
+            }
+            | Revision {
+                number: None,
+                source: None,
+            } => Ok(None),
+            _ => {
+                condition
+                    .validate_trigger(trigger)
+                    .map_err(|error| error.to_string())?;
+                Ok(Some(condition))
+            }
+        }
+    }
+
     fn ingest_kind_is(&self, kind: &str) -> bool {
         self.ingest_source_kind.as_deref() == Some(kind)
     }
@@ -660,7 +748,7 @@ impl FormValues {
             ),
             None => ("once", String::new(), String::new()),
         };
-        Self {
+        let mut values = Self {
             extra_fields,
             revision: Some(workflow.revision),
             action_correspondent_id,
@@ -752,7 +840,33 @@ impl FormValues {
             webhook_url,
             webhook_headers,
             ..Default::default()
+        };
+        match c
+            .event
+            .as_ref()
+            .and_then(|event| event.document_change.as_ref())
+        {
+            Some(WorkflowDocumentConditions::Date {
+                before,
+                after,
+                state,
+            }) => {
+                values.document_date_before = condition_value(*before);
+                values.document_date_after = condition_value(*after);
+                values.document_date_state = condition_value(*state);
+            }
+            Some(WorkflowDocumentConditions::Review { origin, reason }) => {
+                values.review_origin = condition_value(*origin);
+                values.unreview_reason = condition_value(*reason);
+            }
+            Some(WorkflowDocumentConditions::Revision { number, source }) => {
+                values.revision_number =
+                    number.map(|number| number.to_string()).unwrap_or_default();
+                values.revision_source = condition_value(*source);
+            }
+            None => {}
         }
+        values
     }
 
     fn cadence(&self, trigger: WorkflowTrigger) -> Result<Option<WorkflowCadence>, String> {
@@ -866,14 +980,20 @@ impl FormValues {
                     previous_ingest.cloned()
                 };
                 let metadata = metadata_condition(&self, metadata_trigger)?;
-                (subject_id.is_some() || actor.is_some() || ingest.is_some() || metadata.is_some())
-                    .then_some(WorkflowEventConditions {
-                        subject_id,
-                        actor,
-                        ingest,
-                        metadata,
-                        processing: None,
-                    })
+                let document_change = self.document_condition(trigger)?;
+                (subject_id.is_some()
+                    || actor.is_some()
+                    || ingest.is_some()
+                    || metadata.is_some()
+                    || document_change.is_some())
+                .then_some(WorkflowEventConditions {
+                    subject_id,
+                    actor,
+                    ingest,
+                    metadata,
+                    document_change,
+                    processing: None,
+                })
             }
         };
         if processing.is_some() || self.extra_fields.contains_key("processing_form") {
