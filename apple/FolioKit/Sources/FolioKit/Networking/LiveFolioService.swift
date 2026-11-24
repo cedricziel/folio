@@ -387,7 +387,8 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     }
 
     public func documents(filter: DocumentFilter) async throws -> [Document] {
-        try await call("documents.filter") {
+        try requireDocumentListFilters(filter)
+        return try await call("documents.filter") {
             let query = Operations.ListDocuments.Input.Query(
                 reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
                 documentDateTo: filter.documentDateTo?.rawValue,
@@ -405,6 +406,7 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     /// Servers without the IDs route answer 404, or 400 where `ids` is read as a document ID; a proxy or an older
     /// token policy may answer 403 or 405. All of those fall back to the full list.
     public func documentIDs(filter: DocumentFilter) async throws -> [Document.ID] {
+        try requireDocumentListFilters(filter)
         do {
             return try await call("documents.ids") {
                 let query = Operations.ListDocumentIds.Input.Query(
@@ -419,6 +421,12 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
             }
         } catch let FolioError.server(status, _) where [400, 403, 404, 405].contains(status) {
             return try await documents(filter: filter).map(\.id)
+        }
+    }
+
+    private func requireDocumentListFilters(_ filter: DocumentFilter) throws {
+        if filter.metadataExact != nil {
+            throw FolioError.server(status: 501, message: "Custom field filters require the document browse API.")
         }
     }
 

@@ -695,3 +695,151 @@ async fn typed_metadata_view_restores_exact_results_and_rejects_an_unavailable_f
     assert!(!html.contains("Outstanding invoice"));
     assert!(!html.contains("Settled invoice"));
 }
+
+#[tokio::test]
+async fn custom_field_panel_offers_saved_views_only_for_available_references() {
+    use folio_core::models::{
+        CreateDocument, MetadataChange, MetadataFieldInput, MetadataKind, MetadataOptionInput,
+        MetadataValue,
+    };
+
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "alice").await;
+    let document = h
+        .state
+        .document_repo
+        .create(
+            alice.vault,
+            CreateDocument {
+                title: "Source".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let target = h
+        .state
+        .document_repo
+        .create(
+            alice.vault,
+            CreateDocument {
+                title: "Reference target".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let field = |name: &str, kind| MetadataFieldInput {
+        name: name.into(),
+        kind,
+        required: false,
+        unique: false,
+    };
+    let select = h
+        .state
+        .metadata_fields
+        .create(alice.vault, field("Phase", MetadataKind::Select))
+        .await
+        .unwrap();
+    let link = h
+        .state
+        .metadata_fields
+        .create(alice.vault, field("Reference", MetadataKind::DocumentLink))
+        .await
+        .unwrap();
+    let option = h
+        .state
+        .metadata_options
+        .create(
+            alice.vault,
+            select.id,
+            MetadataOptionInput {
+                label: "Pending".into(),
+                position: 0,
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .metadata_values
+        .patch(
+            alice.vault,
+            document.id,
+            None,
+            vec![
+                MetadataChange {
+                    field_id: select.id,
+                    value: Some(MetadataValue::Select(option.id)),
+                },
+                MetadataChange {
+                    field_id: link.id,
+                    value: Some(MetadataValue::DocumentLink(target.id)),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    let panel = format!(
+        "/vaults/{}/documents/{}/custom-fields",
+        alice.vault, document.id
+    );
+    let get_panel = || {
+        h.app
+            .clone()
+            .oneshot(request("GET", &panel, &alice, Body::empty()))
+    };
+    let response = get_panel().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        common::text(response)
+            .await
+            .matches("Save matching view")
+            .count(),
+        2
+    );
+
+    h.state
+        .metadata_options
+        .set_deleted(alice.vault, select.id, option.id, true)
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .delete(alice.vault, target.id)
+        .await
+        .unwrap();
+    let response = get_panel().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = common::text(response).await;
+    assert!(html.contains("Pending (retired)"));
+    assert!(!html.contains("Save matching view"));
+
+    let mut browse = request(
+        "POST",
+        "/api/documents/browse",
+        &alice,
+        Body::from(
+            serde_json::json!({
+                "query": {
+                    "version": 3,
+                    "filters": {
+                        "metadata_exact": {
+                            "field_id": link.id,
+                            "value": {"kind": "document_link", "value": target.id}
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    );
+    browse
+        .headers_mut()
+        .insert("x-folio-vault", alice.vault.to_string().parse().unwrap());
+    let response = h.app.clone().oneshot(browse).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(common::text(response)
+        .await
+        .contains("The custom field linked document is unavailable"));
+}

@@ -86,7 +86,7 @@ async fn display_value(
     vault: VaultId,
     field: &MetadataField,
     assignment: Option<&DocumentMetadataValue>,
-) -> ApiResult<(String, Option<String>)> {
+) -> ApiResult<(String, Option<String>, bool)> {
     let Some((value, assignment)) = assignment
         .and_then(|assignment| assignment.value.as_ref().map(|value| (value, assignment)))
     else {
@@ -95,7 +95,7 @@ async fn display_value(
         } else {
             "Not set"
         };
-        return Ok((empty.into(), None));
+        return Ok((empty.into(), None, false));
     };
     let display = match value {
         MetadataValue::Text(text) | MetadataValue::LongText(text) if text.is_empty() => {
@@ -108,27 +108,34 @@ async fn display_value(
         | MetadataValue::Date(text) => text.clone(),
         MetadataValue::Boolean(value) => if *value { "Yes" } else { "No" }.into(),
         MetadataValue::Money { amount, currency } => format!("{amount} {currency}"),
-        MetadataValue::Select(id) => match state.metadata_options.find(vault, field.id, *id).await?
-        {
-            Some(option) if option.deleted_at.is_some() => format!("{} (retired)", option.label),
-            Some(option) => option.label,
-            None => "Unavailable option".into(),
-        },
+        MetadataValue::Select(id) => {
+            return Ok(
+                match state.metadata_options.find(vault, field.id, *id).await? {
+                    Some(option) if option.deleted_at.is_some() => {
+                        (format!("{} (retired)", option.label), None, false)
+                    }
+                    Some(option) => (option.label, None, true),
+                    None => ("Unavailable option".into(), None, false),
+                },
+            );
+        }
         MetadataValue::Url(value) => {
             let href = url::Url::parse(value)
                 .ok()
                 .filter(|url| matches!(url.scheme(), "http" | "https"));
-            return Ok((value.clone(), href.map(Into::into)));
+            return Ok((value.clone(), href.map(Into::into), true));
         }
         MetadataValue::DocumentLink(id) => {
             return Ok(match &assignment.link_target {
-                Some(target) if target.trashed => (format!("{} (in Trash)", target.title), None),
-                Some(target) => (target.title.clone(), Some(document_url(*id, None))),
-                None => ("Unavailable document".into(), None),
+                Some(target) if target.trashed => {
+                    (format!("{} (in Trash)", target.title), None, false)
+                }
+                Some(target) => (target.title.clone(), Some(document_url(*id, None)), true),
+                None => ("Unavailable document".into(), None, false),
             })
         }
     };
-    Ok((display, None))
+    Ok((display, None, true))
 }
 
 async fn panel(
@@ -171,7 +178,7 @@ async fn panel(
         {
             continue;
         }
-        let (display, href) = display_value(&state, vault, &field, assignment).await?;
+        let (display, href, available) = display_value(&state, vault, &field, assignment).await?;
         let edit_href = can_edit.then(|| {
             with_return(
                 crate::vault::url(&format!("/documents/{id}/custom-fields/{}", field.id)),
@@ -180,7 +187,8 @@ async fn panel(
         });
         let saved_view_href = (user.is_some()
             && field.deleted_at.is_none()
-            && assignment.is_some_and(|value| value.deleted_at.is_none() && value.value.is_some()))
+            && available
+            && assignment.is_some_and(|value| value.deleted_at.is_none()))
         .then(|| {
             crate::vault::url(&format!(
                 "/saved-views/new?metadata_document_id={id}&metadata_field_id={}",
@@ -466,7 +474,7 @@ async fn render_editor(
     };
     let search = query.q.unwrap_or_default();
     let choices = choices(state, vault, &field, &value, &search).await?;
-    let (current, _) = display_value(state, vault, &field, assignment).await?;
+    let (current, _, _) = display_value(state, vault, &field, assignment).await?;
     let can_clear = (field.deleted_at.is_some() || !field.required)
         && assignment
             .and_then(|assignment| assignment.value.as_ref())

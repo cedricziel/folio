@@ -23,10 +23,10 @@
       <label>Review<select class="select" name="reviewed"><option value="" {% if reviewed.is_empty() %}selected{% endif %}>Any review state</option><option value="false" {% if reviewed == "false" %}selected{% endif %}>Not reviewed</option><option value="true" {% if reviewed == "true" %}selected{% endif %}>Reviewed</option></select></label>
       <label>Document date from<input class="input" type="date" name="document_date_from" value="{{ document_date_from }}" min="0001-01-01" max="9999-12-31"></label>
       <label>Document date to<input class="input" type="date" name="document_date_to" value="{{ document_date_to }}" min="0001-01-01" max="9999-12-31"></label>
-      {% if let Some(metadata) = metadata_filter %}
+      {% match metadata_filter %}{% when Some with (metadata) %}
       <input type="hidden" name="metadata_exact" value="{{ metadata.json }}">
       <label><input type="checkbox" name="remove_metadata_filter" value="true"> Remove custom field filter</label>
-      {% endif %}
+      {% when None %}{% endmatch %}
       <label>Sort<select class="select" name="sort"><option value="newest" {% if sort == "newest" %}selected{% endif %}>Newest first</option><option value="oldest" {% if sort == "oldest" %}selected{% endif %}>Oldest first</option><option value="title" {% if sort == "title" %}selected{% endif %}>Title</option></select></label>
       <label>Display<select class="select" name="presentation"><option value="list" {% if presentation == "list" %}selected{% endif %}>List</option><option value="grid" {% if presentation == "grid" %}selected{% endif %}>Grid</option></select></label>
       <label>Visible to<select class="select" name="visibility"><option value="private" {% if !shared %}selected{% endif %}>Only me</option>{% if can_share %}<option value="shared" {% if shared %}selected{% endif %}>Everyone in this vault</option>{% endif %}</select></label>
@@ -41,7 +41,7 @@
   {% endif %}
   {% endif %}
   <h2 class="heading">Documents</h2>
-  {% if let Some(metadata) = metadata_filter %}<p>{{ metadata.field }} = {{ metadata.value }}</p>{% endif %}
+  {% match metadata_filter %}{% when Some with (metadata) %}<p>{{ metadata.field }} = {{ metadata.value }}</p>{% when None %}{% endmatch %}
   <div id="saved-view-results" data-controller="live-list" data-action="turbo:before-stream-render@document->live-list#invalidate">
   {% if let Some(message) = query_error %}<p role="alert" class="f-status f-status-failed">{{ message }}. Edit the filters to use this view again.</p>{% endif %}
   {% if rows.is_empty() && query_error.is_none() %}<p class="lede">No documents match this view.</p>{% endif %}

@@ -10,6 +10,7 @@ struct SavedViewEditor: View {
     @State private var customFields: [CustomFieldDefinition] = []
     @State private var assignedValues: [UUID: CustomFieldValue] = [:]
     @State private var customFieldsError: String?
+    @State private var exactReference: (filter: ExactCustomFieldFilter, label: String)?
 
     init(workspace: WorkspaceViewModel, existing: SavedView?) {
         self.workspace = workspace
@@ -77,7 +78,13 @@ struct SavedViewEditor: View {
     @ViewBuilder private var customFieldControls: some View {
         if let exact = draft.query.filter.metadataExact {
             let name = customFields.first { $0.id == exact.fieldID }?.draft.name ?? "Custom field"
-            LabeledContent("Exact match", value: name)
+            LabeledContent("Exact match") {
+                VStack(alignment: .trailing) {
+                    Text(name)
+                    Text(exactValueLabel(exact))
+                }
+            }
+            .task(id: exact) { await loadExactReference(exact) }
             Button("Remove custom field filter") {
                 draft.query.filter.metadataExact = nil
             }
@@ -97,6 +104,44 @@ struct SavedViewEditor: View {
         if let customFieldsError {
             Text(customFieldsError).foregroundStyle(Color.danger)
         }
+    }
+
+    private func exactValueLabel(_ exact: ExactCustomFieldFilter) -> String {
+        switch exact.value {
+        case let .text(value), let .longText(value): value.isEmpty ? "Empty text" : value
+        case let .boolean(value): value ? "Yes" : "No"
+        case let .integer(value), let .decimal(value), let .date(value), let .url(value): value
+        case let .money(amount, currency): "\(amount) \(currency)"
+        case .select, .documentLink:
+            if let exactReference, exactReference.filter == exact {
+                exactReference.label
+            } else {
+                "Loading…"
+            }
+        }
+    }
+
+    private func loadExactReference(_ exact: ExactCustomFieldFilter) async {
+        let label: String
+        switch exact.value {
+        case let .select(id):
+            let metadata = workspace.service as? any CustomMetadataService
+            if let option = try? await metadata?.customOption(fieldID: exact.fieldID, id: id) {
+                label = option.isRetired ? "\(option.label) (retired)" : option.label
+            } else {
+                label = "Option unavailable"
+            }
+        case let .documentLink(id):
+            if let document = try? await workspace.service.document(id: id) {
+                label = document.deletedAt == nil ? document.title : "\(document.title) (in Trash)"
+            } else {
+                label = "Document unavailable"
+            }
+        default:
+            return
+        }
+        guard !Task.isCancelled else { return }
+        exactReference = (exact, label)
     }
 
     private func loadCustomFields() async {

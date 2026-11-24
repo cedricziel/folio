@@ -127,6 +127,18 @@ pub(super) async fn validate_metadata_filter(
             ));
         }
     }
+    if let MetadataValue::DocumentLink(target) = value {
+        if state
+            .document_repo
+            .find_by_id(vault, target)
+            .await?
+            .is_none_or(|document| document.purge_requested_at.is_some())
+        {
+            return Err(ApiError::bad_request(
+                "The custom field linked document is unavailable",
+            ));
+        }
+    }
     Ok(())
 }
 

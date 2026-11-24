@@ -446,6 +446,18 @@ private let documentJSON = """
         }
     }
 
+    @Test func documentListsRejectExactCustomFieldFiltersBeforeMakingARequest() async {
+        StubURLProtocol.handler = { _, _ in
+            Issue.record("List endpoints cannot apply exact custom field filters.")
+            return .init(status: 500)
+        }
+        let service = makeService().scoped(to: UUID())
+        let filter = DocumentFilter(metadataExact: .init(fieldID: UUID(), value: .boolean(false)))
+        let error = FolioError.server(status: 501, message: "Custom field filters require the document browse API.")
+        await #expect(throws: error) { try await service.documents(filter: filter) }
+        await #expect(throws: error) { try await service.documentIDs(filter: filter) }
+    }
+
     @Test func renamingViewOmitsUnchangedQuery() async throws {
         let vault = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
