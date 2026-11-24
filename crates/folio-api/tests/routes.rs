@@ -1221,7 +1221,7 @@ async fn original_exports_keep_both_revisions_after_the_current_pointer_changes(
 }
 
 #[tokio::test]
-async fn replacement_validates_the_expected_revision_and_keeps_the_original_when_gated() {
+async fn replacement_routes_share_the_receipt_and_preserve_the_original() {
     let h = test_app().await;
     let document = h
         .state
@@ -1294,11 +1294,29 @@ async fn replacement_validates_the_expected_revision_and_keeps_the_original_when
             .status(),
         StatusCode::BAD_REQUEST
     );
-    for path in [&default_path, &scoped_path] {
+    let created = send(&default_path, document.id, Some(key)).await.unwrap();
+    let replayed = send(&scoped_path, document.id, Some(key)).await.unwrap();
+    let enabled = folio_infra::queue::REVISION_DISPATCH_ENABLED;
+    if enabled {
+        assert_eq!(created.status(), StatusCode::CREATED);
+        assert_eq!(replayed.status(), StatusCode::OK);
+        let created = axum::body::to_bytes(created.into_body(), 4096)
+            .await
+            .unwrap();
+        let replayed = axum::body::to_bytes(replayed.into_body(), 4096)
+            .await
+            .unwrap();
+        assert_eq!(created, replayed);
         assert_eq!(
-            send(path, document.id, Some(key)).await.unwrap().status(),
-            StatusCode::CONFLICT
+            send(&scoped_path, document.id, Some(Uuid::new_v4()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::CONFLICT,
         );
+    } else {
+        assert_eq!(created.status(), StatusCode::CONFLICT);
+        assert_eq!(replayed.status(), StatusCode::CONFLICT);
     }
 
     let revisions = h
@@ -1307,22 +1325,35 @@ async fn replacement_validates_the_expected_revision_and_keeps_the_original_when
         .list_revisions(h.vault, document.id, None, 10)
         .await
         .unwrap();
-    assert_eq!(revisions.len(), 1);
-    assert_eq!(revisions[0].id, document.id);
+    assert_eq!(revisions.len(), if enabled { 2 } else { 1 });
+    assert_eq!(revisions.last().unwrap().id, document.id);
     assert!(revisions[0].is_current);
+    if enabled {
+        assert_ne!(revisions[0].id, document.id);
+        assert_eq!(revisions[0].number, 2);
+        assert_eq!(
+            h.state
+                .store
+                .get_bytes(&revisions[0].original.storage_key)
+                .await
+                .unwrap(),
+            b"replacement bytes",
+        );
+    }
     assert_eq!(
         h.state.store.get_bytes(&original_key).await.unwrap(),
         original
     );
-    assert_eq!(
-        h.state
-            .store
-            .list(&keys::document_prefix(document.id))
-            .await
-            .unwrap()
-            .as_slice(),
-        std::slice::from_ref(&original_key)
-    );
+    let staged = h
+        .state
+        .store
+        .list(&keys::document_prefix(document.id))
+        .await
+        .unwrap();
+    assert_eq!(staged.len(), revisions.len());
+    assert!(revisions
+        .iter()
+        .all(|revision| staged.contains(&revision.original.storage_key)));
 }
 
 #[tokio::test]

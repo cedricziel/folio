@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test, uniqueTitle, uploadViaUi, samplePdf } from "./fixtures";
@@ -183,12 +183,6 @@ test("file history downloads the original without leaving the document", async (
     await expect(history.getByText("Revision 1", { exact: true })).toBeVisible();
     await expect(history.getByText("Current", { exact: true })).toBeVisible();
     await expect(history.getByText("statement.pdf", { exact: true })).toBeVisible();
-    if (process.env.FOLIO_REVISION_PUBLICATION_TEST !== "1") {
-      const listing = await request.get(`/api/documents/${id}/revisions`);
-      await expect(listing).toBeOK();
-      expect((await listing.json()).publication_enabled).toBeUndefined();
-      await expect(history.getByRole("button", { name: "Replace file", exact: true })).toHaveCount(0);
-    }
 
     const downloaded = page.waitForEvent("download");
     await history.getByRole("link", { name: "Download original", exact: true }).click();
@@ -212,7 +206,6 @@ function blankPdf(pages: number): Buffer {
 }
 
 test("the file history publishes a replacement and restores an earlier original", async ({ page, request }) => {
-  test.skip(process.env.FOLIO_REVISION_PUBLICATION_TEST !== "1", "Requires the isolated publication build");
   test.setTimeout(60_000);
   const upload = await request.post("/api/documents/upload", {
     multipart: {
@@ -229,6 +222,9 @@ test("the file history publishes a replacement and restores an earlier original"
     await expect(history.getByRole("button", { name: "Replace file", exact: true })).toBeVisible();
   };
   try {
+    const initialHistory = await request.get(`${document}/revisions`);
+    await expect(initialHistory).toBeOK();
+    expect(await initialHistory.json()).toMatchObject({ publication_enabled: true });
     await page.goto(`/documents/${id}`);
     await openHistory();
     await history.getByLabel("Choose a replacement file").setInputFiles({
@@ -263,8 +259,7 @@ test("the file history publishes a replacement and restores an earlier original"
     await page.setViewportSize({ width: 390, height: 844 });
     const pageResponse = await request.get(`${document}/revisions`);
     await expect(pageResponse).toBeOK();
-    const { publication_enabled, revisions } = await pageResponse.json();
-    expect(publication_enabled).toBe(true);
+    const { revisions } = await pageResponse.json();
     const append = async (currentID: string, filename: string) => {
       const response = await request.post(`${document}/revisions`, {
         headers: { "Idempotency-Key": randomUUID() },
@@ -298,6 +293,179 @@ test("the file history publishes a replacement and restores an earlier original"
       return rect.top >= (toolbar?.bottom ?? 0) && rect.bottom <= window.innerHeight;
     })).toBe(true);
     await expect(page).toHaveURL(new RegExp(`/documents/${id}`));
+  } finally {
+    await request.delete(document);
+    await request.delete(`${document}/purge`);
+  }
+});
+
+test("replacement and restoration publish immutable files and reprocess the current original", async ({ request }) => {
+  test.setTimeout(90_000);
+  const title = uniqueTitle("revision-publication");
+  const original = blankPdf(1);
+  const uploaded = await request.post("/api/documents/upload", {
+    multipart: { title, file: { name: "first.pdf", mimeType: "application/pdf", buffer: original } },
+  });
+  await expect(uploaded).toBeOK();
+  const { id, created_at } = await uploaded.json();
+  const document = `/api/documents/${id}`;
+  const history = `${document}/revisions`;
+  const read = async () => {
+    const response = await request.get(document);
+    await expect(response).toBeOK();
+    return response.json();
+  };
+  const pages = async (count: number) => {
+    await expect.poll(async () => (await read()).page_count, { timeout: 20_000 }).toBe(count);
+  };
+  const verifyProcessingStages = async (revisionId: string) => {
+    const stages: { revision_id: string | null }[] = (await read()).processing_stages;
+    expect(stages).toContainEqual(expect.objectContaining({
+      stage: "thumbnail", state: "completed", revision_id: revisionId,
+    }));
+    expect([...new Set(stages.map(stage => stage.revision_id))]).toEqual([revisionId]);
+  };
+  const list = async () => {
+    const response = await request.get(history);
+    await expect(response).toBeOK();
+    return (await response.json()).revisions;
+  };
+  const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+  const download = async (url: string, name: string, bytes: Buffer) => {
+    const response = await request.get(url);
+    await expect(response).toBeOK();
+    expect(response.headers()["content-disposition"]).toContain(name);
+    expect(await response.body()).toEqual(bytes);
+  };
+
+  try {
+    await pages(1);
+    await expect(await request.patch(document, { data: { document_date: "2020-02-29" } })).toBeOK();
+    const reviewed = await request.put(`${document}/review`, { data: { reviewed: true } });
+    await expect(reviewed).toBeOK();
+    expect((await reviewed.json()).reviewed).toBe(true);
+    const [first] = await list();
+    expect(first).toMatchObject({
+      number: 1, is_current: true, original: { filename: "first.pdf", sha256: digest(original) },
+    });
+
+    const candidates = [2, 3].map(count => ({
+      count, key: randomUUID(), name: `replacement-${count}.pdf`, bytes: blankPdf(count),
+    }));
+    const replace = (candidate: typeof candidates[number]) => request.post(history, {
+      headers: { "Idempotency-Key": candidate.key },
+      multipart: {
+        expected_current_revision_id: first.id,
+        file: { name: candidate.name, mimeType: "application/pdf", buffer: candidate.bytes },
+      },
+    });
+    const results = await Promise.all(candidates.map(replace));
+    expect(results.map(response => response.status()).sort()).toEqual([201, 409]);
+    const winnerIndex = results.findIndex(response => response.status() === 201);
+    const winner = candidates[winnerIndex];
+    const replacement = await results[winnerIndex].json();
+    const replay = await replace(winner);
+    expect(replay.status()).toBe(200);
+    expect((await replay.json()).id).toBe(replacement.id);
+    expect(replacement).toMatchObject({
+      number: 2, is_current: true, original: { filename: winner.name, sha256: digest(winner.bytes) },
+    });
+    expect((await list()).map((revision: { id: string }) => revision.id)).toEqual([replacement.id, first.id]);
+    expect(await read()).toMatchObject({ title, created_at, document_date: "2020-02-29", reviewed: false });
+    await pages(winner.count);
+    await verifyProcessingStages(replacement.id);
+    await download(`${document}/download`, winner.name, winner.bytes);
+    await download(`${history}/${first.id}/download`, "first.pdf", original);
+
+    const restoreKey = randomUUID();
+    const restore = (key: string, expected: string) => request.post(`${history}/${first.id}/restore`, {
+      headers: { "Idempotency-Key": key }, data: { expected_current_revision_id: expected },
+    });
+    expect((await restore(randomUUID(), first.id)).status()).toBe(409);
+    const restoredResponse = await restore(restoreKey, replacement.id);
+    expect(restoredResponse.status()).toBe(201);
+    const restored = await restoredResponse.json();
+    expect(restored).toMatchObject({
+      number: 3, is_current: true, restored_from_revision_id: first.id,
+      original: { filename: "first.pdf", sha256: digest(original) },
+    });
+    const restoreReplay = await restore(restoreKey, replacement.id);
+    expect(restoreReplay.status()).toBe(200);
+    expect((await restoreReplay.json()).id).toBe(restored.id);
+    expect((await list()).map((revision: { id: string }) => revision.id)).toEqual([restored.id, replacement.id, first.id]);
+    await pages(1);
+    await verifyProcessingStages(restored.id);
+    await download(`${document}/download`, "first.pdf", original);
+    await download(`${history}/${replacement.id}/download`, winner.name, winner.bytes);
+
+    expect((await request.delete(document)).status()).toBe(204);
+    expect((await request.get(`${history}/${replacement.id}/download`)).status()).toBe(404);
+    await expect(await request.post(`${document}/restore`)).toBeOK();
+    expect((await list())[0]).toMatchObject({ id: restored.id, is_current: true });
+    await download(`${history}/${replacement.id}/download`, winner.name, winner.bytes);
+
+    expect((await request.delete(document)).status()).toBe(204);
+    expect((await request.delete(`${document}/purge`)).status()).toBe(202);
+    await expect.poll(async () => {
+      const response = await request.get("/api/documents/trash");
+      await expect(response).toBeOK();
+      return (await response.json()).some((entry: { id: string }) => entry.id === id);
+    }, { timeout: 20_000 }).toBe(false);
+    expect((await request.post(`${document}/restore`)).status()).toBe(404);
+  } finally {
+    await request.delete(document);
+    await request.delete(`${document}/purge`);
+  }
+});
+
+test("a replacement replay returns its revision after another publication advances history", async ({ request }) => {
+  const upload = await request.post("/api/documents/upload", {
+    multipart: {
+      title: uniqueTitle("revision-replay"),
+      file: { name: "first.pdf", mimeType: "application/pdf", buffer: blankPdf(1) },
+    },
+  });
+  await expect(upload).toBeOK();
+  const { id, vault_id } = await upload.json();
+  const document = `/api/documents/${id}`;
+  const history = `/api/vaults/${vault_id}/documents/${id}/revisions`;
+  try {
+    const firstPage = await request.get(history);
+    await expect(firstPage).toBeOK();
+    const { publication_enabled, revisions: [first] } = await firstPage.json();
+    expect(publication_enabled).toBe(true);
+
+    const replacementKey = randomUUID();
+    const replace = (key: string) => request.post(history, {
+      headers: { "Idempotency-Key": key },
+      multipart: {
+        expected_current_revision_id: first.id,
+        file: { name: "replacement.pdf", mimeType: "application/pdf", buffer: blankPdf(2) },
+      },
+    });
+    const replacementResponse = await replace(replacementKey);
+    expect(replacementResponse.status()).toBe(201);
+    const replacement = await replacementResponse.json();
+
+    const restoredResponse = await request.post(`${history}/${first.id}/restore`, {
+      headers: { "Idempotency-Key": randomUUID() },
+      data: { expected_current_revision_id: replacement.id },
+    });
+    expect(restoredResponse.status()).toBe(201);
+    const restored = await restoredResponse.json();
+
+    const replay = await replace(replacementKey);
+    expect(replay.status()).toBe(200);
+    expect(await replay.json()).toMatchObject({ id: replacement.id, number: 2, is_current: false });
+    expect((await replace(randomUUID())).status()).toBe(409);
+
+    const finalPage = await request.get(history);
+    await expect(finalPage).toBeOK();
+    expect((await finalPage.json()).revisions).toMatchObject([
+      { id: restored.id, is_current: true },
+      { id: replacement.id, is_current: false },
+      { id: first.id, is_current: false },
+    ]);
   } finally {
     await request.delete(document);
     await request.delete(`${document}/purge`);

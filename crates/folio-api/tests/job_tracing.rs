@@ -14,9 +14,14 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
 
-use folio_infra::{Worker, WorkerConfig};
+use folio_infra::{queue::REVISION_DISPATCH_ENABLED, Worker, WorkerConfig};
 
 const TRACE_ID: &str = "11223344556677881122334455667788";
+const UPLOAD_PROCESSING_JOB: &str = if REVISION_DISPATCH_ENABLED {
+    "process_document_revision"
+} else {
+    "process_document"
+};
 
 /// Trace ID of each span by name, read when the span is exited
 ///
@@ -127,7 +132,7 @@ async fn upload(h: &common::Harness, traceparent: Option<String>) {
     assert!(response.status().is_success(), "{}", response.status());
 }
 
-/// Run the worker until the queued `process_document` job has finished; return its status and error.
+/// Run the worker until the uploaded document's queued processing job has finished.
 async fn run_process_document(h: &common::Harness) -> (String, Option<String>) {
     let folio_infra::Database::Sqlite(pool) = &h.database else {
         unreachable!("the harness uses SQLite");
@@ -136,12 +141,12 @@ async fn run_process_document(h: &common::Harness) -> (String, Option<String>) {
     let (stop, shutdown) = tokio::sync::watch::channel(false);
     let finished = async {
         loop {
-            let (status, error): (String, Option<String>) = sqlx::query_as(
-                "SELECT status, error FROM jobs WHERE job_type = 'process_document'",
-            )
-            .fetch_one(pool)
-            .await
-            .unwrap();
+            let (status, error): (String, Option<String>) =
+                sqlx::query_as("SELECT status, error FROM jobs WHERE job_type = ?")
+                    .bind(UPLOAD_PROCESSING_JOB)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
             if status == "completed" || status == "failed" {
                 stop.send(true).unwrap();
                 return (status, error);
@@ -180,13 +185,15 @@ async fn a_job_queued_without_trace_context_still_runs_in_a_new_trace() {
         unreachable!("the harness uses SQLite");
     };
     // As if queued before trace context was stored, or stored in a form that does not parse.
-    sqlx::query(
+    let affected = sqlx::query(
         "UPDATE jobs SET trace_parent = 'not-a-traceparent', trace_state = NULL \
-         WHERE job_type = 'process_document'",
+         WHERE job_type = ?",
     )
+    .bind(UPLOAD_PROCESSING_JOB)
     .execute(pool)
     .await
     .unwrap();
+    assert_eq!(affected.rows_affected(), 1);
 
     let (status, error) = run_process_document(&h).await;
 
