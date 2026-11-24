@@ -23,12 +23,17 @@ public struct WorkflowTriggerChoice: Identifiable, Equatable, Sendable {
     public let title: String
     public let target: Target
     public let conditionFields: [ConditionField]
+    public let canEditDocumentConditions: Bool
 
-    public init(id: String, title: String, target: Target, conditionFields: [ConditionField]) {
+    public init(
+        id: String, title: String, target: Target, conditionFields: [ConditionField],
+        canEditDocumentConditions: Bool = false
+    ) {
         self.id = id
         self.title = title
         self.target = target
         self.conditionFields = conditionFields
+        self.canEditDocumentConditions = canEditDocumentConditions
     }
 }
 
