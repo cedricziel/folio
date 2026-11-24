@@ -184,11 +184,18 @@ fn api_router() -> Router<AppState> {
         .merge(devices::router())
         .nest("/telemetry", crate::client_telemetry::router())
         .nest("/documents", documents::router())
-        .route("/documents/browse", get(browse::browse_default))
+        .route(
+            "/documents/browse",
+            get(browse::browse_default).post(browse::browse_filtered),
+        )
         .route("/vaults/{vault_id}/documents", get(browse::browse_vault))
         .route(
             "/vaults/{vault_id}/documents/{id}/revisions",
-            get(document_revisions::list_scoped),
+            get(document_revisions::list_scoped).post(document_revisions::replace_scoped),
+        )
+        .route(
+            "/vaults/{vault_id}/documents/{id}/revisions/{revision_id}/restore",
+            axum::routing::post(document_revisions::restore_scoped),
         )
         .route(
             "/vaults/{vault_id}/documents/{id}/revisions/{revision_id}/download",

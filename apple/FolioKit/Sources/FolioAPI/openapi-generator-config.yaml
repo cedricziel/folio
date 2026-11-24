@@ -6,3 +6,4 @@ namingStrategy: idiomatic
 typeOverrides:
   schemas:
     DocumentDatePatch: DocumentDatePatchPayload
+    WorkflowConditions: WorkflowConditionsPayload

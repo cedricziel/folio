@@ -260,8 +260,13 @@ impl WorkflowRepository for SqliteWorkflowRepository {
     }
 
     #[instrument(skip(self, input))]
-    async fn update(&self, vault: VaultId, id: Id, input: WorkflowInput) -> Result<Workflow> {
-        input.validate()?;
+    async fn replace(
+        &self,
+        vault: VaultId,
+        id: Id,
+        input: WorkflowInput,
+        expected_revision: Option<i64>,
+    ) -> Result<Workflow> {
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -278,6 +283,8 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .ok_or_else(|| not_found(id))?;
         let stored_cursor = row.get::<Option<String>, _>("next_run_at");
         let existing = workflow_from_row(&row)?;
+        existing.check_revision(expected_revision)?;
+        input.validate()?;
         if existing.name == input.name
             && existing.enabled == input.enabled
             && existing.trigger == input.trigger

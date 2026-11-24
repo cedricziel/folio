@@ -5,6 +5,9 @@ mod common;
 #[path = "workflows/document_lifecycle.rs"]
 mod document_lifecycle;
 
+#[path = "workflows/saved_view_events.rs"]
+mod saved_view_events;
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1943,13 +1946,16 @@ impl WorkflowRepository for RestoreVaultAfterLookup {
     ) -> folio_core::Result<Workflow> {
         self.inner.create(vault, input).await
     }
-    async fn update(
+    async fn replace(
         &self,
         vault: folio_core::models::VaultId,
         id: Id,
         input: WorkflowInput,
+        expected_revision: Option<i64>,
     ) -> folio_core::Result<Workflow> {
-        self.inner.update(vault, id, input).await
+        self.inner
+            .replace(vault, id, input, expected_revision)
+            .await
     }
     async fn delete(&self, vault: folio_core::models::VaultId, id: Id) -> folio_core::Result<()> {
         self.inner.delete(vault, id).await
@@ -2236,13 +2242,16 @@ impl WorkflowRepository for DeleteBeforeFirstProgress {
     ) -> folio_core::Result<Workflow> {
         self.inner.create(vault, input).await
     }
-    async fn update(
+    async fn replace(
         &self,
         vault: folio_core::models::VaultId,
         id: Id,
         input: WorkflowInput,
+        expected_revision: Option<i64>,
     ) -> folio_core::Result<Workflow> {
-        self.inner.update(vault, id, input).await
+        self.inner
+            .replace(vault, id, input, expected_revision)
+            .await
     }
     async fn delete(&self, vault: folio_core::models::VaultId, id: Id) -> folio_core::Result<()> {
         self.inner.delete(vault, id).await

@@ -162,6 +162,20 @@ impl SavedViewRepository for SqliteSavedViewRepository {
             .fetch_optional(&self.pool).await.map_err(storage_error)?.map(SavedView::try_from).transpose()
     }
 
+    async fn is_shared_for_workflow(&self, vault: VaultId, id: Id, deleted: bool) -> Result<bool> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM saved_views s JOIN vaults v ON v.id = s.vault_id
+             WHERE s.vault_id = $1 AND s.id = $2 AND s.visibility = 'shared'
+               AND (s.deleted_at IS NOT NULL) = $3 AND v.deleted_at IS NULL)",
+        )
+        .bind(vault.to_string())
+        .bind(id.to_string())
+        .bind(deleted)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(storage_error)
+    }
+
     async fn create(
         &self,
         vault: VaultId,

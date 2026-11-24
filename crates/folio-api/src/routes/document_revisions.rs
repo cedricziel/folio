@@ -1,12 +1,19 @@
 use askama::Template;
 use axum::{
-    extract::State,
+    extract::{multipart::MultipartRejection, rejection::JsonRejection, Multipart, State},
+    http::{HeaderMap, StatusCode},
     response::{Html, Response},
     Json,
 };
 use chrono::{DateTime, Utc};
-use folio_core::models::{Access, DocumentRevision, OriginalVerification, VaultAction, VaultId};
+use folio_core::models::{
+    Access, DocumentRevision, DocumentRevisionPage, OriginalVerification, RevisionPublication,
+    RevisionPublicationResult, RevisionPublicationSource, VaultAction, VaultId,
+};
+use folio_core::mutation::{current_actor, current_lineage, with_actor, with_lineage};
+use folio_core::services::{replace_document_original, NewRevisionOriginal};
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
@@ -36,7 +43,7 @@ struct RevisionOriginalView {
 }
 
 #[derive(Serialize, ToSchema)]
-struct RevisionView {
+pub(crate) struct RevisionView {
     id: Uuid,
     number: i64,
     is_current: bool,
@@ -130,7 +137,7 @@ pub(crate) async fn list_scoped(
     ApiQuery(query): ApiQuery<RevisionQuery>,
 ) -> ApiResult<Json<RevisionPageView>> {
     let vault = VaultId(vault);
-    require_read_access(&state, default, vault, uploader).await?;
+    require_read_access(&state, default, vault, &uploader).await?;
     list_in_vault(&state, vault, id, query).await
 }
 
@@ -138,11 +145,11 @@ async fn require_read_access(
     state: &AppState,
     default: VaultId,
     vault: VaultId,
-    uploader: Uploader,
+    uploader: &Uploader,
 ) -> ApiResult<()> {
-    let allowed = match uploader.0 {
+    let allowed = match uploader.0.as_ref() {
         Some(user) => matches!(
-            state.access.can(&user, vault, VaultAction::Read).await?,
+            state.access.can(user, vault, VaultAction::Read).await?,
             Access::Allowed(_)
         ),
         None => default == vault,
@@ -159,7 +166,10 @@ async fn list_in_vault(
     id: Uuid,
     query: RevisionQuery,
 ) -> ApiResult<Json<RevisionPageView>> {
-    let (revisions, next_before) = revision_page(state, vault, id, query).await?;
+    let DocumentRevisionPage {
+        revisions,
+        next_before,
+    } = revision_page(state, vault, id, query).await?;
     Ok(Json(RevisionPageView {
         revisions: revisions.into_iter().map(RevisionView::from).collect(),
         next_before,
@@ -182,7 +192,10 @@ pub(super) async fn panel(
     ApiQuery(query): ApiQuery<RevisionQuery>,
 ) -> ApiResult<Html<String>> {
     let show_latest = query.before.is_some();
-    let (revisions, next_before) = revision_page(&state, vault, id, query).await?;
+    let DocumentRevisionPage {
+        revisions,
+        next_before,
+    } = revision_page(&state, vault, id, query).await?;
     FileHistoryTemplate {
         document_id: id,
         revisions,
@@ -199,26 +212,12 @@ async fn revision_page(
     vault: VaultId,
     id: Uuid,
     query: RevisionQuery,
-) -> ApiResult<(Vec<DocumentRevision>, Option<i64>)> {
-    let limit = query.limit.unwrap_or(25);
-    if !(1..=100).contains(&limit) || query.before.is_some_and(|before| before <= 0) {
-        return Err(ApiError::bad_request("Invalid revision page"));
-    }
-    if state.document_repo.locate(id).await? != Some(vault) {
-        return Err(ApiError::not_found("Document not found"));
-    }
-
-    let mut revisions = state
+) -> ApiResult<DocumentRevisionPage> {
+    state
         .document_repo
-        .list_revisions(vault, id, query.before, limit + 1)
-        .await?;
-    let has_more = revisions.len() > limit as usize;
-    revisions.truncate(limit as usize);
-    let next_before = revisions
-        .last()
-        .filter(|_| has_more)
-        .map(|revision| revision.number);
-    Ok((revisions, next_before))
+        .revision_page(vault, id, query.before, query.limit)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Document not found"))
 }
 
 #[utoipa::path(
@@ -263,7 +262,7 @@ pub(crate) async fn download_scoped(
     ApiPath((vault, id, revision_id)): ApiPath<(Uuid, Uuid, Uuid)>,
 ) -> ApiResult<Response> {
     let vault = VaultId(vault);
-    require_read_access(&state, default, vault, uploader).await?;
+    require_read_access(&state, default, vault, &uploader).await?;
     download_in_vault(&state, vault, id, revision_id).await
 }
 
@@ -289,4 +288,321 @@ async fn download_in_vault(
         &filename,
     )
     .await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/documents/{id}/revisions",
+    operation_id = "replaceDocumentRevision",
+    tag = "documents",
+    params(("id" = Uuid, Path), ("Idempotency-Key" = Uuid, Header, description = "A nonnil UUID reused across retries of one request.")),
+    request_body(content = ReplaceRevisionRequest, content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "The revision previously published for this request", body = RevisionView),
+        (status = 201, description = "The new current revision", body = RevisionView),
+        crate::openapi::BadRequest,
+        (status = 401, description = "Missing or invalid authentication"),
+        (status = 403, description = "Document editing is not permitted", body = crate::error::ErrorResponse),
+        crate::openapi::NotFound,
+        (status = 409, description = "The expected revision is stale, the original cannot be changed, or the request key conflicts", body = crate::error::ErrorResponse),
+        crate::openapi::PayloadTooLarge,
+        crate::openapi::InternalError,
+    ),
+)]
+pub(crate) async fn replace(
+    DefaultVault(vault): DefaultVault,
+    uploader: Uploader,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+    headers: HeaderMap,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> ApiResult<(StatusCode, Json<RevisionView>)> {
+    authorize_revision_edit(&state, vault, vault, &uploader, id).await?;
+    replace_in_vault(&state, vault, id, &headers, multipart).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/vaults/{vault_id}/documents/{id}/revisions",
+    operation_id = "replaceVaultDocumentRevision",
+    tag = "documents",
+    params(("vault_id" = Uuid, Path), ("id" = Uuid, Path), ("Idempotency-Key" = Uuid, Header, description = "A nonnil UUID reused across retries of one request.")),
+    request_body(content = ReplaceRevisionRequest, content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "The revision previously published for this request", body = RevisionView),
+        (status = 201, description = "The new current revision", body = RevisionView),
+        crate::openapi::BadRequest,
+        (status = 401, description = "Missing or invalid authentication"),
+        (status = 403, description = "Document editing is not permitted", body = crate::error::ErrorResponse),
+        crate::openapi::NotFound,
+        (status = 409, description = "The expected revision is stale, the original cannot be changed, or the request key conflicts", body = crate::error::ErrorResponse),
+        crate::openapi::PayloadTooLarge,
+        crate::openapi::InternalError,
+    ),
+)]
+pub(crate) async fn replace_scoped(
+    DefaultVault(default): DefaultVault,
+    uploader: Uploader,
+    State(state): State<AppState>,
+    ApiPath((vault, id)): ApiPath<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> ApiResult<(StatusCode, Json<RevisionView>)> {
+    let vault = VaultId(vault);
+    authorize_revision_edit(&state, default, vault, &uploader, id).await?;
+    replace_in_vault(&state, vault, id, &headers, multipart).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/documents/{id}/revisions/{revision_id}/restore",
+    operation_id = "restoreDocumentRevision",
+    tag = "documents",
+    params(("id" = Uuid, Path), ("revision_id" = Uuid, Path), ("Idempotency-Key" = Uuid, Header, description = "A nonnil UUID reused across retries of one request.")),
+    request_body(content = RestoreRevisionRequest, content_type = "application/json"),
+    responses(
+        (status = 200, description = "The revision previously published for this request", body = RevisionView),
+        (status = 201, description = "The new current revision", body = RevisionView),
+        crate::openapi::BadRequest,
+        (status = 401, description = "Missing or invalid authentication"),
+        (status = 403, description = "Document editing is not permitted", body = crate::error::ErrorResponse),
+        crate::openapi::NotFound,
+        (status = 409, description = "The expected revision is stale, the original cannot be changed, or the request key conflicts", body = crate::error::ErrorResponse),
+        crate::openapi::PayloadTooLarge,
+        crate::openapi::InternalError,
+    ),
+)]
+pub(crate) async fn restore(
+    DefaultVault(vault): DefaultVault,
+    uploader: Uploader,
+    State(state): State<AppState>,
+    ApiPath((id, revision_id)): ApiPath<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    request: Result<Json<RestoreRevisionRequest>, JsonRejection>,
+) -> ApiResult<(StatusCode, Json<RevisionView>)> {
+    authorize_revision_edit(&state, vault, vault, &uploader, id).await?;
+    restore_in_vault(&state, vault, id, revision_id, &headers, request).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/vaults/{vault_id}/documents/{id}/revisions/{revision_id}/restore",
+    operation_id = "restoreVaultDocumentRevision",
+    tag = "documents",
+    params(("vault_id" = Uuid, Path), ("id" = Uuid, Path), ("revision_id" = Uuid, Path), ("Idempotency-Key" = Uuid, Header, description = "A nonnil UUID reused across retries of one request.")),
+    request_body(content = RestoreRevisionRequest, content_type = "application/json"),
+    responses(
+        (status = 200, description = "The revision previously published for this request", body = RevisionView),
+        (status = 201, description = "The new current revision", body = RevisionView),
+        crate::openapi::BadRequest,
+        (status = 401, description = "Missing or invalid authentication"),
+        (status = 403, description = "Document editing is not permitted", body = crate::error::ErrorResponse),
+        crate::openapi::NotFound,
+        (status = 409, description = "The expected revision is stale, the original cannot be changed, or the request key conflicts", body = crate::error::ErrorResponse),
+        crate::openapi::PayloadTooLarge,
+        crate::openapi::InternalError,
+    ),
+)]
+pub(crate) async fn restore_scoped(
+    DefaultVault(default): DefaultVault,
+    uploader: Uploader,
+    State(state): State<AppState>,
+    ApiPath((vault, id, revision_id)): ApiPath<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+    request: Result<Json<RestoreRevisionRequest>, JsonRejection>,
+) -> ApiResult<(StatusCode, Json<RevisionView>)> {
+    let vault = VaultId(vault);
+    authorize_revision_edit(&state, default, vault, &uploader, id).await?;
+    restore_in_vault(&state, vault, id, revision_id, &headers, request).await
+}
+
+#[derive(ToSchema)]
+#[allow(dead_code)]
+pub(crate) struct ReplaceRevisionRequest {
+    expected_current_revision_id: Uuid,
+    #[schema(value_type = String, format = Binary)]
+    file: Vec<u8>,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub(crate) struct RestoreRevisionRequest {
+    expected_current_revision_id: Uuid,
+}
+
+async fn authorize_revision_edit(
+    state: &AppState,
+    default: VaultId,
+    vault: VaultId,
+    uploader: &Uploader,
+    id: Uuid,
+) -> ApiResult<()> {
+    require_read_access(state, default, vault, uploader).await?;
+    let document = state
+        .document_repo
+        .find_by_id(vault, id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Document not found"))?;
+    super::trash::authorize(
+        state,
+        vault,
+        uploader,
+        VaultAction::EditDocument {
+            uploaded_by: document.uploaded_by,
+        },
+    )
+    .await
+}
+
+fn publication_key(headers: &HeaderMap) -> ApiResult<Uuid> {
+    if headers.get_all("idempotency-key").iter().count() != 1 {
+        return Err(ApiError::bad_request("Provide exactly one Idempotency-Key"));
+    }
+    super::pages::idempotency_key(headers)?
+        .ok_or_else(|| ApiError::bad_request("Idempotency-Key is required"))
+}
+
+async fn replace_in_vault(
+    state: &AppState,
+    vault: VaultId,
+    id: Uuid,
+    headers: &HeaderMap,
+    multipart: Result<Multipart, MultipartRejection>,
+) -> ApiResult<(StatusCode, Json<RevisionView>)> {
+    let key = publication_key(headers)?;
+    let mut multipart = multipart.map_err(|e| ApiError::new(e.status(), e.body_text()))?;
+    let mut file = None;
+    let mut expected_current = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| super::pages::multipart_error("Invalid revision form", e))?
+    {
+        match field.name() {
+            Some("expected_current_revision_id") if expected_current.is_none() => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|e| super::pages::multipart_error("Invalid current revision", e))?;
+                expected_current = Some(
+                    Uuid::parse_str(value.trim())
+                        .ok()
+                        .filter(|revision| !revision.is_nil())
+                        .ok_or_else(|| {
+                            ApiError::bad_request(
+                                "The expected current revision must be a nonnil UUID",
+                            )
+                        })?,
+                );
+            }
+            Some("file") if file.is_none() => {
+                let filename = field
+                    .file_name()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("upload")
+                    .to_owned();
+                let mime_type = field
+                    .content_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_owned();
+                let bytes = field.bytes().await.map_err(|e| {
+                    super::pages::multipart_error("Failed to read replacement file", e)
+                })?;
+                file = Some((filename, mime_type, bytes));
+            }
+            _ => {
+                return Err(ApiError::bad_request(
+                    "Provide one file and one expected current revision",
+                ))
+            }
+        }
+    }
+    let expected_current = expected_current
+        .ok_or_else(|| ApiError::bad_request("The expected current revision is required"))?;
+    let (filename, mime_type, bytes) =
+        file.ok_or_else(|| ApiError::bad_request("A replacement file is required"))?;
+    let upload = NewRevisionOriginal {
+        key,
+        expected_current,
+        filename,
+        mime_type,
+        bytes,
+    };
+
+    let documents = state.document_repo.clone();
+    let store = state.store.clone();
+    let result = state
+        .upload_tasks
+        .clone()
+        .spawn(
+            with_actor(
+                current_actor(),
+                with_lineage(current_lineage(), async move {
+                    replace_document_original(documents.as_ref(), store.as_ref(), vault, id, upload)
+                        .await
+                }),
+            )
+            .instrument(tracing::Span::current()),
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "Replacement upload task failed");
+            ApiError::internal("Replacement upload failed")
+        })??;
+    publication_response(state, vault, id, result).await
+}
+
+async fn restore_in_vault(
+    state: &AppState,
+    vault: VaultId,
+    id: Uuid,
+    revision: Uuid,
+    headers: &HeaderMap,
+    request: Result<Json<RestoreRevisionRequest>, JsonRejection>,
+) -> ApiResult<(StatusCode, Json<RevisionView>)> {
+    let key = publication_key(headers)?;
+    let Json(request) = request.map_err(|e| {
+        if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            ApiError::new(e.status(), e.body_text())
+        } else {
+            ApiError::bad_request("Provide the expected current revision as JSON")
+        }
+    })?;
+    let expected_current = request.expected_current_revision_id;
+    if expected_current.is_nil() {
+        return Err(ApiError::bad_request(
+            "The expected current revision must be a nonnil UUID",
+        ));
+    }
+    let result = state
+        .document_repo
+        .publish_revision(
+            vault,
+            id,
+            &RevisionPublication {
+                key,
+                expected_current,
+                source: RevisionPublicationSource::Restore { revision },
+            },
+        )
+        .await?;
+    publication_response(state, vault, id, result).await
+}
+
+async fn publication_response(
+    state: &AppState,
+    vault: VaultId,
+    document: Uuid,
+    result: RevisionPublicationResult,
+) -> ApiResult<(StatusCode, Json<RevisionView>)> {
+    let revision = state
+        .document_repo
+        .find_revision(vault, document, result.revision_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Document revision not found"))?;
+    let status = if result.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(revision.into())))
 }

@@ -51,7 +51,9 @@ pub use document_entry::{
 };
 pub use document_page::{DocumentCursor, DocumentPage, DocumentPageQuery, DocumentSort};
 pub use document_review::{DocumentReview, ReviewDecision, ReviewOrigin};
-pub use document_revision::{DocumentRevision, OriginalVerification, RevisionOriginal};
+pub use document_revision::{
+    DocumentRevision, DocumentRevisionPage, OriginalVerification, RevisionOriginal,
+};
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
 pub use file_identity::{FileIdentity, UnverifiedOriginal};
 pub use import_run::{
@@ -109,7 +111,7 @@ pub use vault::{
 };
 pub use webhook::{
     NamedRef, WebhookDocument, WebhookEntry, WebhookIngest, WebhookMetadata, WebhookPayload,
-    WebhookProcessing, WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
+    WebhookProcessing, WebhookSavedView, WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
 };
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,

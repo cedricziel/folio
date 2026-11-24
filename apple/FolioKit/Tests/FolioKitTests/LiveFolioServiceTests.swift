@@ -389,6 +389,75 @@ private let documentJSON = """
         _ = try await makeService().scoped(to: vault).documentPage(query: view.query, cursor: nil)
     }
 
+    @Test func savedCustomFieldFilterUsesVersionThreeAndRequiresBrowseSupport() async throws {
+        let vault = UUID(), field = UUID()
+        let fieldID = field.uuidString.lowercased()
+        let metadata = #"{"field_id":"\#(fieldID)","value":{"kind":"boolean","value":false}}"#
+        let response = Data(
+            savedViewJSON.replacingOccurrences(
+                of: #""version":1,"filters":{"reviewed":false"#,
+                with: #""version":3,"filters":{"metadata_exact":\#(metadata),"inbox_only":true"#
+            ).utf8
+        )
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "POST")
+            let object = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let query = object?["query"] as? [String: Any]
+            let filters = query?["filters"] as? [String: Any]
+            let exact = filters?["metadata_exact"] as? [String: Any]
+            #expect(query?["version"] as? Int == 3)
+            #expect(filters?["inbox_only"] as? Bool == true)
+            #expect(exact?["field_id"] as? String == fieldID)
+            #expect((exact?["value"] as? [String: Any])?["value"] as? Bool == false)
+            return .init(status: 201, body: response)
+        }
+        let service = makeService().scoped(to: vault)
+        let exact = ExactCustomFieldFilter(fieldID: field, value: .boolean(false))
+        let view = try await service.saveView(
+            .init(name: "Unpaid", query: .init(filter: .init(inboxOnly: true, metadataExact: exact)))
+        )
+        #expect(view.query.filter.metadataExact == exact)
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Saved-View-Query-Version") == "3")
+            return .init(body: response)
+        }
+        let reopened = try await service.savedView(id: view.id)
+        #expect(reopened.query == view.query)
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url?.path == "/api/documents/browse")
+            #expect(request.url?.query == nil)
+            let object = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let query = object?["query"] as? [String: Any]
+            let filters = query?["filters"] as? [String: Any]
+            let exact = filters?["metadata_exact"] as? [String: Any]
+            #expect(exact?["field_id"] as? String == fieldID)
+            #expect((exact?["value"] as? [String: Any])?["value"] as? Bool == false)
+            return .init(
+                body: Data(#"{"vault_id":"\#(vault)","documents":[],"supports_document_review_filters":true}"#.utf8)
+            )
+        }
+        _ = try await service.documentPage(query: reopened.query, cursor: nil)
+        StubURLProtocol.handler = { _, _ in
+            .init(status: 405, body: Data())
+        }
+        await #expect(throws: FolioError.server(status: 501, message: "This server does not support custom field filters.")) {
+            try await service.documentPage(query: reopened.query, cursor: nil)
+        }
+    }
+
+    @Test func documentListsRejectExactCustomFieldFiltersBeforeMakingARequest() async {
+        StubURLProtocol.handler = { _, _ in
+            Issue.record("List endpoints cannot apply exact custom field filters.")
+            return .init(status: 500)
+        }
+        let service = makeService().scoped(to: UUID())
+        let filter = DocumentFilter(metadataExact: .init(fieldID: UUID(), value: .boolean(false)))
+        let error = FolioError.server(status: 501, message: "Custom field filters require the document browse API.")
+        await #expect(throws: error) { try await service.documents(filter: filter) }
+        await #expect(throws: error) { try await service.documentIDs(filter: filter) }
+    }
+
     @Test func renamingViewOmitsUnchangedQuery() async throws {
         let vault = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
@@ -1086,6 +1155,63 @@ private let documentJSON = """
         )
         let document = try await makeService().upload(file)
         #expect(document.originalFilename == "bill.pdf")
+    }
+
+    @Test func revisionHistoryAndDownloadKeepTheSelectedVaultAndRevision() async throws {
+        let id = UUID()
+        let vault = UUID()
+        let revisionID = UUID()
+        let path = "/api/documents/\(id.uuidString.lowercased())/revisions"
+        let service = makeService(token: FixedToken(value: "token")).scoped(to: vault)
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.httpMethod == "GET")
+            #expect(request.url?.path == path)
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer token")
+            #expect(request.url?.query?.contains("before=3") == true)
+            let json = """
+                {"revisions":[{"id":"\(revisionID.uuidString)","number":2,"is_current":false,
+                "created_at":"2026-11-22T19:35:00.123456789Z","created_by":"editor",
+                "original":{"filename":"../../older.pdf","mime_type":"application/pdf",
+                "verification":"verified","byte_size":17}}],"next_before":2}
+                """
+            return .init(body: Data(json.utf8))
+        }
+        let history = try await service.fileRevisions(for: id, before: 3)
+        let page = try #require(history)
+        let revision = try #require(page.revisions.first)
+        #expect(page.nextBefore == 2)
+        #expect(revision.id == revisionID)
+        #expect(revision.number == 2)
+        #expect(!revision.isCurrent)
+        #expect(revision.verification == .verified)
+        #expect(revision.createdBy == "editor")
+        #expect(revision.byteSize == 17)
+
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "\(path)/\(revisionID.uuidString.lowercased())/download")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer token")
+            return .init(contentType: "application/pdf", body: Data("original revision".utf8))
+        }
+        let file = try await service.downloadFile(for: id, revision: revision)
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        #expect(file.lastPathComponent == "older.pdf")
+        #expect(try Data(contentsOf: file) == Data("original revision".utf8))
+    }
+
+    @Test func revisionHistoryTreatsAnAbsentEndpointAsUnsupported() async throws {
+        StubURLProtocol.handler = { _, _ in .init(status: 404, contentType: "text/plain") }
+        let service = makeService().scoped(to: UUID())
+        let page = try await service.fileRevisions(for: UUID(), before: nil)
+        #expect(page == nil)
+
+        StubURLProtocol.handler = { _, _ in
+            .init(status: 404, body: Data(#"{"error":"Document not found"}"#.utf8))
+        }
+        await #expect(throws: FolioError.server(status: 404, message: "Document not found")) {
+            _ = try await service.fileRevisions(for: UUID(), before: nil)
+        }
     }
 
     @Test func repeatedDownloadsKeepEarlierContentsReadable() async throws {

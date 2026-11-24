@@ -13,7 +13,8 @@ use super::{Importer, SearchServiceFacade};
 use crate::error::{Error, Result};
 use crate::models::{
     Correspondent, CreateCorrespondent, CreateDocumentType, CreateTag, Document, DocumentFilter,
-    DocumentSource, DocumentType, Id, Tag, UpdateDocument, UserId, VaultId,
+    DocumentRevisionPage, DocumentSource, DocumentType, Id, RevisionOriginal, Tag, UpdateDocument,
+    UserId, VaultId,
 };
 use crate::ports::{
     CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentStore,
@@ -318,6 +319,47 @@ impl LibraryService {
             }
             None => Ok(None),
         }
+    }
+
+    pub async fn revision_page(
+        &self,
+        vault: VaultId,
+        id: Id,
+        before: Option<i64>,
+        limit: Option<u32>,
+    ) -> Result<DocumentRevisionPage> {
+        self.documents
+            .revision_page(vault, id, before, limit)
+            .await?
+            .ok_or_else(|| Error::NotFound {
+                entity_type: "Document",
+                id: id.to_string(),
+            })
+    }
+
+    pub async fn read_revision_file(
+        &self,
+        vault: VaultId,
+        id: Id,
+        revision_id: Id,
+        max_bytes: usize,
+    ) -> Result<(RevisionOriginal, Vec<u8>)> {
+        let original = self
+            .documents
+            .find_revision(vault, id, revision_id)
+            .await?
+            .ok_or_else(|| Error::NotFound {
+                entity_type: "Document revision",
+                id: revision_id.to_string(),
+            })?
+            .original;
+        let bytes = self
+            .files
+            .get(&original.storage_key)
+            .await?
+            .into_bytes_limited(max_bytes)
+            .await?;
+        Ok((original, bytes))
     }
 
     /// Update metadata, rejecting missing names under [`VocabularyPolicy::ExistingOnly`].

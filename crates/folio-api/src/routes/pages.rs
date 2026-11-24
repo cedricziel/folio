@@ -916,7 +916,10 @@ pub(crate) fn idempotency_key(headers: &HeaderMap) -> ApiResult<Option<Uuid>> {
 }
 
 /// Keeps the status the multipart parser chose, such as 413 for an oversized body
-fn multipart_error(context: &str, e: axum::extract::multipart::MultipartError) -> ApiError {
+pub(super) fn multipart_error(
+    context: &str,
+    e: axum::extract::multipart::MultipartError,
+) -> ApiError {
     error!("Multipart error: {}", e);
     ApiError::new(e.status(), format!("{context}: {}", e.body_text()))
 }

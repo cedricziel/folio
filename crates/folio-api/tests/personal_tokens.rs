@@ -265,6 +265,21 @@ async fn explicit_credentials_override_cookies_and_are_scoped_in_optional_auth()
     assert_eq!(
         h.app
             .clone()
+            .oneshot(req(
+                "POST",
+                "/api/documents/browse",
+                "",
+                token,
+                json!({"query":{"version":1,"filters":{"search_query":"invoice"}}}),
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        h.app
+            .clone()
             .oneshot(req("GET", "/api/sources", &alice, token, Value::Null))
             .await
             .unwrap()
@@ -332,7 +347,7 @@ async fn read_tokens_can_request_document_thumbnails() {
 }
 
 #[tokio::test]
-async fn read_tokens_can_list_and_download_revisions_in_visible_vaults() {
+async fn revision_reads_allow_read_tokens_and_mutations_require_write_scope() {
     let h = harness_requiring_login().await;
     let cookie = account(&h, "history-alice").await;
     let user = UserId::from("history-alice");
@@ -383,13 +398,31 @@ async fn read_tokens_can_list_and_download_revisions_in_visible_vaults() {
         assert_eq!(response.status(), StatusCode::OK, "{path}");
     }
 
-    let write = h
-        .app
-        .clone()
-        .oneshot(req("POST", &scoped_path, "", token, Value::Null))
-        .await
-        .unwrap();
-    assert_eq!(write.status(), StatusCode::FORBIDDEN);
+    let writer = create(
+        &h, &cookie, json!({"name":"Revision writer","audience":"api","scopes":["documents:write"],"expires_in_days":30}),
+    ).await;
+    let writer = writer["token"].as_str().unwrap();
+    for path in [
+        default_path.clone(),
+        scoped_path.clone(),
+        format!("{default_path}/{revision}/restore"),
+        format!("{scoped_path}/{revision}/restore"),
+    ] {
+        let request = h
+            .app
+            .clone()
+            .oneshot(req("POST", &path, "", token, Value::Null))
+            .await
+            .unwrap();
+        assert_eq!(request.status(), StatusCode::FORBIDDEN, "{path}");
+        let request = h
+            .app
+            .clone()
+            .oneshot(req("POST", &path, "", writer, Value::Null))
+            .await
+            .unwrap();
+        assert_eq!(request.status(), StatusCode::BAD_REQUEST, "{path}");
+    }
 }
 
 #[tokio::test]

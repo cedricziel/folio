@@ -47,6 +47,10 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     }
 
     public func scoped(to vaultID: UUID) -> any FolioService {
+        scopedClient(to: vaultID)
+    }
+
+    private func scopedClient(to vaultID: UUID) -> LiveFolioService {
         LiveFolioService(
             baseURL: baseURL, tokenProvider: tokenProvider, session: session, telemetry: telemetry,
             downloadDirectory: downloadDirectory, vaultID: vaultID
@@ -142,7 +146,7 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
             try await client.listSavedViews(
                 path: .init(vaultId: vaultID.uuidString.lowercased()),
                 query: .init(after: after?.uuidString.lowercased(), limit: 50),
-                headers: .init(xFolioSavedViewQueryVersion: 2)
+                headers: .init(xFolioSavedViewQueryVersion: 3)
             ).ok.body.json.map { try Self.savedView($0) }
         }
     }
@@ -152,7 +156,8 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
         return try await call("saved_views.get") {
             try await Self.savedView(
                 client.getSavedView(
-                    path: .init(vaultId: vaultID.uuidString.lowercased(), id: id.uuidString.lowercased())
+                    path: .init(vaultId: vaultID.uuidString.lowercased(), id: id.uuidString.lowercased()),
+                    headers: .init(xFolioSavedViewQueryVersion: 3)
                 ).ok.body.json
             )
         }
@@ -181,6 +186,7 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
             return try await Self.savedView(
                 client.updateSavedView(
                     path: .init(vaultId: vaultID.uuidString.lowercased(), id: id.uuidString.lowercased()),
+                    headers: .init(xFolioSavedViewQueryVersion: 3),
                     body: .json(patch)
                 ).ok.body.json
             )
@@ -196,22 +202,29 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
         }
     }
 
-    private static func savedViewInput(_ draft: SavedViewDraft) -> Components.Schemas.SavedViewInput {
+    private static func savedQueryInput(_ browse: DocumentBrowseQuery) -> Components.Schemas.SavedViewQuery {
         var filters = Components.Schemas.DocumentFilter()
-        filters.correspondentId = draft.query.filter.correspondentID?.uuidString.lowercased()
-        filters.documentTypeId = draft.query.filter.documentTypeID?.uuidString.lowercased()
-        filters.tagIds = draft.query.filter.tagIDs.map { $0.uuidString.lowercased() }
-        filters.searchQuery = draft.query.text
-        filters.createdAfter = draft.query.filter.createdAfter
-        filters.createdBefore = draft.query.filter.createdBefore
-        filters.reviewed = draft.query.filter.reviewed
-        filters.documentDateFrom = draft.query.filter.documentDateFrom?.rawValue
-        filters.documentDateTo = draft.query.filter.documentDateTo?.rawValue
-        filters.inboxOnly = draft.query.filter.inboxOnly ? true : nil
-        var query = Components.Schemas.SavedViewQuery(version: draft.query.filter.inboxOnly ? 2 : 1)
+        filters.correspondentId = browse.filter.correspondentID?.uuidString.lowercased()
+        filters.documentTypeId = browse.filter.documentTypeID?.uuidString.lowercased()
+        filters.tagIds = browse.filter.tagIDs.map { $0.uuidString.lowercased() }
+        filters.searchQuery = browse.text
+        filters.createdAfter = browse.filter.createdAfter
+        filters.createdBefore = browse.filter.createdBefore
+        filters.reviewed = browse.filter.reviewed
+        filters.documentDateFrom = browse.filter.documentDateFrom?.rawValue
+        filters.documentDateTo = browse.filter.documentDateTo?.rawValue
+        filters.inboxOnly = browse.filter.inboxOnly ? true : nil
+        filters.metadataExact = browse.filter.metadataExact.map(Self.exactMetadataInput)
+        var query = Components.Schemas.SavedViewQuery(
+            version: filters.metadataExact != nil ? 3 : (browse.filter.inboxOnly ? 2 : 1)
+        )
         query.filters = filters
-        query.sort = .init(rawValue: draft.query.sort.rawValue)
-        var input = Components.Schemas.SavedViewInput(name: draft.name, query: query)
+        query.sort = .init(rawValue: browse.sort.rawValue)
+        return query
+    }
+
+    private static func savedViewInput(_ draft: SavedViewDraft) -> Components.Schemas.SavedViewInput {
+        var input = Components.Schemas.SavedViewInput(name: draft.name, query: Self.savedQueryInput(draft.query))
         input.visibility = .init(rawValue: draft.visibility.rawValue)
         input.presentation = .init(rawValue: draft.presentation.rawValue)
         return input
@@ -220,7 +233,8 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     private static func savedView(_ value: Components.Schemas.SavedView) throws -> SavedView {
         let filters = value.query.filters ?? .init()
         let inboxOnly = filters.inboxOnly == true
-        guard value.query.version == (inboxOnly ? 2 : 1),
+        let expectedVersion = filters.metadataExact != nil ? 3 : (inboxOnly ? 2 : 1)
+        guard Int(value.query.version) == expectedVersion,
             let visibility = SavedView.Visibility(rawValue: value.visibility.rawValue),
             let presentation = SavedView.Presentation(rawValue: value.presentation.rawValue)
         else { throw FolioError.unreadableResponse }
@@ -232,7 +246,12 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
                 documentTypeID: filters.documentTypeId.map(Self.uuid),
                 createdAfter: filters.createdAfter, createdBefore: filters.createdBefore,
                 reviewed: filters.reviewed, documentDateFrom: Self.documentDate(filters.documentDateFrom),
-                documentDateTo: Self.documentDate(filters.documentDateTo), inboxOnly: inboxOnly
+                documentDateTo: Self.documentDate(filters.documentDateTo), inboxOnly: inboxOnly,
+                metadataExact: filters.metadataExact.map { filter in
+                    try ExactCustomFieldFilter(
+                        fieldID: Self.uuid(filter.fieldId), value: CustomFieldValue(filter.value)
+                    )
+                }
             ), sort: .init(rawValue: value.query.sort?.rawValue ?? "newest") ?? .newest
         )
         return try SavedView(
@@ -241,6 +260,10 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
             createdAt: value.createdAt, updatedAt: value.updatedAt,
             createdBy: value.createdBy, updatedBy: value.updatedBy
         )
+    }
+
+    private static func exactMetadataInput(_ filter: ExactCustomFieldFilter) -> Components.Schemas.MetadataExactFilter {
+        .init(fieldId: filter.fieldID.uuidString.lowercased(), value: filter.value.apiValue)
     }
 
     public func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) async throws -> DocumentEntryPage
@@ -296,18 +319,31 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     public func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage {
         try await call("documents.browse", attributes: query.telemetryAttributes(cursor: cursor)) {
             let filter = query.filter
-            let input = Operations.BrowseDocuments.Input.Query(
-                inboxOnly: filter.inboxOnly ? true : nil,
-                q: query.text.isEmpty ? nil : query.text,
-                limit: query.limit, sort: query.sort.rawValue, cursor: cursor,
-                reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
-                documentDateTo: filter.documentDateTo?.rawValue,
-                correspondentId: filter.correspondentID?.uuidString.lowercased(),
-                documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
-                tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
-                createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
-            )
-            let page = try await client.browseDocuments(query: input).ok.body.json
+            let page: Components.Schemas.BrowseResponse
+            if filter.metadataExact != nil {
+                do {
+                    page = try await mappedCall {
+                        try await client.browseFilteredDocuments(
+                            body: .json(.init(cursor: cursor, limit: query.limit, query: Self.savedQueryInput(query)))
+                        ).ok.body.json
+                    }
+                } catch let FolioError.server(status, _) where status == 405 {
+                    throw FolioError.server(status: 501, message: "This server does not support custom field filters.")
+                }
+            } else {
+                let input = Operations.BrowseDocuments.Input.Query(
+                    inboxOnly: filter.inboxOnly ? true : nil,
+                    q: query.text.isEmpty ? nil : query.text,
+                    limit: query.limit, sort: query.sort.rawValue, cursor: cursor,
+                    reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
+                    documentDateTo: filter.documentDateTo?.rawValue,
+                    correspondentId: filter.correspondentID?.uuidString.lowercased(),
+                    documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
+                    tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
+                    createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
+                )
+                page = try await client.browseDocuments(query: input).ok.body.json
+            }
             try requireReviewFilters(filter, supported: page.supportsDocumentReviewFilters)
             return try DocumentPage(
                 vaultID: Self.uuid(page.vaultId), documents: page.documents.map { try Document($0) },
@@ -355,7 +391,8 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     }
 
     public func documents(filter: DocumentFilter) async throws -> [Document] {
-        try await call("documents.filter") {
+        try requireDocumentListFilters(filter)
+        return try await call("documents.filter") {
             let query = Operations.ListDocuments.Input.Query(
                 reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
                 documentDateTo: filter.documentDateTo?.rawValue,
@@ -373,6 +410,7 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
     /// Servers without the IDs route answer 404, or 400 where `ids` is read as a document ID; a proxy or an older
     /// token policy may answer 403 or 405. All of those fall back to the full list.
     public func documentIDs(filter: DocumentFilter) async throws -> [Document.ID] {
+        try requireDocumentListFilters(filter)
         do {
             return try await call("documents.ids") {
                 let query = Operations.ListDocumentIds.Input.Query(
@@ -387,6 +425,12 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
             }
         } catch let FolioError.server(status, _) where [400, 403, 404, 405].contains(status) {
             return try await documents(filter: filter).map(\.id)
+        }
+    }
+
+    private func requireDocumentListFilters(_ filter: DocumentFilter) throws {
+        if filter.metadataExact != nil {
+            throw FolioError.server(status: 501, message: "Custom field filters require the document browse API.")
         }
     }
 
@@ -586,17 +630,59 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
         }
     }
 
-    public func downloadFile(for document: Document) async throws -> URL {
-        try await call("documents.downloadFile") { try await downloadFileRequest(for: document) }
+    public func fileRevisions(for documentID: Document.ID, before: Int64?) async throws -> DocumentFileRevisionPage? {
+        do {
+            return try await call("documents.fileRevisions") {
+                let page = try await client.listDocumentRevisions(
+                    path: .init(id: documentID.uuidString.lowercased()), query: .init(before: before)
+                ).ok.body.json
+                let revisions = try page.revisions.map { revision in
+                    let status = revision.original.verification.rawValue
+                    guard let verification = DocumentFileRevision.Verification(rawValue: status) else {
+                        throw FolioError.unreadableResponse
+                    }
+                    return try DocumentFileRevision(
+                        id: Self.uuid(revision.id), number: revision.number, isCurrent: revision.isCurrent,
+                        createdAt: revision.createdAt, createdBy: revision.createdBy,
+                        restoredFromRevisionID: revision.restoredFromRevisionId.map(Self.uuid),
+                        filename: revision.original.filename,
+                        mimeType: revision.original.mimeType, verification: verification,
+                        byteSize: revision.original.byteSize
+                    )
+                }
+                return DocumentFileRevisionPage(revisions: revisions, nextBefore: page.nextBefore)
+            }
+        } catch FolioError.server(status: 404, message: nil) {
+            return nil
+        }
     }
 
-    private func downloadFileRequest(for document: Document) async throws -> URL {
-        let request = URLRequest(url: endpoint("api/documents/\(document.id.uuidString.lowercased())/download"))
+    public func downloadFile(for document: Document) async throws -> URL {
+        try await call("documents.downloadFile") {
+            try await downloadFileRequest(
+                path: "api/documents/\(document.id.uuidString.lowercased())/download",
+                filename: document.originalFilename, mimeType: document.mimeType
+            )
+        }
+    }
+
+    public func downloadFile(for documentID: Document.ID, revision: DocumentFileRevision) async throws -> URL {
+        try await call("documents.downloadRevision") {
+            let documentPath = "api/documents/\(documentID.uuidString.lowercased())"
+            return try await downloadFileRequest(
+                path: "\(documentPath)/revisions/\(revision.id.uuidString.lowercased())/download",
+                filename: revision.filename, mimeType: revision.mimeType
+            )
+        }
+    }
+
+    private func downloadFileRequest(path: String, filename: String?, mimeType: String?) async throws -> URL {
+        let request = URLRequest(url: endpoint(path))
         let (temporary, response) = try await authorizedTransfer(request) { try await session.download(for: $0) }
         defer { try? FileManager.default.removeItem(at: temporary) }
         try check(response, body: Self.prefix(of: temporary, upTo: 65_536))
 
-        let filename = Self.safeFilename(document.originalFilename, mimeType: document.mimeType)
+        let filename = Self.safeFilename(filename, mimeType: mimeType)
         let directory =
             downloadDirectory
             ?? FileManager.default.temporaryDirectory
@@ -858,6 +944,71 @@ extension LiveFolioService: DeviceRegistrationService {
     }
 }
 
+extension LiveFolioService: WorkflowTriggerEditingService {
+    public func workflowTriggerChoices(vaultID: UUID) async throws -> [WorkflowTriggerChoice] {
+        let scoped = scopedClient(to: vaultID)
+        return try await scoped.call("workflows.list_triggers") {
+            let definitions = try await scoped.client.listWorkflowTriggers().ok.body.json
+            return try definitions.map { definition in
+                guard let target = WorkflowTriggerChoice.Target(rawValue: definition.target.rawValue) else {
+                    throw FolioError.unreadableResponse
+                }
+                return WorkflowTriggerChoice(
+                    id: definition.eventType, title: definition.label, target: target,
+                    conditionFields: definition.conditionFields.map { field in
+                        .init(id: field.key, title: field.label, valueType: field.valueType.rawValue)
+                    }
+                )
+            }
+        }
+    }
+
+    public func workflowConfiguration(vaultID: UUID, workflowID: UUID) async throws
+        -> WorkflowConfigurationSummary
+    {
+        let scoped = scopedClient(to: vaultID)
+        let id = workflowID.uuidString.lowercased()
+        return try await scoped.call("workflows.get") {
+            let workflow = try await Self.workflowSummary(scoped.client.getWorkflow(path: .init(id: id)).ok.body.json)
+            guard workflow.id == workflowID, workflow.vaultID == vaultID, workflow.deletedAt == nil else {
+                throw FolioError.unreadableResponse
+            }
+            return workflow
+        }
+    }
+
+    public func changeWorkflowTrigger(_ workflow: WorkflowConfigurationSummary, to triggerID: String) async throws
+        -> WorkflowConfigurationSummary
+    {
+        guard workflow.deletedAt == nil, let revision = workflow.revision,
+            let trigger = Components.Schemas.WorkflowTrigger(rawValue: triggerID)
+        else { throw FolioError.unreadableResponse }
+        let scoped = scopedClient(to: workflow.vaultID)
+        let id = workflow.id.uuidString.lowercased()
+        return try await scoped.call("workflows.change_trigger") {
+            let updated = try await scoped.client.updateWorkflowTrigger(
+                path: .init(id: id),
+                body: .json(.init(expectedRevision: revision, trigger: trigger))
+            ).ok.body.json
+            let result = try Self.workflowSummary(updated)
+            guard result.vaultID == workflow.vaultID, result.id == workflow.id,
+                result.deletedAt == nil, result.trigger == triggerID
+            else {
+                throw FolioError.unreadableResponse
+            }
+            return result
+        }
+    }
+
+    private static func workflowSummary(_ value: Components.Schemas.Workflow) throws -> WorkflowConfigurationSummary {
+        .init(
+            id: try uuid(value.id), vaultID: try uuid(value.vaultId), name: value.name, enabled: value.enabled,
+            trigger: value.trigger.rawValue, createdAt: value.createdAt, updatedAt: value.updatedAt,
+            deletedAt: value.deletedAt, createdBy: value.createdBy, updatedBy: value.updatedBy, revision: value.revision
+        )
+    }
+}
+
 extension LiveFolioService {
     private var metadataVault: String {
         get throws {
@@ -1114,11 +1265,15 @@ extension LiveFolioService: CustomMetadataWorkflowService {
                 kind: draft.kind.flatMap { Components.Schemas.MetadataKind(rawValue: $0.rawValue) },
                 state: draft.state.flatMap { Components.Schemas.MetadataChangeState(rawValue: $0.rawValue) }
             )
+            let event = Components.Schemas.WorkflowEventConditions(metadata: conditions)
+            let payload = try JSONDecoder().decode(
+                WorkflowConditionsPayload.self, from: JSONEncoder().encode(["event": event])
+            )
             let action = Components.Schemas.WorkflowAction.case1(.init(_type: .webhook, url: draft.webhook))
             _ = try await client.createWorkflow(
                 body: .json(
                     .init(
-                        actions: [action], conditions: .init(event: .init(metadata: conditions)),
+                        actions: [action], conditions: payload,
                         enabled: draft.enabled, name: draft.name, trigger: trigger
                     ))
             ).created.body.json

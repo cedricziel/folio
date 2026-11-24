@@ -1865,6 +1865,89 @@
             "bearerAuth": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "browseFilteredDocuments",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowseFilteredInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One page matching the versioned query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowseResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/ids": {
@@ -3788,6 +3871,138 @@
             "bearerAuth": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "replaceDocumentRevision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "A nonnil UUID reused across retries of one request.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The revision previously published for this request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionView"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new current revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The expected revision is stale, the original cannot be changed, or the request key conflicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The upload exceeds the 50 MB limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/{id}/revisions/{revision_id}/download": {
@@ -3854,6 +4069,149 @@
           },
           "404": {
             "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/documents/{id}/revisions/{revision_id}/restore": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "restoreDocumentRevision",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "A nonnil UUID reused across retries of one request.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The revision previously published for this request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionView"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new current revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The expected revision is stale, the original cannot be changed, or the request key conflicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The upload exceeds the 50 MB limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -5997,6 +6355,145 @@
             "bearerAuth": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "replaceVaultDocumentRevision",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "A nonnil UUID reused across retries of one request.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplaceRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The revision previously published for this request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionView"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new current revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "description": "Document editing is not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The expected revision is stale, the original cannot be changed, or the request key conflicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The upload exceeds the 50 MB limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/vaults/{vault_id}/documents/{id}/revisions/{revision_id}/download": {
@@ -6063,6 +6560,156 @@
           },
           "404": {
             "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/documents/{id}/revisions/{revision_id}/restore": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "restoreVaultDocumentRevision",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "revision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "A nonnil UUID reused across retries of one request.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The revision previously published for this request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionView"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new current revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication"
+          },
+          "403": {
+            "description": "Document editing is not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The expected revision is stale, the original cannot be changed, or the request key conflicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The upload exceeds the 50 MB limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -7901,6 +8548,20 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Saved-View-Query-Version",
+            "in": "header",
+            "description": "Maximum saved query version the client can read. Defaults to 2.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -8047,6 +8708,20 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Saved-View-Query-Version",
+            "in": "header",
+            "description": "Maximum saved query version the client can read. Defaults to 2.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
             }
           }
         ],
@@ -8821,6 +9496,112 @@
         ]
       }
     },
+    "/api/workflows/{id}/trigger": {
+      "patch": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Change a workflow's trigger while retaining its other configuration.",
+        "operationId": "updateWorkflowTrigger",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowTriggerUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated workflow; webhook secrets are masked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The workflow changed after the revision was read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/events": {
       "get": {
         "tags": [
@@ -8970,6 +9751,32 @@
             "$ref": "#/components/schemas/ArchiveStatus"
           }
         }
+      },
+      "BrowseFilteredInput": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "query": {
+            "$ref": "#/components/schemas/SavedViewQuery"
+          }
+        },
+        "additionalProperties": false
       },
       "BrowseResponse": {
         "type": "object",
@@ -9830,6 +10637,10 @@
           "inbox_only": {
             "type": "boolean",
             "description": "Exclude filed documents while retaining documents with active or failed processing."
+          },
+          "metadata_exact": {
+            "$ref": "#/components/schemas/MetadataExactFilter",
+            "description": "Match one custom field's exact typed value."
           },
           "reviewed": {
             "type": [
@@ -10701,6 +11512,23 @@
           "cleared"
         ]
       },
+      "MetadataExactFilter": {
+        "type": "object",
+        "required": [
+          "field_id",
+          "value"
+        ],
+        "properties": {
+          "field_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "value": {
+            "$ref": "#/components/schemas/MetadataValue"
+          }
+        },
+        "additionalProperties": false
+      },
       "MetadataField": {
         "type": "object",
         "required": [
@@ -11420,6 +12248,35 @@
           "sandbox",
           "production"
         ]
+      },
+      "ReplaceRevisionRequest": {
+        "type": "object",
+        "required": [
+          "expected_current_revision_id",
+          "file"
+        ],
+        "properties": {
+          "expected_current_revision_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "file": {
+            "type": "string",
+            "format": "binary"
+          }
+        }
+      },
+      "RestoreRevisionRequest": {
+        "type": "object",
+        "required": [
+          "expected_current_revision_id"
+        ],
+        "properties": {
+          "expected_current_revision_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       },
       "RevisionOriginalView": {
         "type": "object",
@@ -12777,6 +13634,9 @@
           "processing": {
             "$ref": "#/components/schemas/WebhookProcessing"
           },
+          "saved_view": {
+            "$ref": "#/components/schemas/WebhookSavedView"
+          },
           "source_event": {
             "oneOf": [
               {
@@ -12848,6 +13708,48 @@
           },
           "stage": {
             "$ref": "#/components/schemas/ProcessingEventStage"
+          }
+        }
+      },
+      "WebhookSavedView": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "saved_view_id",
+          "name",
+          "visibility",
+          "presentation"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/ViewPresentation"
+          },
+          "saved_view_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/ViewVisibility"
           }
         }
       },
@@ -12928,6 +13830,11 @@
           },
           "name": {
             "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Revision to send when changing the trigger."
           },
           "trigger": {
             "$ref": "#/components/schemas/WorkflowTrigger"
@@ -13585,6 +14492,9 @@
           "document_comment.created",
           "document_comment.updated",
           "document_comment.deleted",
+          "saved_view.created",
+          "saved_view.updated",
+          "saved_view.deleted",
           "metadata_field.created",
           "metadata_field.updated",
           "metadata_field.deleted",
@@ -13653,6 +14563,24 @@
           },
           "target": {
             "$ref": "#/components/schemas/WorkflowTarget"
+          }
+        }
+      },
+      "WorkflowTriggerUpdate": {
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "trigger"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Revision returned by the workflow read used to start editing.",
+            "minimum": 1
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/WorkflowTrigger"
           }
         }
       }

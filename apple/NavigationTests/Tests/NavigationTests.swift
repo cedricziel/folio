@@ -182,25 +182,30 @@ import XCTest
     func testALateSavedViewResponseDoesNotOverrideALaterChoice() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
+        let savedViewID = UUID()
+        app.launchEnvironment["FOLIO_FIXTURE_SAVED_VIEW_ID"] = savedViewID.uuidString
         app.launchArguments = ["--saved-views", "--slow-saved-view"]
         app.launch()
         try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
-        let saveCurrent = app.buttons["Save current view"]
-        XCTAssertTrue(saveCurrent.waitForExistence(timeout: 10), app.debugDescription)
-        saveCurrent.tap()
-        let name = app.textFields["Name"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
-        name.tap()
-        name.typeText("Saved fixture")
-        app.buttons["Save"].tap()
-        XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.navigationBars["All documents"].waitForExistence(timeout: 10), app.debugDescription)
         returnToSidebar(in: app)
-        app.buttons["Inbox"].firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
-        returnToSidebar(in: app)
-        app.buttons["Saved fixture"].firstMatch.tap()
-        returnToSidebar(in: app)
-        app.buttons["Inbox"].firstMatch.tap()
+        let view = app.buttons["workspace-saved-view-\(savedViewID)"]
+        XCTAssertTrue(view.waitForExistence(timeout: 5), "The sidebar must show the seeded saved view.")
+        view.tap()
+        let inbox = app.buttons["workspace-destination-inbox"]
+        if !inbox.isHittable {
+            let back = app.buttons["BackButton"]
+            if back.isHittable {
+                back.tap()
+            } else {
+                swipeBack(in: app)
+            }
+        }
+        guard inbox.waitForExistence(timeout: 5) else {
+            XCTFail("Inbox must be available while the saved view loads.")
+            return
+        }
+        inbox.tap()
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertFalse(
             app.navigationBars["Saved fixture"].waitForExistence(timeout: 14),
@@ -217,6 +222,22 @@ import XCTest
         first.tap()
         XCTAssertTrue(app.navigationBars["First fixture"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.buttons["share-document"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    func testFileHistoryReturnsToDocumentOnOlderServers() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launch()
+        let first = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "First fixture")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
+        first.tap()
+        let history = app.buttons["File history"]
+        XCTAssertTrue(history.waitForExistence(timeout: 5), app.debugDescription)
+        history.tap()
+        let unavailable = app.staticTexts["This server does not support file history."]
+        XCTAssertTrue(unavailable.waitForExistence(timeout: 5), app.debugDescription)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["First fixture"].waitForExistence(timeout: 5), app.debugDescription)
     }
 
     func testWideWindowKeepsDocumentListBesidePreview() throws {
@@ -249,8 +270,10 @@ import XCTest
         XCTAssertFalse(pages.exists)
 
         app.buttons["Simulate remote edit"].tap()
-        let top = first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        top.press(forDuration: 0.1, thenDragTo: top.withOffset(CGVector(dx: 0, dy: 500)))
+        let documentList = app.collectionViews.containing(.button, identifier: first.identifier).firstMatch
+        let pullStart = documentList.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.4))
+        let pullEnd = documentList.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.85))
+        pullStart.press(forDuration: 0.05, thenDragTo: pullEnd)
 
         let renamed = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Electricity bill")).firstMatch
         XCTAssertTrue(renamed.waitForExistence(timeout: 10), app.debugDescription)
@@ -378,6 +401,10 @@ import XCTest
             back.tap()
             return
         }
+        swipeBack(in: app)
+    }
+
+    private func swipeBack(in app: XCUIApplication) {
         let window = app.windows.firstMatch
         let edge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
         edge.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))

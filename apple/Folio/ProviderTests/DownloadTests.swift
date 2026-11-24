@@ -106,7 +106,7 @@ final class DownloadTests: XCTestCase {
             _ = provider.fetchContents(
                 for: FolioItemID.document(downloadID, in: .scoped(downloadVaultID, .all)).providerIdentifier,
                 version: nil, request: NSFileProviderRequest()
-            ) { url, item, error in
+            ) { @Sendable url, item, error in
                 if let error {
                     continuation.resume(throwing: error); return
                 }
@@ -144,7 +144,7 @@ final class DownloadTests: XCTestCase {
         let progress = provider(path: prefix).fetchContents(
             for: FolioItemID.document(downloadID, in: .scoped(downloadVaultID, .all)).providerIdentifier,
             version: nil, request: NSFileProviderRequest()
-        ) { url, item, error in
+        ) { @Sendable url, item, error in
             XCTAssertNil(url)
             XCTAssertNil(item)
             XCTAssertEqual((error as NSError?)?.domain, NSCocoaErrorDomain)

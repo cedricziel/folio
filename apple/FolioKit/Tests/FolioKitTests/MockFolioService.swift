@@ -57,9 +57,7 @@ actor MockFolioService: FolioService {
         return values
     }
 
-    private var savedViewDelay: Duration?
-
-    func delaySavedViewResponses(by delay: Duration) { savedViewDelay = delay }
+    private let savedViewDelay: Duration?
 
     func savedView(id: UUID) async throws -> SavedView {
         if let savedViewDelay { try? await Task.sleep(for: savedViewDelay) }
@@ -139,7 +137,7 @@ actor MockFolioService: FolioService {
     private(set) var downloads = 0
     /// When set, downloads write a real file into a fresh `folio-` folder here, as the live service does.
     private var downloadRoot: URL?
-    private var documentGate: CheckedContinuation<[Document], Never>?
+    private var documentGate: CheckedContinuation<[Document], any Error>?
     private var documentStarted: CheckedContinuation<Void, Never>?
     private var suspendDocumentRequests = false
     private var uploadGate: CheckedContinuation<Void, Never>?
@@ -147,6 +145,7 @@ actor MockFolioService: FolioService {
     private var suspendUploadRequests = false
 
     init(
+        savedViews: [SavedView] = [], savedViewDelay: Duration? = nil,
         documents: [Document] = [], correspondents: [Correspondent] = [], types: [DocumentType] = [],
         vaults: VaultCatalog = MockFolioService.defaultCatalog, vaultServices: [UUID: any FolioService] = [:],
         tags: [Tag] = [], loseFirstEntryResponse: Bool = false, failFirstClassificationSave: Bool = false,
@@ -161,6 +160,8 @@ actor MockFolioService: FolioService {
         documentList = documents
         correspondentList = correspondents
         typeList = types
+        savedViewValues = savedViews
+        self.savedViewDelay = savedViewDelay
     }
 
     func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) throws -> DocumentEntryPage {
@@ -230,9 +231,17 @@ actor MockFolioService: FolioService {
         await withCheckedContinuation { documentStarted = $0 }
     }
 
-    func releaseDocuments() {
+    func stopSuspendingDocuments() {
         suspendDocumentRequests = false
-        documentGate?.resume(returning: documentList)
+    }
+
+    func releaseDocuments(throwing error: FolioError? = nil) {
+        suspendDocumentRequests = false
+        if let error {
+            documentGate?.resume(throwing: error)
+        } else {
+            documentGate?.resume(returning: documentList)
+        }
         documentGate = nil
     }
 
@@ -391,7 +400,7 @@ actor MockFolioService: FolioService {
             throw failure
         }
         if suspendDocumentRequests {
-            return await withCheckedContinuation {
+            return try await withCheckedThrowingContinuation {
                 documentGate = $0
                 documentStarted?.resume()
                 documentStarted = nil
