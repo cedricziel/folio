@@ -210,7 +210,9 @@ struct WorkflowTriggerEditor: View {
         defer { isSaving = false }
         do {
             let saved: WorkflowConfigurationSummary
-            if let conditionService, documentConditions != nil || initialDocumentConditions != nil {
+            if let conditionService, let documentConditions,
+                documentConditions.shouldSubmit(startingTrigger: workflow.trigger)
+            {
                 saved = try await conditionService.saveWorkflowTrigger(
                     workflow, choice: choice, documentConditions: documentConditions
                 )

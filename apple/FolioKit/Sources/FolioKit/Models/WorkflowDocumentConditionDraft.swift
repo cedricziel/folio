@@ -139,6 +139,10 @@ struct WorkflowDocumentConditionDraft: Equatable, Sendable {
         }
     }
 
+    func shouldSubmit(startingTrigger: String) -> Bool {
+        triggerID == startingTrigger || wireValue != nil
+    }
+
     var wireValue: [String: (any Sendable)?]? {
         guard validationMessage == nil else { return nil }
         var object = original?.value ?? [:]

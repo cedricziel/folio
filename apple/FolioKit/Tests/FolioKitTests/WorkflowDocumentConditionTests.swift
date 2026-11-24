@@ -59,4 +59,19 @@ struct WorkflowDocumentConditionTests {
         #expect(object["number"] as? Int == 3)
         #expect(object["source"] == nil)
     }
+
+    @Test func changingTriggerWithAnEmptyDraftKeepsTheExistingPredicate() throws {
+        let choice = WorkflowTriggerChoice(
+            id: "document.revision_created", title: "File revision created", target: .document,
+            conditionFields: [
+                .init(id: "event.document_change.number", title: "Revision number", valueType: "integer")
+            ]
+        )
+        var draft = try #require(WorkflowDocumentConditionDraft(choice))
+
+        #expect(!draft.shouldSubmit(startingTrigger: "document.title_changed"))
+        #expect(draft.shouldSubmit(startingTrigger: choice.id))
+        draft[.number] = "3"
+        #expect(draft.shouldSubmit(startingTrigger: "document.title_changed"))
+    }
 }
