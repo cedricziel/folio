@@ -288,6 +288,56 @@ import XCTest
         capture(app, name: "Saved workflow date action")
     }
 
+    func testTypedCustomFieldActionSavesAndReopens() {
+        let app = launch(arguments: ["--workflow-custom-field-actions"])
+        openWorkflow(app)
+        let edit = app.buttons["Edit actions"]
+        guard edit.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+        let add = app.buttons["Add action"]
+        guard scroll(app, until: add) else { return XCTFail(app.debugDescription) }
+        add.tap()
+        let chooseAction = app.buttons["Set custom field"]
+        guard scroll(app, until: chooseAction) else { return XCTFail(app.debugDescription) }
+        chooseAction.tap()
+        let second = app.buttons["workflow-action-2"]
+        guard scroll(app, until: second) else { return XCTFail(app.debugDescription) }
+        second.tap()
+        let field = app.buttons["workflow-custom-field"]
+        guard field.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        XCTAssertTrue(field.isEnabled, app.debugDescription)
+        field.tap()
+        let invoice = app.buttons["Invoice total"]
+        guard invoice.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        invoice.tap()
+
+        let amount = app.textFields["custom-field-amount"]
+        let currency = app.textFields["custom-field-currency"]
+        guard amount.waitForExistence(timeout: 5), currency.exists else { return XCTFail(app.debugDescription) }
+        amount.tap()
+        amount.typeText("9007199254740993.010")
+        currency.tap()
+        currency.typeText("EUR")
+        let back = app.navigationBars["Set custom field"].buttons.firstMatch
+        guard back.waitForExistence(timeout: 5), back.isHittable else { return XCTFail(app.debugDescription) }
+        back.tap()
+        let moveUp = app.buttons["Move action 2 up"]
+        guard scroll(app, until: moveUp) else { return XCTFail(app.debugDescription) }
+        moveUp.tap()
+        let save = app.navigationBars["Edit actions"].buttons["Save"]
+        save.tap()
+        guard save.waitForNonExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+
+        edit.tap()
+        let first = app.buttons["workflow-action-1"]
+        guard first.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        first.tap()
+        guard amount.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        XCTAssertEqual(amount.value as? String, "9007199254740993.010")
+        XCTAssertEqual(currency.value as? String, "EUR")
+        capture(app, name: "Saved custom field action")
+    }
+
     func testNonOwnersCannotReadWorkflowConfigurationOrUseLifecycleActions() {
         let app = launch(arguments: ["--read-only"])
         XCTAssertTrue(app.staticTexts["Owner access required"].waitForExistence(timeout: 10), app.debugDescription)

@@ -128,21 +128,22 @@ private struct CustomValueEditor: View {
     let metadata: any CustomMetadataService
     let documents: any FolioService
     let model: CustomMetadataViewModel
-    @State private var text = ""
-    @State private var currency = ""
-    @State private var boolean: Bool?
-    @State private var date: Date?
-    @State private var reference: UUID?
-    @State private var options: [CustomFieldOption] = []
-    @State private var optionsCursor: UUID?
-    @State private var loadedOptions = false
-    @State private var matches: [FolioKit.Document] = []
-    @State private var query = ""
+    @State private var draft: CustomFieldValueDraft
     @State private var error: String?
-    @State private var pickerError: String?
-    @State private var loadingChoices = false
     @State private var saving: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
+
+    init(
+        field: CustomFieldDefinition, current: CustomFieldValue?, metadata: any CustomMetadataService,
+        documents: any FolioService, model: CustomMetadataViewModel
+    ) {
+        self.field = field
+        self.current = current
+        self.metadata = metadata
+        self.documents = documents
+        self.model = model
+        _draft = State(initialValue: CustomFieldValueDraft(current))
+    }
 
     var body: some View {
         NavigationStack {
@@ -163,7 +164,7 @@ private struct CustomValueEditor: View {
                 if field.isRetired {
                     Text("Retired field")
                 } else {
-                    valueControls
+                    CustomFieldValueInput(field: field, draft: $draft, metadata: metadata, documents: documents)
                 }
                 if current != nil && (!field.draft.required || field.isRetired) {
                     Button("Clear value", role: .destructive) { save(nil) }
@@ -182,155 +183,12 @@ private struct CustomValueEditor: View {
                     }
                 }
             }
-            .task {
-                restoreDraft()
-                if field.draft.kind == .select { await loadOptions() }
-            }
-            .task(id: query) {
-                guard field.draft.kind == .documentLink else { return }
-                let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !search.isEmpty else { matches = []; return }
-                do {
-                    try await Task.sleep(for: .milliseconds(250))
-                    let results = try await documents.documents(matching: search)
-                    try Task.checkCancellation()
-                    matches = Array(results.prefix(50))
-                    pickerError = nil
-                } catch is CancellationError {
-                } catch {
-                    guard !Task.isCancelled else { return }
-                    pickerError = error.localizedDescription
-                }
-            }
             .onDisappear { saving?.cancel() }
         }
     }
 
-    @ViewBuilder private var valueControls: some View {
-        switch field.draft.kind {
-        case .boolean:
-            Picker("Value", selection: $boolean) {
-                Text("Choose Yes or No").tag(Bool?.none)
-                Text("Yes").tag(Optional(true))
-                Text("No").tag(Optional(false))
-            }
-        case .longText:
-            TextField("Value", text: $text, axis: .vertical)
-        case .money:
-            TextField("Amount", text: $text)
-            TextField("Currency code", text: $currency)
-        case .date:
-            if let date {
-                DatePicker(
-                    "Date",
-                    selection: Binding(get: { self.date ?? date }, set: { self.date = $0 }),
-                    displayedComponents: .date
-                )
-                .environment(\.calendar, Self.dateCalendar)
-                .environment(\.timeZone, Self.dateCalendar.timeZone)
-            } else {
-                Button("Set date") { date = .now }
-            }
-        case .select:
-            Picker("Value", selection: $reference) {
-                Text("Choose an option").tag(UUID?.none)
-                ForEach(options) { option in
-                    Text(option.isRetired ? "\(option.label) (retired)" : option.label)
-                        .tag(Optional(option.id))
-                        .disabled(option.isRetired)
-                }
-            }
-            if loadingChoices { ProgressView("Loading options…") }
-            if let pickerError {
-                Text(pickerError).foregroundStyle(Color.danger)
-                Button("Retry options") { Task { await loadOptions() } }
-            } else if optionsCursor != nil {
-                Button("More options") { Task { await loadOptions() } }
-            }
-        case .documentLink:
-            TextField("Search this vault for a document", text: $query)
-            if let pickerError { Text(pickerError).foregroundStyle(Color.danger) }
-            ForEach(matches) { document in
-                Button {
-                    reference = document.id
-                } label: {
-                    Label(document.title, systemImage: reference == document.id ? "checkmark.circle.fill" : "doc")
-                }
-            }
-            if case let .documentLink(id) = current, reference == id {
-                Text("Current link selected")
-            }
-        case .text, .integer, .decimal, .url:
-            TextField("Value", text: $text)
-        }
-    }
-
     private var value: CustomFieldValue? {
-        switch field.draft.kind {
-        case .text: .text(text)
-        case .longText: .longText(text)
-        case .boolean: boolean.map(CustomFieldValue.boolean)
-        case .integer: .integer(text)
-        case .decimal: .decimal(text)
-        case .date: date.map(Self.calendarDate)
-        case .money: .money(amount: text, currency: currency)
-        case .select: reference.map(CustomFieldValue.select)
-        case .url: .url(text)
-        case .documentLink: reference.map(CustomFieldValue.documentLink)
-        }
-    }
-
-    private static let dateCalendar: Calendar = {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .gmt
-        return calendar
-    }()
-
-    private static func calendarDate(_ date: Date) -> CustomFieldValue {
-        .date(date.formatted(.iso8601.year().month().day().dateSeparator(.dash)))
-    }
-
-    private func restoreDraft() {
-        switch current {
-        case let .text(value), let .longText(value), let .integer(value), let .decimal(value), let .url(value):
-            text = value
-        case let .date(value):
-            date = DocumentDate(rawValue: value)?.start(in: Self.dateCalendar.timeZone)
-        case let .boolean(value): boolean = value
-        case let .money(amount, code):
-            text = amount
-            currency = code
-        case let .select(id), let .documentLink(id): reference = id
-        case nil: break
-        }
-    }
-
-    private func loadOptions() async {
-        guard !loadingChoices, !loadedOptions || optionsCursor != nil else { return }
-        loadingChoices = true
-        defer { loadingChoices = false }
-        pickerError = nil
-        do {
-            let next = try await metadata.customOptions(fieldID: field.id, after: optionsCursor)
-            try Task.checkCancellation()
-            var merged = Dictionary(uniqueKeysWithValues: options.map { ($0.id, $0) })
-            for option in next where !option.isRetired || option.id == reference {
-                merged[option.id] = option
-            }
-            if let reference, merged[reference] == nil {
-                merged[reference] = try await metadata.customOption(fieldID: field.id, id: reference)
-                try Task.checkCancellation()
-            }
-            options = merged.values.sorted {
-                $0.position == $1.position ? $0.id.uuidString < $1.id.uuidString : $0.position < $1.position
-            }
-            optionsCursor = next.count == 50 ? next.last?.id : nil
-            loadedOptions = true
-        } catch is CancellationError {
-        } catch {
-            guard !Task.isCancelled else { return }
-            pickerError = error.localizedDescription
-        }
+        draft.value(for: field.draft.kind)
     }
 
     private func save(_ value: CustomFieldValue?) {

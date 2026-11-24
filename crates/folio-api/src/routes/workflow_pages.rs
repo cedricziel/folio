@@ -1385,6 +1385,7 @@ struct FormTemplate {
     additional_triggers: Vec<AdditionalTrigger>,
     processing_fields: Vec<ProcessingControl>,
     action_fields: String,
+    metadata_action_catalog: String,
     reenter_credentials: bool,
     has_saved_root_filters: bool,
     has_saved_non_webhook_actions: bool,
@@ -1523,6 +1524,7 @@ async fn build_form(
     Ok(FormTemplate {
         condition_groups,
         action_fields,
+        metadata_action_catalog: format!("/api/vaults/{vault}/metadata-fields"),
         reenter_credentials,
         has_saved_root_filters,
         has_saved_non_webhook_actions,

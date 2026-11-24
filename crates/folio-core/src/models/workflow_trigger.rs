@@ -30,7 +30,9 @@ impl WorkflowTarget {
             | WorkflowAction::TrashDocument
             | WorkflowAction::SetDocumentDate { .. }
             | WorkflowAction::ClearDocumentDate
-            | WorkflowAction::SetReviewed { .. } => self == Self::Document,
+            | WorkflowAction::SetReviewed { .. }
+            | WorkflowAction::SetMetadata { .. }
+            | WorkflowAction::ClearMetadata { .. } => self == Self::Document,
         }
     }
 }

@@ -1365,6 +1365,15 @@ impl DocumentRepository for PostgresDocumentRepository {
                 require_document(&mut tx, vault, document_id).await?;
                 self.trash_in(&mut tx, vault, document_id).await?;
             }
+            DocumentAction::Metadata(change) => {
+                super::metadata_value_repo::apply_workflow_change(
+                    &mut tx,
+                    vault,
+                    document_id,
+                    change,
+                )
+                .await?;
+            }
             DocumentAction::Review(reviewed) => {
                 self.review_in(&mut tx, vault, document_id, reviewed)
                     .await?;

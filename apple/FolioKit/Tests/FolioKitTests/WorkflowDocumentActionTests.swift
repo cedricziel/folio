@@ -13,6 +13,9 @@ struct WorkflowDocumentActionTests {
                 {"type":"set_document_date","date":"2026-11-20"},
                 {"type":"clear_document_date"},
                 {"type":"set_reviewed","reviewed":true},
+                {"type":"set_metadata","field_id":"11111111-2222-4333-8444-555555555555",
+                    "value":{"kind":"money","value":{"amount":"45.60","currency":"EUR"}}},
+                {"type":"clear_metadata","field_id":"55555555-4444-4333-8222-111111111111"},
                 {"type":"trash_document"}
             ]}
             """

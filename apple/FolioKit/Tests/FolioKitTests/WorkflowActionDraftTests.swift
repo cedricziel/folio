@@ -1,4 +1,5 @@
 import FolioAPI
+import Foundation
 import Testing
 
 @testable import FolioKit
@@ -80,6 +81,34 @@ struct WorkflowActionDraftTests {
         ])
 
         #expect(draft.validationMessage(for: .document) == "Move to Trash must be the final action.")
+    }
+
+    @Test func orderedCustomFieldActionsPreserveEveryTypedValue() throws {
+        let field = try #require(UUID(uuidString: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"))
+        let reference = try #require(UUID(uuidString: "dddddddd-eeee-4fff-8aaa-bbbbbbbbbbbb"))
+        let fieldID = field.uuidString.lowercased()
+        let values: [CustomFieldValue] = [
+            .text(""), .longText("First line\nSecond line"), .boolean(false), .integer("9223372036854775807"),
+            .decimal("9007199254740993.010"), .date("2028-02-29"), .money(amount: "123.4500", currency: "EUR"),
+            .select(reference), .url("https://example.test/receipt"), .documentLink(reference),
+        ]
+        let original = values.map { value in
+            WorkflowActionDraft.Action.case14(.init(fieldId: fieldID, _type: .setMetadata, value: value.apiValue))
+        }
+        var draft = WorkflowActionDraft(revision: 13, actions: original)
+        let first = try #require(draft.rows.first?.id)
+        draft.move(first, by: 1)
+        var clear = WorkflowActionDraft.Row(kind: .clearMetadata)
+        #expect(throws: FolioError.self) { _ = try clear.prepare() }
+        clear.metadataFieldID = field
+        draft.rows.append(clear)
+        let prepared = try draft.prepare(for: .document)
+        #expect(prepared.sources == ["1", "0", "2", "3", "4", "5", "6", "7", "8", "9", "-"])
+        #expect(
+            prepared.actions == [original[1], original[0]] + Array(original.dropFirst(2)) + [
+                .case15(.init(fieldId: fieldID, _type: .clearMetadata))
+            ])
+        #expect(throws: FolioError.self) { _ = try draft.prepare(for: .event) }
     }
 
     @Test func incompatibleAndEmptyActionsCannotBeSaved() throws {

@@ -6,8 +6,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Document, DocumentDate, DocumentSource, Id, SourceConditions, UserId, VaultId, WorkflowCadence,
-    WorkflowEventConditions, WorkflowEventIdentity, WorkflowTarget, WorkflowTriggerRegistry,
+    Document, DocumentDate, DocumentSource, Id, MetadataValue, SourceConditions, UserId, VaultId,
+    WorkflowCadence, WorkflowEventConditions, WorkflowEventIdentity, WorkflowTarget,
+    WorkflowTriggerRegistry,
 };
 use crate::error::{Error, Result};
 
@@ -855,6 +856,15 @@ pub enum WorkflowAction {
     ClearDocumentDate,
     /// Mark a document reviewed or unreviewed as a system decision.
     SetReviewed { reviewed: bool },
+    SetMetadata {
+        #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+        field_id: Id,
+        value: MetadataValue,
+    },
+    ClearMetadata {
+        #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+        field_id: Id,
+    },
 }
 
 impl WorkflowAction {
@@ -1057,6 +1067,15 @@ impl WorkflowInput {
                 }
                 WorkflowAction::RenameDocument { title } => {
                     WorkflowAction::validate_document_title(title)?;
+                }
+                WorkflowAction::SetMetadata { field_id, .. }
+                | WorkflowAction::ClearMetadata { field_id }
+                    if field_id.is_nil() =>
+                {
+                    return invalid("Select a custom field");
+                }
+                WorkflowAction::SetMetadata { value, .. } => {
+                    value.clone().validate(value.kind(), false)?;
                 }
                 WorkflowAction::TrashDocument if index + 1 != self.actions.len() => {
                     return invalid("Move to Trash must be the final action");

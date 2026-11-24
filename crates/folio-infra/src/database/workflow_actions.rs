@@ -1,4 +1,4 @@
-use folio_core::models::{Id, UpdateDocument, WorkflowAction};
+use folio_core::models::{Id, MetadataChange, UpdateDocument, WorkflowAction};
 use folio_core::{Error, Result};
 
 pub(super) enum DocumentAction<'a> {
@@ -6,6 +6,7 @@ pub(super) enum DocumentAction<'a> {
     Tags { ids: &'a [Id], add: bool },
     Trash,
     Review(bool),
+    Metadata(MetadataChange),
 }
 
 impl<'a> TryFrom<&'a WorkflowAction> for DocumentAction<'a> {
@@ -54,6 +55,14 @@ impl<'a> TryFrom<&'a WorkflowAction> for DocumentAction<'a> {
                 ..Default::default()
             }),
             WorkflowAction::SetReviewed { reviewed } => Self::Review(*reviewed),
+            WorkflowAction::SetMetadata { field_id, value } => Self::Metadata(MetadataChange {
+                field_id: *field_id,
+                value: Some(value.clone()),
+            }),
+            WorkflowAction::ClearMetadata { field_id } => Self::Metadata(MetadataChange {
+                field_id: *field_id,
+                value: None,
+            }),
             WorkflowAction::Webhook { .. } | WorkflowAction::SkipImport => {
                 return Err(Error::Validation(
                     "Expected a document workflow action".into(),

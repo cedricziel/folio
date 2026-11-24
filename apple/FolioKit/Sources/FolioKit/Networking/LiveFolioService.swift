@@ -1333,7 +1333,11 @@ extension LiveFolioService: WorkflowAuthoringService, WorkflowActionEditingServi
     }
 }
 
-extension LiveFolioService: WorkflowActionTaxonomyService {
+extension LiveFolioService: WorkflowActionTaxonomyService, WorkflowActionMetadataService {
+    func workflowMetadataService(vaultID: UUID) -> any FolioService & CustomMetadataService {
+        scopedClient(to: vaultID)
+    }
+
     func workflowActionTaxonomy(_ kind: TaxonomyKind, vaultID: UUID) async throws -> [TaxonomyEntry] {
         let entries = try await scopedClient(to: vaultID).taxonomy(kind, deleted: false)
         guard entries.allSatisfy({ $0.vaultID == vaultID }) else { throw FolioError.unreadableResponse }
@@ -1535,7 +1539,7 @@ extension LiveFolioService {
     }
 }
 
-private extension CustomFieldValue {
+extension CustomFieldValue {
     init(_ value: Components.Schemas.MetadataValue) throws {
         switch value {
         case let .case1(row): self = .text(row.value)

@@ -1,3 +1,5 @@
+import { WorkflowMetadataAction, metadataCatalog } from "./workflow-metadata-actions.js";
+
 export class WorkflowActionEditor {
   constructor(root) {
     this.root = root;
@@ -9,6 +11,8 @@ export class WorkflowActionEditor {
     this.empty = root.querySelector("[data-action-empty]");
     this.controller = new AbortController();
     const { signal } = this.controller;
+    this.metadataRows = new WeakMap();
+    this.metadata = metadataCatalog(root, signal);
 
     this.rows.replaceChildren();
     for (const draft of JSON.parse(this.savedPayload)) this.add(draft);
@@ -47,7 +51,9 @@ export class WorkflowActionEditor {
     row.querySelector("legend").textContent = definition.dataset.label;
     row.querySelector("[data-action-fields]").append(fields.content.cloneNode(true));
     const value = row.querySelector("[data-action-value]");
-    if (value) {
+    if (row.querySelector("[data-metadata-field]")) {
+      this.metadataRows.set(row, new WorkflowMetadataAction(row, draft, this.metadata));
+    } else if (value) {
       if (value instanceof HTMLSelectElement && draft.value && !Array.from(value.options).some((option) => option.value === draft.value)) {
         value.add(new Option("Unavailable choice", draft.value));
       }
@@ -122,8 +128,7 @@ export class WorkflowActionEditor {
       row.querySelector('[data-action-command="down"]').disabled = !row.nextElementSibling;
       const incompatible = ingest || (!documentActions && row.dataset.kind !== "webhook");
       row.querySelector("[data-action-incompatible]").hidden = !incompatible;
-      row.querySelectorAll("[data-action-fields] input, [data-action-fields] select, [data-action-fields] textarea")
-        .forEach((control) => { control.disabled = incompatible; });
+      row.querySelector("[data-action-fields]").disabled = incompatible;
     });
     this.root.hidden = ingest && this.rows.childElementCount === 0;
     return !this.root.hidden;
@@ -134,6 +139,7 @@ export class WorkflowActionEditor {
       kind: row.dataset.kind,
       existing: row.dataset.existing === "" ? null : Number(row.dataset.existing),
       value: row.querySelector("[data-action-value]")?.value ?? "",
+      metadata_value: this.metadataRows.get(row)?.value(),
       tag_ids: Array.from(row.querySelectorAll("[data-action-tag]:checked"), (tag) => tag.value),
       headers: row.querySelector("[data-action-headers]")?.value ?? "",
       secret: row.querySelector("[data-action-secret]")?.value ?? "",

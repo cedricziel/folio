@@ -38,7 +38,9 @@ struct WorkflowCreationEditor: View {
                         WorkflowScheduleFields(triggerID: choice.id, cadence: $cadence).disabled(isSaving)
                         WorkflowActionRows(
                             draft: $draft, target: choice.target, vaultID: vaultID,
-                            taxonomy: service as? any WorkflowActionTaxonomyService
+                            taxonomy: service as? any WorkflowActionTaxonomyService,
+                            metadata: (service as? any WorkflowActionMetadataService)?
+                                .workflowMetadataService(vaultID: vaultID)
                         )
                         .disabled(isSaving)
                         if let validation = draft.validationMessage(for: choice.target) {

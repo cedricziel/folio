@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use folio_core::models::{Id, WebhookMethod, Workflow, WorkflowAction};
+use folio_core::models::{Id, MetadataValue, WebhookMethod, Workflow, WorkflowAction};
 use serde::{Deserialize, Serialize};
 
 use super::workflows::{restore_webhook_secrets, SECRET_MASK};
@@ -21,6 +21,8 @@ enum ActionKind {
     SetDocumentDate,
     ClearDocumentDate,
     SetReviewed,
+    SetMetadata,
+    ClearMetadata,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -30,6 +32,8 @@ struct ActionRow {
     existing: Option<usize>,
     #[serde(default)]
     value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata_value: Option<MetadataValue>,
     #[serde(default)]
     tag_ids: Vec<Id>,
     #[serde(default)]
@@ -48,6 +52,7 @@ impl ActionRow {
             kind,
             existing: Some(index),
             value: String::new(),
+            metadata_value: None,
             tag_ids: Vec::new(),
             headers: String::new(),
             secret: String::new(),
@@ -108,6 +113,15 @@ impl ActionRow {
                 value: reviewed.to_string(),
                 ..Self::new(ActionKind::SetReviewed, index)
             },
+            WorkflowAction::SetMetadata { field_id, value } => Self {
+                value: field_id.to_string(),
+                metadata_value: Some(value.clone()),
+                ..Self::new(ActionKind::SetMetadata, index)
+            },
+            WorkflowAction::ClearMetadata { field_id } => Self {
+                value: field_id.to_string(),
+                ..Self::new(ActionKind::ClearMetadata, index)
+            },
             WorkflowAction::SkipImport => return None,
         })
     }
@@ -137,6 +151,13 @@ impl ActionRow {
             ActionKind::ClearDocumentDate => WorkflowAction::ClearDocumentDate,
             ActionKind::SetReviewed => WorkflowAction::SetReviewed {
                 reviewed: self.value.parse().map_err(|_| "Choose a review state.")?,
+            },
+            ActionKind::SetMetadata => WorkflowAction::SetMetadata {
+                field_id: id("custom field")?,
+                value: self.metadata_value.ok_or("Enter a custom field value.")?,
+            },
+            ActionKind::ClearMetadata => WorkflowAction::ClearMetadata {
+                field_id: id("custom field")?,
             },
             ActionKind::Webhook => {
                 let url = self.value.trim().to_owned();

@@ -1,4 +1,6 @@
-<div data-workflow-form-target="actionEditor" hidden>
+<div data-workflow-form-target="actionEditor"
+     data-metadata-fields-url="{{ metadata_action_catalog }}"
+     data-metadata-documents-url="{{ "/api/documents/search"|vault_url }}" hidden>
     <input type="hidden" name="ordered_actions" value="{{ action_fields }}" data-action-payload disabled>
     {% match values.revision %}
     {% when Some with (revision) %}<input type="hidden" name="revision" value="{{ revision }}">
@@ -22,6 +24,8 @@
                 <option value="set_document_date" data-document-action>Set document date</option>
                 <option value="clear_document_date" data-document-action>Clear document date</option>
                 <option value="set_reviewed" data-document-action>Set review state</option>
+                <option value="set_metadata" data-document-action>Set custom field</option>
+                <option value="clear_metadata" data-document-action>Clear custom field</option>
                 <option value="trash_document" data-document-action>Move document to Trash</option>
             </select>
             <button class="f-btn" type="button" data-action-command="add">Add action</button>
@@ -31,7 +35,7 @@
         <fieldset class="action-card" data-action-row>
             <legend class="heading"></legend>
             <p class="hint" data-action-incompatible hidden>Remove this action to use the selected trigger.</p>
-            <div class="field" data-action-fields></div>
+            <fieldset class="field" data-action-fields></fieldset>
             <div class="form-actions">
                 <button class="f-btn f-btn-quiet" type="button" data-action-command="up">Move up</button>
                 <button class="f-btn f-btn-quiet" type="button" data-action-command="down">Move down</button>
@@ -82,6 +86,49 @@
                 <option value="false">Needs review</option>
             </select>
         </label>
+    </template>
+    <template data-action-template="set_metadata" data-label="Set custom field" data-action-field-template="metadata"></template>
+    <template data-action-template="clear_metadata" data-label="Clear custom field" data-action-field-template="metadata"></template>
+    <template data-action-template="metadata">
+        <label>Custom field
+            <select class="select" data-action-value data-metadata-field required>
+                <option value="">Choose a custom field</option>
+            </select>
+        </label>
+        <div class="field" data-metadata-value></div>
+        <p class="hint" role="status" data-metadata-status hidden></p>
+        <button class="f-btn f-btn-quiet" type="button" data-metadata-retry hidden>Retry loading choices</button>
+    </template>
+    <template data-metadata-input="boolean">
+        <select class="select" data-metadata-input-value required>
+            <option value="">Choose Yes or No</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+        </select>
+    </template>
+    <template data-metadata-input="long_text">
+        <textarea class="input" rows="3" data-metadata-input-value></textarea>
+    </template>
+    <template data-metadata-input="reference">
+        <select class="select" data-metadata-input-value required>
+            <option value="">Choose a value</option>
+        </select>
+    </template>
+    <template data-metadata-input="text">
+        <input class="input" type="text" data-metadata-input-value>
+    </template>
+    <template data-metadata-currency>
+        <label>Currency code
+            <input class="input" data-metadata-currency-value maxlength="3" autocapitalize="characters" required>
+        </label>
+    </template>
+    <template data-metadata-document-search>
+        <div class="field">
+            <label>Search this vault for a document
+                <input class="input" type="search" data-metadata-query maxlength="256">
+            </label>
+            <button class="f-btn f-btn-quiet" type="button" data-metadata-search>Search documents</button>
+        </div>
     </template>
     <template data-action-template="trash_document" data-label="Move document to Trash">
         <p class="hint">Place this action last.</p>

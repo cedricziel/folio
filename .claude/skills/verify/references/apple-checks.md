@@ -234,6 +234,19 @@ ordered actions, and credential masks. The UI fixture saves a note trigger and a
 comment trigger, checks that each stays selected when reopened, then saves a
 source trigger.
 
+For action editing, run `WorkflowActionDraftTests`, `WorkflowDocumentActionTests`,
+and `WorkflowLifecycleServiceTests` with the generated client. The package tests
+cover typed date and review actions, final Trash placement, and revision-bound
+action order. The iPhone fixture adds a calendar date, moves the new action
+ahead of a saved review action, and reopens it to check the exact date.
+The webhook reorder case checks that each masked credential stays with its row.
+
+The custom-field action case in `WorkflowLifecycleUITests` uses the generated
+vault-scoped metadata catalog. It adds a money value ahead of a saved review
+action and reopens the amount and currency. `WorkflowActionDraftTests` checks
+all ten typed values and clearing a field. Keep the document metadata tests
+when changing the shared value controls.
+
 ## Verify Apple vault management
 
 Use the isolated package procedure above for `ManagementRequestTests`,

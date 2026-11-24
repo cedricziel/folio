@@ -491,6 +491,11 @@ edits a title that a workflow renamed. The API workflow suite checks action orde
 and requires Trash to come last. Verify the generated client with
 `WorkflowDocumentActionTests` after updating OpenAPI.
 
+The custom-field action case in `workflow-actions.spec.ts` uses a disposable
+vault and checks exact money values, linked-document search, retired option
+roundtrips, and the order of set and clear actions. It audits the saved editor
+on a mobile viewport.
+
 ## Verify managed source lifecycle
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test source_lifecycle`
