@@ -19,6 +19,7 @@ fn input(name: &str) -> WorkflowInput {
         name: name.into(),
         enabled: true,
         trigger: WorkflowTrigger::DocumentUploaded,
+        triggers: Vec::new(),
         conditions: WorkflowConditions::default(),
         actions: vec![WorkflowAction::Webhook {
             url: "http://127.0.0.1:1/unused".into(),
@@ -33,14 +34,27 @@ async fn contract(db: Database) {
     db.migrate().await.unwrap();
     let r = db.repositories().await;
     let vault = r.vaults.instance_default().await.unwrap();
+    let selected = vec![
+        WorkflowTrigger::DocumentUploaded,
+        WorkflowTrigger::DocumentUpdated,
+    ];
+    let definition = WorkflowInput {
+        triggers: selected.clone(),
+        ..input("Retained workflow")
+    };
     let workflow = with_actor(
         Some(UserId::from("alice")),
-        r.workflows.create(vault, input("Retained workflow")),
+        r.workflows.create(vault, definition),
     )
     .await
     .unwrap();
     assert_eq!(workflow.created_by, Some(UserId::from("alice")));
     assert_eq!(workflow.updated_by, workflow.created_by);
+    assert_eq!(workflow.triggers, selected);
+    let secondary = r.workflows.list_enabled(vault, selected[1]).await.unwrap();
+    assert_eq!(secondary.len(), 1);
+    assert_eq!(secondary[0].id, workflow.id);
+    assert_eq!(secondary[0].triggers, selected);
     let unchanged = with_actor(
         Some(UserId::from("ignored")),
         r.workflows
@@ -50,6 +64,7 @@ async fn contract(db: Database) {
     .unwrap();
     assert_eq!(unchanged.updated_at, workflow.updated_at);
     assert_eq!(unchanged.revision, workflow.revision);
+    assert_eq!(unchanged.triggers, selected);
     assert_eq!(unchanged.updated_by, workflow.updated_by);
     let changed = with_actor(
         Some(UserId::from("bob")),
@@ -60,6 +75,25 @@ async fn contract(db: Database) {
     .unwrap();
     assert_eq!(changed.created_at, workflow.created_at);
     assert_eq!(changed.updated_by, Some(UserId::from("bob")));
+    let stale_edit = r
+        .workflows
+        .replace(
+            vault,
+            workflow.id,
+            input("Stale edit"),
+            Some(workflow.revision),
+        )
+        .await;
+    assert!(matches!(stale_edit, Err(folio_core::Error::Conflict(_))));
+    let current = r
+        .workflows
+        .find_by_id(vault, workflow.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.name, changed.name);
+    assert_eq!(current.revision, changed.revision);
+
     let stale = WorkflowRun::new(
         vault,
         workflow.id,
@@ -257,7 +291,10 @@ async fn contract(db: Database) {
     assert_eq!(events[0].audience(), &EventAudience::Owners);
     assert_eq!(
         events[0].data(),
-        &serde_json::json!({"name":"Retained workflow", "enabled":true, "trigger":"document.uploaded"})
+        &serde_json::json!({
+            "name": "Retained workflow", "enabled": true, "trigger": "document.uploaded",
+            "triggers": ["document.uploaded", "document.updated"],
+        })
     );
     let racing = r
         .workflows
@@ -554,6 +591,7 @@ async fn upgrade_contract(db: Database) {
     }
     db.migrate().await.unwrap();
     let retained = r.workflows.find_by_id(vault, id).await.unwrap().unwrap();
+    assert_eq!(retained.triggers, [WorkflowTrigger::DocumentUploaded]);
     assert_eq!(retained.created_at, created);
     assert_eq!(retained.updated_at, created);
     assert_eq!(retained.created_by, None);

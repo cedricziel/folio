@@ -1,0 +1,105 @@
+<div data-workflow-form-target="actionEditor" hidden>
+    <input type="hidden" name="ordered_actions" value="{{ action_fields }}" data-action-payload disabled>
+    {% match values.revision %}
+    {% when Some with (revision) %}<input type="hidden" name="revision" value="{{ revision }}">
+    {% when None %}
+    {% endmatch %}
+    <fieldset class="field">
+        <legend class="legend">Then Folio does</legend>
+        {% if reenter_credentials %}<p class="f-notice" role="status">Re-enter any new webhook secrets and header values before saving.</p>{% endif %}
+        <div data-action-rows></div>
+        <p class="hint" data-action-empty>Choose an action to start.</p>
+        <div class="form-actions" data-action-add-controls>
+            <select class="select" aria-label="Action to add" data-action-kind>
+                <option value="webhook">Send a webhook</option>
+                <option value="add_tags" data-document-action>Add tags</option>
+                <option value="set_correspondent" data-document-action>Set correspondent</option>
+                <option value="set_document_type" data-document-action>Set document type</option>
+                <option value="rename_document" data-document-action>Rename document</option>
+                <option value="remove_tags" data-document-action>Remove tags</option>
+                <option value="clear_correspondent" data-document-action>Clear correspondent</option>
+                <option value="clear_document_type" data-document-action>Clear document type</option>
+                <option value="set_document_date" data-document-action>Set document date</option>
+                <option value="clear_document_date" data-document-action>Clear document date</option>
+                <option value="set_reviewed" data-document-action>Set review state</option>
+                <option value="trash_document" data-document-action>Move document to Trash</option>
+            </select>
+            <button class="f-btn" type="button" data-action-command="add">Add action</button>
+        </div>
+    </fieldset>
+    <template data-action-template="row">
+        <fieldset class="action-card" data-action-row>
+            <legend class="heading"></legend>
+            <p class="hint" data-action-incompatible hidden>Remove this action to use the selected trigger.</p>
+            <div class="field" data-action-fields></div>
+            <div class="form-actions">
+                <button class="f-btn f-btn-quiet" type="button" data-action-command="up">Move up</button>
+                <button class="f-btn f-btn-quiet" type="button" data-action-command="down">Move down</button>
+                <button class="f-btn f-btn-quiet f-btn-danger" type="button" data-action-command="remove">Remove action</button>
+            </div>
+        </fieldset>
+    </template>
+    <template data-action-template="webhook" data-label="Send a webhook">
+        <label>URL
+            <input class="input" type="url" data-action-value placeholder="https://example.com/hook" required>
+        </label>
+        <label>Secret
+            <input class="input" type="password" data-action-secret autocomplete="off" placeholder="Optional, signs each delivery">
+        </label>
+        <label class="check" data-action-secret-removal hidden><input type="checkbox" data-action-clear-secret> Remove the saved secret</label>
+        <label>Extra headers
+            <textarea class="input" data-action-headers rows="3" placeholder="Name: value"></textarea>
+        </label>
+    </template>
+    <template data-action-template="add_tags" data-label="Add tags" data-action-field-template="tags"></template>
+    <template data-action-template="remove_tags" data-label="Remove tags" data-action-field-template="tags"></template>
+    <template data-action-template="tags">
+        <div class="check-list" data-action-tags>
+            {% if action_tags.is_empty() %}
+            <p class="hint">No tags yet. <a href="{{ "/manage"|vault_url }}">Create one</a>.</p>
+            {% endif %}
+            {% for t in action_tags %}<label class="check"><input type="checkbox" value="{{ t.value }}" data-action-tag> {{ t.label }}</label>{% endfor %}
+        </div>
+    </template>
+    <template data-action-template="rename_document" data-label="Rename document">
+        <label>Document title
+            <input class="input" type="text" data-action-value required>
+        </label>
+    </template>
+    <template data-action-template="clear_correspondent" data-label="Clear correspondent"></template>
+    <template data-action-template="clear_document_type" data-label="Clear document type"></template>
+    <template data-action-template="set_document_date" data-label="Set document date">
+        <label>Document date
+            <input class="input" type="date" data-action-value required>
+        </label>
+    </template>
+    <template data-action-template="clear_document_date" data-label="Clear document date"></template>
+    <template data-action-template="set_reviewed" data-label="Set review state">
+        <label>Review state
+            <select class="select" data-action-value required>
+                <option value="">Choose a state</option>
+                <option value="true">Reviewed</option>
+                <option value="false">Needs review</option>
+            </select>
+        </label>
+    </template>
+    <template data-action-template="trash_document" data-label="Move document to Trash">
+        <p class="hint">Place this action last.</p>
+    </template>
+    <template data-action-template="set_correspondent" data-label="Set correspondent">
+        <label>Correspondent
+            <select class="select" data-action-value required>
+                <option value="">Choose a correspondent</option>
+                {% for c in action_correspondents %}<option value="{{ c.value }}">{{ c.label }}</option>{% endfor %}
+            </select>
+        </label>
+    </template>
+    <template data-action-template="set_document_type" data-label="Set document type">
+        <label>Document type
+            <select class="select" data-action-value required>
+                <option value="">Choose a document type</option>
+                {% for d in action_document_types %}<option value="{{ d.value }}">{{ d.label }}</option>{% endfor %}
+            </select>
+        </label>
+    </template>
+</div>

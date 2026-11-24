@@ -758,6 +758,17 @@ fieldset.field {
 .workflow-form {
   max-width: 640px;
 }
+.workflow-trigger-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block: var(--space-2);
+}
+.workflow-trigger-row .select {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
 .action-card {
   display: flex;
   flex-direction: column;
@@ -770,6 +781,21 @@ fieldset.field {
 }
 .action-card > .heading {
   font-size: 14px;
+}
+[data-action-add-controls] {
+  margin-top: var(--space-3);
+}
+[data-action-add-controls] > .select {
+  flex: 1;
+  min-width: 0;
+}
+[data-action-row] .form-actions {
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+[data-action-command] {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .check {
   display: flex;

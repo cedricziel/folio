@@ -1000,7 +1000,58 @@ extension LiveFolioService: DeviceRegistrationService {
     }
 }
 
-extension LiveFolioService: WorkflowDocumentConditionEditingService {
+extension LiveFolioService: WorkflowAuthoringService, WorkflowActionEditingService,
+    WorkflowDocumentConditionEditingService
+{
+    func createWorkflow(
+        vaultID: UUID, name: String, choices: [WorkflowTriggerChoice], actions: WorkflowActionDraft,
+        cadence: Components.Schemas.WorkflowCadence? = nil
+    ) async throws -> WorkflowConfigurationSummary {
+        let name = try validatedWorkflowName(name)
+        let triggerIDs = choices.map(\.id)
+        let triggers = triggerIDs.compactMap(Components.Schemas.WorkflowTrigger.init(rawValue:))
+        guard triggers.count == triggerIDs.count, let choice = WorkflowTriggerChoice.matching(triggerIDs, in: choices)
+        else { throw FolioError.unreadableResponse }
+        let prepared = try actions.prepare(for: choice.target)
+        let scoped = scopedClient(to: vaultID)
+        return try await scoped.call("workflows.create") {
+            let response = try await scoped.client.createWorkflow(
+                body: .json(
+                    .init(
+                        actions: prepared.actions, cadence: cadence, enabled: false, name: name,
+                        trigger: triggers.count == 1 ? triggers.first : nil,
+                        triggers: triggers.count > 1 ? triggers : nil))
+            )
+            if case .badRequest(let error) = response {
+                throw try FolioError.server(status: 400, message: error.body.json.error)
+            }
+            let result = try Self.workflowSummary(response.created.body.json)
+            guard result.vaultID == vaultID, result.deletedAt == nil, result.trigger == choice.id,
+                result.selectedTriggers == triggerIDs, !result.enabled
+            else {
+                throw FolioError.unreadableResponse
+            }
+            return result
+        }
+    }
+
+    func saveWorkflowSettings(
+        _ workflow: WorkflowConfigurationSummary, name: String, enabled: Bool
+    ) async throws -> WorkflowConfigurationSummary {
+        let name = try validatedWorkflowName(name)
+        let scoped = scopedClient(to: workflow.vaultID)
+        return try await scoped.call("workflows.save_settings") {
+            let saved = try await scoped.editableWorkflow(workflow)
+            return try await scoped.replaceWorkflow(
+                workflow,
+                input: .init(
+                    actions: saved.actions, cadence: saved.cadence, conditions: saved.conditions,
+                    enabled: enabled, name: name, trigger: saved.trigger, triggers: saved.triggers
+                )
+            )
+        }
+    }
+
     public func workflowTriggerChoices(vaultID: UUID) async throws -> [WorkflowTriggerChoice] {
         let scoped = scopedClient(to: vaultID)
         return try await scoped.call("workflows.list_triggers") {
@@ -1119,12 +1170,174 @@ extension LiveFolioService: WorkflowDocumentConditionEditingService {
         }
     }
 
+    func saveWorkflowTriggers(
+        _ workflow: WorkflowConfigurationSummary, to triggerIDs: [String], cadence: Components.Schemas.WorkflowCadence?,
+        documentConditions: WorkflowDocumentConditionDraft? = nil
+    ) async throws -> WorkflowConfigurationSummary {
+        let triggers = triggerIDs.compactMap(Components.Schemas.WorkflowTrigger.init(rawValue:))
+        guard workflow.deletedAt == nil, let trigger = triggers.first, triggers.count == triggerIDs.count,
+            Set(triggerIDs).count == triggerIDs.count, workflow.triggers != nil || triggers.count == 1
+        else { throw FolioError.unreadableResponse }
+        if let documentConditions {
+            guard documentConditions.triggerID == trigger.rawValue, documentConditions.validationMessage == nil
+            else { throw FolioError.unreadableResponse }
+        }
+        let documentChange = try documentConditions.map { draft in
+            try draft.wireValue.map { try OpenAPIObjectContainer(unvalidatedValue: $0) }
+        }
+        let scoped = scopedClient(to: workflow.vaultID)
+        return try await scoped.call("workflows.change_trigger") {
+            let saved = try await scoped.editableWorkflow(workflow)
+            var conditions = saved.conditions
+            if let predicate = documentChange {
+                var value = conditions.value
+                var event: [String: (any Sendable)?] = [:]
+                if let rawEvent = value["event"] ?? nil {
+                    guard let existing = rawEvent as? [String: (any Sendable)?] else {
+                        throw FolioError.unreadableResponse
+                    }
+                    event = existing
+                }
+                if let predicate {
+                    event["document_change"] = predicate.value
+                } else {
+                    event.removeValue(forKey: "document_change")
+                }
+                if event.isEmpty {
+                    value.removeValue(forKey: "event")
+                } else {
+                    value["event"] = event
+                }
+                conditions = try OpenAPIObjectContainer(unvalidatedValue: value)
+            }
+            return try await scoped.replaceWorkflow(
+                workflow,
+                input: .init(
+                    actions: saved.actions, cadence: cadence, conditions: conditions,
+                    enabled: saved.enabled, name: saved.name, trigger: trigger,
+                    triggers: saved.triggers == nil ? nil : triggers
+                ), documentChange: documentChange
+            )
+        }
+    }
+
+    func loadWorkflowConditions(_ workflow: WorkflowConfigurationSummary) async throws
+        -> WorkflowConditionTree
+    {
+        let scoped = scopedClient(to: workflow.vaultID)
+        return try await scoped.call("workflows.load_conditions") {
+            let current = try await scoped.editableWorkflow(workflow)
+            return try WorkflowConditionTree(current.conditions)
+        }
+    }
+
+    func saveWorkflowConditions(
+        _ workflow: WorkflowConfigurationSummary, conditions: WorkflowConditionTree
+    )
+        async throws -> WorkflowConfigurationSummary
+    {
+        let scoped = scopedClient(to: workflow.vaultID)
+        return try await scoped.call("workflows.save_conditions") {
+            let saved = try await scoped.editableWorkflow(workflow)
+            return try await scoped.replaceWorkflow(
+                workflow,
+                input: .init(
+                    actions: saved.actions, cadence: saved.cadence, conditions: conditions.payload(),
+                    enabled: saved.enabled, name: saved.name, trigger: saved.trigger, triggers: saved.triggers
+                )
+            )
+        }
+    }
+
+    func loadWorkflowActions(_ workflow: WorkflowConfigurationSummary) async throws
+        -> WorkflowActionDraft
+    {
+        let scoped = scopedClient(to: workflow.vaultID)
+        return try await scoped.call("workflows.load_actions") {
+            let current = try await scoped.editableWorkflow(workflow)
+            return WorkflowActionDraft(revision: current.revision, actions: current.actions)
+        }
+    }
+
+    func saveWorkflowActions(
+        _ workflow: WorkflowConfigurationSummary, actions: WorkflowActionDraft,
+        choice: WorkflowTriggerChoice
+    ) async throws -> WorkflowConfigurationSummary {
+        guard choice.id == workflow.trigger else { throw FolioError.unreadableResponse }
+        let prepared = try actions.prepare(for: choice.target)
+        let scoped = scopedClient(to: workflow.vaultID)
+        return try await scoped.call("workflows.save_actions") {
+            let saved = try await scoped.editableWorkflow(workflow)
+            guard let revision = actions.revision, saved.revision == revision else {
+                throw Self.workflowEditConflict
+            }
+            return try await scoped.replaceWorkflow(
+                workflow,
+                input: .init(
+                    actions: prepared.actions, cadence: saved.cadence, conditions: saved.conditions,
+                    enabled: saved.enabled, name: saved.name, trigger: saved.trigger, triggers: saved.triggers
+                ), sources: prepared.sources
+            )
+        }
+    }
+
+    private static let workflowEditConflict = FolioError.server(
+        status: 409, message: "The workflow changed. Reopen it before editing.")
+
+    private func editableWorkflow(_ workflow: WorkflowConfigurationSummary) async throws
+        -> Components.Schemas.Workflow
+    {
+        guard workflow.deletedAt == nil, let revision = workflow.revision, revision > 0 else {
+            throw FolioError.unreadableResponse
+        }
+        let current = try await client.getWorkflow(path: .init(id: workflow.id.uuidString.lowercased())).ok.body.json
+        let summary = try Self.workflowSummary(current)
+        guard summary.id == workflow.id, summary.vaultID == workflow.vaultID, summary.deletedAt == nil else {
+            throw FolioError.unreadableResponse
+        }
+        guard summary.revision == revision else { throw Self.workflowEditConflict }
+        return current
+    }
+
+    private func replaceWorkflow(
+        _ workflow: WorkflowConfigurationSummary,
+        input: Components.Schemas.WorkflowInput,
+        sources: [String]? = nil, documentChange: OpenAPIObjectContainer?? = nil
+    ) async throws -> WorkflowConfigurationSummary {
+        guard let revision = workflow.revision, let trigger = input.trigger ?? input.triggers?.first else {
+            throw FolioError.unreadableResponse
+        }
+        let response = try await client.updateWorkflowDefinition(
+            path: .init(id: workflow.id.uuidString.lowercased()), query: .init(expectedRevision: revision),
+            headers: .init(xFolioWorkflowActionSources: sources), body: .json(input)
+        )
+        let updated = try response.ok.body.json
+        if let documentChange, try Self.workflowDocumentPredicate(updated.conditions) != documentChange {
+            throw FolioError.unreadableResponse
+        }
+        let result = try Self.workflowSummary(updated)
+        guard result.vaultID == workflow.vaultID, result.id == workflow.id,
+            result.deletedAt == nil, result.trigger == trigger.rawValue,
+            input.triggers.map({ $0.map(\.rawValue) == result.selectedTriggers }) ?? true
+        else { throw FolioError.unreadableResponse }
+        return result
+    }
+
     private static func workflowSummary(_ value: Components.Schemas.Workflow) throws -> WorkflowConfigurationSummary {
         .init(
             id: try uuid(value.id), vaultID: try uuid(value.vaultId), name: value.name, enabled: value.enabled,
             trigger: value.trigger.rawValue, createdAt: value.createdAt, updatedAt: value.updatedAt,
-            deletedAt: value.deletedAt, createdBy: value.createdBy, updatedBy: value.updatedBy, revision: value.revision
+            deletedAt: value.deletedAt, createdBy: value.createdBy, updatedBy: value.updatedBy,
+            revision: value.revision, cadence: value.cadence, triggers: value.triggers?.map(\.rawValue)
         )
+    }
+}
+
+extension LiveFolioService: WorkflowActionTaxonomyService {
+    func workflowActionTaxonomy(_ kind: TaxonomyKind, vaultID: UUID) async throws -> [TaxonomyEntry] {
+        let entries = try await scopedClient(to: vaultID).taxonomy(kind, deleted: false)
+        guard entries.allSatisfy({ $0.vaultID == vaultID }) else { throw FolioError.unreadableResponse }
+        return entries.filter { $0.deletedAt == nil }
     }
 }
 

@@ -194,7 +194,7 @@ impl WorkflowRunner {
                     access
                         .permits(vault, ingest.source_id, ingest.source_kind)
                         .await?
-                        && workflow.trigger == run.event
+                        && (workflow.trigger == run.event || workflow.triggers.contains(&run.event))
                         && workflow.actions == run.actions
                         && run.event.target().accepts(action)
                 } else {

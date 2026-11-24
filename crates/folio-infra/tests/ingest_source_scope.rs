@@ -216,6 +216,7 @@ async fn workflow_outcome_contract(repos: &folio_infra::Repositories, input: Ing
         name: "Failed item delivery".into(),
         enabled: true,
         trigger: WorkflowTrigger::IngestFailed,
+        triggers: Vec::new(),
         conditions: folio_core::models::WorkflowConditions {
             event: Some(folio_core::models::WorkflowEventConditions {
                 ingest: Some(folio_core::models::WorkflowIngestConditions {
@@ -300,6 +301,7 @@ async fn workflow_outcome_contract(repos: &folio_infra::Repositories, input: Ing
             vault,
             WorkflowInput {
                 trigger: WorkflowTrigger::SourceFailed,
+                triggers: Vec::new(),
                 conditions: Default::default(),
                 ..definition.clone()
             },
@@ -349,6 +351,7 @@ async fn workflow_outcome_contract(repos: &folio_infra::Repositories, input: Ing
             vault,
             WorkflowInput {
                 trigger: WorkflowTrigger::SourceFailed,
+                triggers: Vec::new(),
                 conditions: Default::default(),
                 ..definition
             },

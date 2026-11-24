@@ -20,15 +20,18 @@ test("chooses custom metadata triggers and exact transition conditions", async (
   await page.getByRole("textbox", { name: "Name", exact: true }).fill(workflowName);
   const trigger = page.getByRole("combobox", { name: "When" });
   await trigger.selectOption("metadata_field.created");
-  await expect(page.getByText("Add tags", { exact: true })).toBeHidden();
+  const tagAction = page.getByRole("combobox", { name: "Action to add" }).locator('option[value="add_tags"]');
+  await expect(tagAction).toBeDisabled();
   await expect(page.getByRole("group", { name: "Custom field conditions" })).toBeVisible();
   await trigger.selectOption("document.metadata.changed");
-  await expect(page.getByText("Add tags", { exact: true })).toBeVisible();
+  await expect(tagAction).toBeEnabled();
   await page.getByRole("combobox", { name: "Custom field", exact: true }).selectOption({ label: fieldName });
   await page.getByRole("combobox", { name: "Field type" }).selectOption("decimal");
   await page.getByRole("combobox", { name: "Change", exact: true }).selectOption("set");
   await page.getByRole("checkbox", { name: "Match the new value" }).check();
   await page.getByRole("textbox", { name: "New value", exact: true }).fill("9007199254740993.010");
+  await page.getByRole("combobox", { name: "Action to add" }).selectOption("webhook");
+  await page.getByRole("button", { name: "Add action", exact: true }).click();
   await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
   await page.getByRole("button", { name: "Save workflow", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "New value", exact: true })).toHaveValue("9007199254740993.01");
@@ -79,6 +82,8 @@ test("shows and saves the condition fields for the selected document event", asy
   const fileType = alternatives.getByRole("textbox", { name: "File type", exact: true });
   await fileType.fill("application/pdf");
 
+  await page.getByRole("combobox", { name: "Action to add" }).selectOption("webhook");
+  await page.getByRole("button", { name: "Add action", exact: true }).click();
   await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
   await page.getByRole("button", { name: "Save workflow", exact: true }).click();
   await expect(page.getByLabel("Revision source", { exact: true })).toHaveValue("restoration");

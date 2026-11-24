@@ -14,7 +14,7 @@ struct WorkflowCadenceTests {
              "actions":[{"type":"webhook","url":"https://example.test/clock"}]}
             """
         let input = try JSONDecoder().decode(Components.Schemas.WorkflowInput.self, from: Data(json.utf8))
-        #expect(input.trigger.rawValue == "workflow.scheduled")
+        #expect(input.trigger?.rawValue == "workflow.scheduled")
         let encoded = try JSONEncoder().encode(input)
         let result = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         let actual = try #require(result["cadence"] as? NSDictionary)

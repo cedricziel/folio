@@ -2,7 +2,7 @@ use super::*;
 use serde_json::Value;
 
 #[tokio::test]
-async fn purge_delivers_both_trigger_names_once_from_the_same_occurrence() {
+async fn purge_keeps_legacy_deliveries_without_duplicating_multiple_trigger_workflows() {
     let h = Harness::new().await;
     let server = TestServer::start().await;
     let purged = h
@@ -19,6 +19,25 @@ async fn purge_delivers_both_trigger_names_once_from_the_same_occurrence() {
             vec![webhook(server.url("deleted"), None)],
         )
         .await;
+    let both = h
+        .workflows
+        .create(
+            h.vault,
+            WorkflowInput {
+                cadence: None,
+                name: "Purge with legacy alias".into(),
+                enabled: true,
+                trigger: WorkflowTrigger::DocumentDeleted,
+                triggers: vec![
+                    WorkflowTrigger::DocumentDeleted,
+                    WorkflowTrigger::DocumentPurged,
+                ],
+                conditions: Default::default(),
+                actions: vec![webhook(server.url("both"), None)],
+            },
+        )
+        .await
+        .unwrap();
     let doc = h.document("retained.pdf", "application/pdf").await;
     h.documents.delete(h.vault, doc.id).await.unwrap();
     h.documents.request_purge(h.vault, doc.id).await.unwrap();
@@ -31,16 +50,21 @@ async fn purge_delivers_both_trigger_names_once_from_the_same_occurrence() {
         .unwrap();
     let event_id = event.envelope.as_ref().unwrap().event_id();
 
-    let runs = h.engine.handle(&event).await.unwrap();
+    let (first, second) = tokio::join!(h.engine.handle(&event), h.engine.handle(&event));
+    let runs: Vec<_> = first.unwrap().into_iter().chain(second.unwrap()).collect();
 
-    assert_eq!(runs.len(), 2);
-    for workflow in [purged, deleted] {
+    assert_eq!(runs.len(), 3);
+    for (workflow, expected) in [
+        (purged, WorkflowTrigger::DocumentPurged),
+        (deleted, WorkflowTrigger::DocumentDeleted),
+        (both, WorkflowTrigger::DocumentPurged),
+    ] {
         let run = runs
             .iter()
             .find(|run| run.workflow_id == workflow.id)
             .unwrap();
         let payload: Value = serde_json::from_str(&run.payload).unwrap();
-        assert_eq!(payload["event"], workflow.trigger.as_str());
+        assert_eq!(payload["event"], expected.as_str());
         assert_eq!(payload["source_event"]["event_id"], event_id.to_string());
         assert_eq!(payload["document"]["title"], "retained.pdf");
         assert_eq!(
@@ -51,6 +75,7 @@ async fn purge_delivers_both_trigger_names_once_from_the_same_occurrence() {
     assert!(h.engine.handle(&event).await.unwrap().is_empty());
     assert_eq!(server.hits("purged"), 1);
     assert_eq!(server.hits("deleted"), 1);
+    assert_eq!(server.hits("both"), 1);
 }
 
 #[tokio::test]

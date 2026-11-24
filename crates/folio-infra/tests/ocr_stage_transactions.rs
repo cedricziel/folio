@@ -327,6 +327,7 @@ async fn processing_workflow_contract(db: &Database, fixture: &Fixture<'_>) {
         name: "OCR completed".into(),
         enabled: true,
         trigger: WorkflowTrigger::DocumentOcrCompleted,
+        triggers: Vec::new(),
         cadence: None,
         conditions: WorkflowConditions {
             event: Some(folio_core::models::WorkflowEventConditions {

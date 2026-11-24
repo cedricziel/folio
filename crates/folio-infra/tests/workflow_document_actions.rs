@@ -28,6 +28,7 @@ async fn queue(
                 name: "File invoice".into(),
                 enabled: true,
                 trigger: WorkflowTrigger::DocumentUploaded,
+                triggers: Vec::new(),
                 conditions: WorkflowConditions::default(),
                 actions,
             },

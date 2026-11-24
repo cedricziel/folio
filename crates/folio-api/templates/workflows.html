@@ -29,7 +29,7 @@
                 {% if deleted %}<span class="f-row-title">{{ row.name }}</span>{% else %}<a href="{{ "/workflows"|vault_url }}/{{ row.id }}" class="f-row-title">{{ row.name }}</a>{% endif %}
                 <div class="f-row-sub lifecycle-meta"><span class="f-meta">{{ row.lifecycle_summary }}</span></div>
                 <div class="f-row-sub">
-                    <span>{{ row.trigger }}</span>
+                    <span>{% for label in row.trigger_labels %}{% if !loop.first %} · {% endif %}{{ label }}{% endfor %}</span>
                     {% if !row.enabled %}<span class="f-status f-status-pending">Off</span>{% endif %}
                     {% match row.last_run %}
                     {% when Some with (run) %}

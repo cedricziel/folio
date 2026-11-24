@@ -45,6 +45,7 @@ counts %}
       import * as Turbo from "@hotwired/turbo";
 import { Application, Controller } from "@hotwired/stimulus";
 import { WorkflowConditionEditor, syncProcessingFields } from "/static/workflow-conditions.js";
+import { WorkflowActionEditor } from "/static/workflow-actions.js";
 
 window.Stimulus = Application.start();
 
@@ -978,6 +979,9 @@ Stimulus.register(
   class extends Controller {
     static targets = [
       "trigger",
+      "additionalTriggers",
+      "triggerRow",
+      "addTrigger",
       "conditionEditor",
       "cadence",
       "cadenceMode",
@@ -986,6 +990,7 @@ Stimulus.register(
       "folder",
       "email",
       "actions",
+      "actionEditor",
       "discard",
       "documentFilter",
       "eventFilter",
@@ -996,8 +1001,6 @@ Stimulus.register(
       "ingestReason",
       "ingestRetryLabel",
       "ingestRetry",
-      "documentAction",
-      "savedViewActionHint",
       "metadataFilter",
       "processingFilter",
       "metadataKind",
@@ -1017,14 +1020,67 @@ Stimulus.register(
 
     connect() {
       this.conditionEditor = new WorkflowConditionEditor(this.conditionEditorTarget);
+      this.editor = new WorkflowActionEditor(this.actionEditorTarget);
       this.sync();
     }
 
     disconnect() {
       this.conditionEditor.disconnect();
+      this.editor.disconnect();
+    }
+
+    triggerSelectors() {
+      return [this.triggerTarget, ...this.additionalTriggersTarget.querySelectorAll("select")];
+    }
+
+    addTrigger() {
+      if (this.addTriggerTarget.disabled) return;
+      const row = this.triggerRowTarget.content.firstElementChild.cloneNode(true);
+      this.additionalTriggersTarget.append(row);
+      this.sync();
+      row.querySelector("select").focus();
+    }
+
+    removeTrigger(event) {
+      const row = event.currentTarget.closest(".workflow-trigger-row");
+      const next = row.nextElementSibling?.querySelector("select");
+      row.remove();
+      this.sync();
+      (next || (!this.addTriggerTarget.disabled && this.addTriggerTarget) || this.triggerTarget).focus();
+    }
+
+    moveTriggerUp(event) {
+      const current = event.currentTarget.closest(".workflow-trigger-row").querySelector("select");
+      const selectors = this.triggerSelectors();
+      const previous = selectors[selectors.indexOf(current) - 1];
+      [previous.value, current.value] = [current.value, previous.value];
+      this.sync();
+      previous.focus();
     }
 
     sync() {
+      const selectors = this.triggerSelectors();
+      const selected = selectors.map((select) => select.value);
+      for (const [index, select] of selectors.entries()) {
+        if (index > 0) {
+          select.name = "trigger_additional_" + index;
+          select.setAttribute("aria-label", "Additional trigger " + index);
+          const row = select.closest(".workflow-trigger-row");
+          const up = row.querySelector('[data-action$="#moveTriggerUp"]');
+          const remove = row.querySelector('[data-action$="#removeTrigger"]');
+          up.hidden = false;
+          up.disabled = !select.value;
+          up.setAttribute("aria-label", "Move up, additional trigger " + index);
+          remove.hidden = false;
+          remove.setAttribute("aria-label", "Remove additional trigger " + index);
+        }
+        for (const option of select.options) {
+          const singleOnly = option.value === "workflow.scheduled" || option.value === "ingest.received";
+          option.disabled = option.value !== select.value && option.value !== "" &&
+            ((selectors.length > 1 && singleOnly) ||
+              selected.some((name, other) => other !== index && option.value === name));
+        }
+      }
       const trigger = this.triggerTarget.value;
       const scheduled = trigger === "workflow.scheduled";
       this.cadenceTarget.hidden = !scheduled;
@@ -1032,33 +1088,45 @@ Stimulus.register(
       this.cadenceRepeatTarget.hidden = this.cadenceModeTarget.value !== "recurring";
       this.cadenceRepeatTarget.querySelector("input").disabled = this.cadenceRepeatTarget.hidden;
       const ingest = trigger === "ingest.received";
-      const entry = trigger.startsWith("document_note.") || trigger.startsWith("document_comment.");
-      const savedView = trigger.startsWith("saved_view.");
-      const health = trigger === "source.failed" || trigger === "source.recovered";
-      const outcome = trigger.startsWith("ingest.") && !ingest;
+      this.addTriggerTarget.hidden = false;
+      this.addTriggerTarget.disabled = selected.includes("ingest.received") || selected.includes("workflow.scheduled") ||
+        selected.includes("") || selectors.length >= this.triggerTarget.options.length;
+      const documentActions = selectors
+        .filter((select) => select.value)
+        .every((select) => select.selectedOptions[0]?.dataset.documentActions === "true");
+      const health = selected.includes("source.failed") || selected.includes("source.recovered");
+      const outcome = selected.some((value) => value.startsWith("ingest.") && value !== "ingest.received");
       const ingestEvent = outcome || health;
-      const metadataValues = trigger === "document.metadata.changed";
-      const metadataDefinition = trigger.startsWith("metadata_field.") || trigger.startsWith("metadata_option.");
+      const metadataValues = selected.includes("document.metadata.changed");
+      const metadataDefinition = selected.some((value) => value.startsWith("metadata_field.") || value.startsWith("metadata_option."));
       const metadata = metadataValues || metadataDefinition;
-      const processingKeys = this.triggerTarget.selectedOptions[0]?.dataset.processingKeys?.split(" ") ?? [];
+      const processingFields = selectors.map((select) =>
+        select.selectedOptions[0]?.dataset.processingKeys?.split(" ") ?? []);
+      const processingKeys = processingFields[0].filter((key) => processingFields.every((fields) => fields.includes(key)));
       syncProcessingFields(this.processingFilterTarget, processingKeys);
-      const unreviewed = trigger === "document.unreviewed";
-      const revisionCreated = trigger === "document.revision_created";
+      const savedView = selected.some((value) => value.startsWith("saved_view."));
+      const documentFilters = !scheduled && !savedView && selected.some((value) =>
+        !value.startsWith("document_note.") && !value.startsWith("document_comment.") &&
+        !value.startsWith("ingest.") && value !== "source.failed" && value !== "source.recovered" &&
+        value !== "document.metadata.changed" && !value.startsWith("metadata_field.") && !value.startsWith("metadata_option."));
+      const configured = (section) => [...section.querySelectorAll("input, select")].some((control) =>
+        control.type === "checkbox" ? control.checked : !control.name.endsWith("_mode") && Boolean(control.value));
+      const activeTriggers = selected.filter(Boolean);
+      const allTriggersMatch = (...kinds) => activeTriggers.length > 0 && activeTriggers.every((value) => kinds.includes(value));
       for (const [filter, active] of [
-        [this.titleFilterTarget, trigger === "document.title_changed"],
-        [this.tagDeltaFilterTarget, trigger === "document.tags_changed"],
-        [this.correspondentDeltaFilterTarget, trigger === "document.correspondent_changed"],
-        [this.typeDeltaFilterTarget, trigger === "document.document_type_changed"],
-        [this.dateFilterTarget, trigger === "document.date_changed"],
-        [this.reviewFilterTarget, unreviewed || trigger === "document.reviewed"],
-        [this.unreviewFilterTarget, unreviewed],
-        [this.revisionFilterTarget, revisionCreated || trigger === "document.revision_restored"],
-        [this.revisionSourceFilterTarget, revisionCreated],
+        [this.titleFilterTarget, allTriggersMatch("document.title_changed")],
+        [this.tagDeltaFilterTarget, allTriggersMatch("document.tags_changed")],
+        [this.correspondentDeltaFilterTarget, allTriggersMatch("document.correspondent_changed")],
+        [this.typeDeltaFilterTarget, allTriggersMatch("document.document_type_changed")],
+        [this.dateFilterTarget, allTriggersMatch("document.date_changed")],
+        [this.reviewFilterTarget, allTriggersMatch("document.reviewed", "document.unreviewed")],
+        [this.unreviewFilterTarget, allTriggersMatch("document.unreviewed")],
+        [this.revisionFilterTarget, allTriggersMatch("document.revision_created", "document.revision_restored")],
+        [this.revisionSourceFilterTarget, allTriggersMatch("document.revision_created")],
       ]) {
         filter.hidden = !active;
         filter.disabled = !active;
       }
-      const documentFilters = !(scheduled || entry || ingestEvent || metadata || savedView);
       this.conditionEditor.sync({
         trigger,
         scheduled,
@@ -1089,32 +1157,21 @@ Stimulus.register(
         currency.querySelector("input").disabled = currency.hidden;
       }
       for (const filter of this.documentFilterTargets) {
-        filter.hidden = !documentFilters;
+        filter.hidden = scheduled || (!documentFilters && !configured(filter));
         filter.disabled = filter.hidden;
       }
       this.ingestFilterTarget.hidden = !ingestEvent;
       this.ingestFilterTarget.disabled = !ingestEvent;
-      this.ingestReasonLabelTarget.hidden = trigger === "source.recovered";
+      this.ingestReasonLabelTarget.hidden = !outcome && !selected.includes("source.failed") && !this.ingestReasonTarget.value;
       this.ingestReasonTarget.hidden = this.ingestReasonLabelTarget.hidden;
       this.ingestReasonTarget.disabled = this.ingestReasonTarget.hidden;
-      this.ingestRetryLabelTarget.hidden = !outcome;
-      this.ingestRetryTarget.hidden = !outcome;
-      this.ingestRetryTarget.disabled = !outcome;
-      let hasIncompatibleAction = false;
-      for (const action of this.documentActionTargets) {
-        const selected = action.querySelector("input:checked") ||
-          Array.from(action.querySelectorAll("select")).some(control => control.value);
-        hasIncompatibleAction ||= savedView && Boolean(selected);
-        action.hidden = scheduled || ingestEvent || metadataDefinition || (savedView && !selected);
-        for (const control of action.querySelectorAll("input, select")) {
-          control.disabled = action.hidden;
-        }
-      }
-      this.savedViewActionHintTarget.hidden = !hasIncompatibleAction;
+      this.ingestRetryLabelTarget.hidden = !outcome && !this.ingestRetryTarget.value;
+      this.ingestRetryTarget.hidden = this.ingestRetryLabelTarget.hidden;
+      this.ingestRetryTarget.disabled = this.ingestRetryTarget.hidden;
       this.eventFilterTarget.hidden = scheduled || ingest;
       this.eventFilterTarget.disabled = this.eventFilterTarget.hidden;
       this.actorUserTarget.hidden = this.actorTarget.value !== "user";
-      this.actionsTarget.hidden = ingest;
+      this.actionsTarget.hidden = !this.editor.sync(documentActions, ingest);
       this.discardTarget.hidden = !ingest;
 
       const source = this.sourceTarget.value;

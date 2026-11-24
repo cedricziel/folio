@@ -1,10 +1,12 @@
 //! Workflow API routes
 
+use std::collections::HashSet;
+
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, patch, post},
+    routing::{get, patch, post, put},
     Json, Router,
 };
 use folio_core::models::VaultId;
@@ -31,6 +33,8 @@ use crate::vault::DefaultVault;
 /// Sending it back unchanged on update keeps the stored secret.
 pub const SECRET_MASK: &str = "********";
 
+const ACTION_SOURCES: &str = "x-folio-workflow-action-sources";
+
 const DEFAULT_RUN_LIMIT: u32 = 50;
 const MAX_RUN_LIMIT: u32 = 200;
 
@@ -45,6 +49,7 @@ pub fn router() -> Router<AppState> {
                 .delete(delete_workflow),
         )
         .route("/{id}/trigger", patch(update_workflow_trigger))
+        .route("/{id}/definition", put(update_workflow_definition))
         .route("/{id}/test", post(test_workflow))
         .route("/{id}/restore", post(restore_workflow))
         .route("/{id}/runs", get(list_runs))
@@ -74,47 +79,95 @@ pub(crate) fn redact(mut workflow: Workflow) -> Workflow {
 ///
 /// Values are only restored when the webhook keeps its URL, so a stored secret
 /// can never be redirected to a new destination.
-pub(crate) fn restore_secrets(
+fn restore_secrets(
     input: &mut WorkflowInput,
     existing: &Workflow,
+    sources: Option<&str>,
 ) -> Result<(), ApiError> {
+    let mut indices = sources.map(|raw| raw.split(','));
+    let mut used = HashSet::new();
+    let invalid = || {
+        ApiError::bad_request(
+            "Action sources must name one distinct saved action index or '-' for each action",
+        )
+    };
     for (index, action) in input.actions.iter_mut().enumerate() {
-        let WorkflowAction::Webhook {
-            url,
+        let saved = match indices.as_mut() {
+            None => existing.actions.get(index),
+            Some(indices) => match indices.next().ok_or_else(invalid)? {
+                "-" => None,
+                raw => {
+                    let source = raw.parse::<usize>().map_err(|_| invalid())?;
+                    let saved = existing.actions.get(source).ok_or_else(invalid)?;
+                    if !used.insert(source) {
+                        return Err(invalid());
+                    }
+                    Some(saved)
+                }
+            },
+        };
+        restore_webhook_secrets(action, saved)?;
+    }
+    if indices.is_some_and(|mut values| values.next().is_some()) {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn edit_header<'a>(headers: &'a HeaderMap, name: &str) -> ApiResult<Option<&'a str>> {
+    let mut values = headers.get_all(name).into_iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(ApiError::bad_request(format!(
+            "Provide only one {name} header"
+        )));
+    }
+    value
+        .to_str()
+        .map(Some)
+        .map_err(|_| ApiError::bad_request(format!("Invalid {name} header")))
+}
+
+pub(super) fn restore_webhook_secrets(
+    action: &mut WorkflowAction,
+    saved: Option<&WorkflowAction>,
+) -> Result<(), ApiError> {
+    let WorkflowAction::Webhook {
+        url,
+        secret,
+        headers,
+        ..
+    } = action
+    else {
+        return Ok(());
+    };
+    let stored = match saved {
+        Some(WorkflowAction::Webhook {
+            url: stored_url,
             secret,
             headers,
             ..
-        } = action
-        else {
-            continue;
-        };
-        let stored = match existing.actions.get(index) {
-            Some(WorkflowAction::Webhook {
-                url: stored_url,
-                secret,
-                headers,
-                ..
-            }) if stored_url == url => Some((secret, headers)),
-            _ => None,
-        };
-        let cannot_keep = |what: &str| {
-            ApiError::bad_request(format!(
-                "{what} for {} cannot be kept; provide it again",
-                redact_url(url)
-            ))
-        };
-
-        if secret.as_deref() == Some(SECRET_MASK) {
-            let kept = stored.and_then(|(s, _)| s.clone());
-            *secret = Some(kept.ok_or_else(|| cannot_keep("Webhook secret"))?);
-        }
-        for (name, value) in headers
-            .iter_mut()
-            .filter(|(_, v)| v.as_str() == SECRET_MASK)
-        {
-            let kept = stored.and_then(|(_, h)| h.get(name).cloned());
-            *value = kept.ok_or_else(|| cannot_keep(&format!("Header {name}")))?;
-        }
+        }) if stored_url == url => Some((secret, headers)),
+        _ => None,
+    };
+    let cannot_keep = |what: &str| {
+        ApiError::bad_request(format!(
+            "{what} for {} cannot be kept; provide it again",
+            redact_url(url)
+        ))
+    };
+    if secret.as_deref() == Some(SECRET_MASK) {
+        let kept = stored.and_then(|(value, _)| value.clone());
+        *secret = Some(kept.ok_or_else(|| cannot_keep("Webhook secret"))?);
+    }
+    for (name, value) in headers
+        .iter_mut()
+        .filter(|(_, value)| value.as_str() == SECRET_MASK)
+    {
+        let kept = stored.and_then(|(_, saved)| saved.get(name).cloned());
+        *value = kept.ok_or_else(|| cannot_keep(&format!("Header {name}")))?;
     }
     Ok(())
 }
@@ -328,11 +381,77 @@ pub(crate) async fn update_workflow(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
-    ApiJson(mut input): ApiJson<WorkflowInput>,
+    ApiJson(input): ApiJson<WorkflowInput>,
+) -> ApiResult<Json<Workflow>> {
+    replace_workflow(&state, vault, id, input, None, None).await
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct WorkflowRevisionQuery {
+    /// Positive revision returned by the workflow read used to start editing.
+    expected_revision: i64,
+}
+
+/// Replace a workflow only if it still matches the editor's last read.
+#[utoipa::path(
+    put,
+    path = "/api/workflows/{id}/definition",
+    operation_id = "updateWorkflowDefinition",
+    tag = "workflows",
+    params(
+        ("id" = Uuid, Path, description = "Workflow ID"),
+        WorkflowRevisionQuery,
+        ("X-Folio-Workflow-Action-Sources" = Option<Vec<String>>, Header,
+            description = "One distinct saved action index per action in the new order, or '-' for a new action."),
+    ),
+    request_body = WorkflowInput,
+    responses(
+        (status = 200, description = "The updated workflow; webhook secrets are masked", body = Workflow),
+        (status = 409, description = "The workflow changed after the revision was read", body = ErrorResponse),
+        BadRequest,
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn update_workflow_definition(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<WorkflowRevisionQuery>,
+    headers: HeaderMap,
+    ApiJson(input): ApiJson<WorkflowInput>,
+) -> ApiResult<Json<Workflow>> {
+    if query.expected_revision < 1 {
+        return Err(ApiError::bad_request("Expected revision must be positive"));
+    }
+    let sources = edit_header(&headers, ACTION_SOURCES)?;
+    replace_workflow(
+        &state,
+        vault,
+        id,
+        input,
+        Some(query.expected_revision),
+        sources,
+    )
+    .await
+}
+
+async fn replace_workflow(
+    state: &AppState,
+    vault: VaultId,
+    id: Uuid,
+    mut input: WorkflowInput,
+    expected_revision: Option<i64>,
+    action_sources: Option<&str>,
 ) -> ApiResult<Json<Workflow>> {
     let existing = find(vault, &*state.workflow_repo, id).await?;
-    restore_secrets(&mut input, &existing)?;
-    let workflow = state.workflow_repo.update(vault, id, input).await?;
+    existing.check_revision(expected_revision)?;
+    restore_secrets(&mut input, &existing, action_sources)?;
+    let workflow = state
+        .workflow_repo
+        .replace(vault, id, input, expected_revision)
+        .await?;
     Ok(Json(redact(workflow)))
 }
 
@@ -385,6 +504,15 @@ pub(crate) async fn update_workflow_trigger(
     let existing = find(vault, &*state.workflow_repo, id).await?;
     let expected_revision = Some(input.expected_revision);
     existing.check_revision(expected_revision)?;
+    let triggers = std::iter::once(input.trigger)
+        .chain(
+            existing
+                .triggers
+                .into_iter()
+                .skip(1)
+                .filter(|trigger| *trigger != input.trigger),
+        )
+        .collect();
     let mut conditions = existing.conditions;
     if let Some(document_change) = input.document_change {
         let event = conditions.event.get_or_insert_with(Default::default);
@@ -397,6 +525,7 @@ pub(crate) async fn update_workflow_trigger(
         name: existing.name,
         enabled: existing.enabled,
         trigger: input.trigger,
+        triggers,
         cadence: existing.cadence,
         conditions,
         actions: existing.actions,

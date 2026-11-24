@@ -24,6 +24,8 @@ test("edits processing predicates at the root and in a nested branch", async ({ 
   const nestedFound = nested.getByRole("combobox", { name: "Text found", exact: true });
   await nestedFound.selectOption("true");
   await nested.getByRole("textbox", { name: "Attempt", exact: true }).fill("3");
+  await page.getByRole("combobox", { name: "Action to add" }).selectOption("webhook");
+  await page.getByRole("button", { name: "Add action", exact: true }).click();
   await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
   const save = page.getByRole("button", { name: "Save workflow", exact: true });
   await save.click();

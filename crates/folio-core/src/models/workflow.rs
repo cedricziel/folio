@@ -1,4 +1,4 @@
-//! Workflow model: a trigger, optional conditions, and ordered actions
+//! Workflow triggers, conditions, and ordered actions
 
 use std::collections::BTreeMap;
 
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Document, DocumentDate, DocumentSource, Id, SourceConditions, UserId, VaultId, WorkflowCadence,
-    WorkflowEventConditions, WorkflowEventIdentity, WorkflowTarget,
+    WorkflowEventConditions, WorkflowEventIdentity, WorkflowTarget, WorkflowTriggerRegistry,
 };
 use crate::error::{Error, Result};
 
@@ -886,7 +886,11 @@ pub struct Workflow {
     pub vault_id: VaultId,
     pub name: String,
     pub enabled: bool,
+    /// First selected trigger, retained for existing clients.
     pub trigger: WorkflowTrigger,
+    /// Selected triggers in the order saved by the owner.
+    #[serde(default)]
+    pub triggers: Vec<WorkflowTrigger>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(value_type = WorkflowCadence, required = false))]
     pub cadence: Option<WorkflowCadence>,
@@ -922,11 +926,17 @@ impl Workflow {
 /// Fields for creating or replacing a workflow
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(try_from = "WorkflowInputWire")]
 pub struct WorkflowInput {
     pub name: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Legacy selection, or the first trigger when both fields are supplied.
+    #[cfg_attr(feature = "openapi", schema(required = false))]
     pub trigger: WorkflowTrigger,
+    /// Ordered nonempty trigger list. Omit for a legacy single-trigger request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<WorkflowTrigger>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(value_type = WorkflowCadence, required = false))]
     pub cadence: Option<WorkflowCadence>,
@@ -935,11 +945,70 @@ pub struct WorkflowInput {
     pub actions: Vec<WorkflowAction>,
 }
 
+#[derive(Deserialize)]
+struct WorkflowInputWire {
+    name: String,
+    #[serde(default = "default_enabled")]
+    enabled: bool,
+    trigger: Option<WorkflowTrigger>,
+    triggers: Option<Vec<WorkflowTrigger>>,
+    cadence: Option<WorkflowCadence>,
+    #[serde(default)]
+    conditions: WorkflowConditions,
+    actions: Vec<WorkflowAction>,
+}
+
+impl TryFrom<WorkflowInputWire> for WorkflowInput {
+    type Error = Error;
+
+    fn try_from(wire: WorkflowInputWire) -> Result<Self> {
+        if wire.triggers.as_ref().is_some_and(Vec::is_empty) {
+            return Err(Error::Validation(
+                "Select at least one workflow trigger".into(),
+            ));
+        }
+        let triggers = wire.triggers.unwrap_or_default();
+        let trigger = triggers
+            .first()
+            .copied()
+            .or(wire.trigger)
+            .ok_or_else(|| Error::Validation("Select at least one workflow trigger".into()))?;
+        if wire.trigger.is_some_and(|legacy| legacy != trigger) {
+            return Err(Error::Validation(
+                "The legacy workflow trigger must match the first selection".into(),
+            ));
+        }
+        Ok(Self {
+            name: wire.name,
+            enabled: wire.enabled,
+            trigger,
+            triggers,
+            cadence: wire.cadence,
+            conditions: wire.conditions,
+            actions: wire.actions,
+        })
+    }
+}
+
 fn default_enabled() -> bool {
     true
 }
 
 impl WorkflowInput {
+    pub fn selected_triggers(&self) -> &[WorkflowTrigger] {
+        if self.triggers.is_empty() {
+            std::slice::from_ref(&self.trigger)
+        } else {
+            &self.triggers
+        }
+    }
+
+    pub fn keep_legacy_trigger_selection(&mut self, existing: &Workflow) {
+        if self.triggers.is_empty() && existing.trigger == self.trigger {
+            self.triggers.clone_from(&existing.triggers);
+        }
+    }
+
     /// Reject workflows that could never run correctly
     ///
     /// Webhook URLs must be `http` or `https`. Private and loopback addresses
@@ -950,6 +1019,13 @@ impl WorkflowInput {
 
         if self.name.trim().is_empty() {
             return invalid("Workflow name must not be empty");
+        }
+        let triggers = self.selected_triggers();
+        if triggers.first() != Some(&self.trigger) {
+            return invalid("The legacy workflow trigger must match the first selection");
+        }
+        if triggers.len() > 1 && triggers.contains(&WorkflowTrigger::Scheduled) {
+            return invalid("A clock schedule must be the only trigger");
         }
         match (self.trigger, self.cadence) {
             (WorkflowTrigger::Scheduled, Some(cadence)) => {
@@ -1007,12 +1083,18 @@ impl WorkflowInput {
                 });
             }
         }
+        let selected: Vec<_> = triggers.iter().map(|trigger| trigger.as_str()).collect();
+        WorkflowTriggerRegistry::built_in().validate_actions(&selected, &self.actions)?;
         self.conditions.validate()?;
-        self.conditions.validate_event_conditions(self.trigger)?;
-        if self.trigger == WorkflowTrigger::IngestReceived
-            && self.conditions.requires_event_context()
-        {
-            return invalid("Pre-import workflows do not have a committed event actor or subject");
+        for trigger in triggers {
+            self.conditions.validate_event_conditions(*trigger)?;
+            if *trigger == WorkflowTrigger::IngestReceived
+                && self.conditions.requires_event_context()
+            {
+                return invalid(
+                    "Pre-import workflows do not have a committed event actor or subject",
+                );
+            }
         }
         Ok(())
     }
@@ -1582,12 +1664,58 @@ mod tests {
         }
     }
 
+    #[test]
+    fn trigger_selection_accepts_ordered_json_without_a_legacy_primary() {
+        let input: WorkflowInput = serde_json::from_value(serde_json::json!({
+            "name": "One or the other",
+            "triggers": ["document.title_changed", "document.tags_changed"],
+            "actions": [{"type": "webhook", "url": "https://receiver.test"}],
+        }))
+        .unwrap();
+        assert_eq!(input.trigger, WorkflowTrigger::DocumentTitleChanged);
+        input.validate().unwrap();
+        let encoded = serde_json::to_value(input).unwrap();
+        assert_eq!(
+            encoded["triggers"],
+            serde_json::json!(["document.title_changed", "document.tags_changed"])
+        );
+    }
+
+    #[test]
+    fn trigger_selection_rejects_empty_conflicting_or_duplicate_choices() {
+        let mut body = serde_json::json!({
+            "name": "Invalid trigger configuration",
+            "trigger": "document.uploaded",
+            "triggers": [],
+            "actions": [{"type": "webhook", "url": "https://receiver.test"}],
+        });
+        assert!(serde_json::from_value::<WorkflowInput>(body.clone()).is_err());
+        body["triggers"] = serde_json::json!(["document.deleted"]);
+        assert!(serde_json::from_value::<WorkflowInput>(body.clone()).is_err());
+        body["triggers"] = serde_json::json!(["document.uploaded", "document.uploaded"]);
+        let duplicate: WorkflowInput = serde_json::from_value(body).unwrap();
+        assert!(matches!(duplicate.validate(), Err(Error::Validation(_))));
+    }
+
+    #[test]
+    fn trigger_selection_rejects_incompatible_secondary_events() {
+        let input: WorkflowInput = serde_json::from_value(serde_json::json!({
+            "name": "Unsupported tag workflow",
+            "trigger": "document.uploaded",
+            "triggers": ["document.uploaded", "document.deleted"],
+            "actions": [{"type": "add_tags", "tag_ids": [Id::new_v4()]}],
+        }))
+        .unwrap();
+        assert!(matches!(input.validate(), Err(Error::Validation(_))));
+    }
+
     fn input(trigger: WorkflowTrigger, actions: Vec<WorkflowAction>) -> WorkflowInput {
         WorkflowInput {
             cadence: None,
             name: "n".into(),
             enabled: true,
             trigger,
+            triggers: Vec::new(),
             conditions: Default::default(),
             actions,
         }

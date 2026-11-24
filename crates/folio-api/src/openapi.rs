@@ -128,6 +128,7 @@ use crate::routes::{
         workflows::get_workflow,
         workflows::create_workflow,
         workflows::update_workflow,
+        workflows::update_workflow_definition,
         workflows::update_workflow_trigger,
         workflows::delete_workflow,
         workflows::restore_workflow,
