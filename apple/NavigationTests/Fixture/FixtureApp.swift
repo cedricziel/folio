@@ -54,18 +54,25 @@ extension FixtureApp {
     private static func makeService(arguments: [String]) -> MockFolioService {
         guard arguments.contains("--classification") else {
             return MockFolioService(
-                documents: documents, loseFirstEntryResponse: arguments.contains("--discussion-save-failure"))
+                documents: documents, loseFirstEntryResponse: arguments.contains("--discussion-save-failure"),
+                nextSavedViewID: ProcessInfo.processInfo.environment["FOLIO_FIXTURE_SAVED_VIEW_ID"]
+                    .flatMap(UUID.init(uuidString:)))
         }
+        let correspondent = Correspondent(name: "City utilities")
+        let type = DocumentType(name: "Invoice")
+        let tag = FolioKit.Tag(name: "Taxes")
+        let classified = arguments.contains("--classification-saved")
         // Processed but not reviewed, so the inbox holds it until it is marked reviewed.
         let letter = Document(
-            title: "Unfiled letter", originalFilename: "letter.pdf", ocrStatus: .done, embedStatus: .done,
+            title: "Unfiled letter", originalFilename: "letter.pdf",
+            correspondentID: classified ? correspondent.id : nil, documentTypeID: classified ? type.id : nil,
+            ocrStatus: .done, embedStatus: .done, tags: classified ? [tag] : [],
             canEditDocumentDate: true, reviewed: false, canReviewDocument: true)
         let kept = Document(
             title: "Second fixture", originalFilename: "second.pdf", ocrStatus: .done, embedStatus: .done,
             reviewed: false)
         return MockFolioService(
-            documents: [letter, kept], correspondents: [Correspondent(name: "City utilities")],
-            types: [DocumentType(name: "Invoice")], tags: [FolioKit.Tag(name: "Taxes")],
+            documents: [letter, kept], correspondents: [correspondent], types: [type], tags: [tag],
             failFirstClassificationSave: arguments.contains("--classification-save-failure"))
     }
 
