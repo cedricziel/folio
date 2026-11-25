@@ -444,6 +444,53 @@ import XCTest
         capture(app, name: "Saved custom field action")
     }
 
+    func testProcessingConditionsSaveAndReopenAtTheRootAndInANestedGroup() {
+        let app = launch(arguments: ["--workflow-processing-conditions"])
+        openWorkflow(app)
+        let edit = app.buttons["Edit conditions"]
+        guard scroll(app, until: edit) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+
+        let branch = app.buttons["Condition 1"]
+        guard scroll(app, until: branch) else { return XCTFail(app.debugDescription) }
+        branch.tap()
+        let textFound = app.buttons["workflow-condition-event.processing.has_text"]
+        guard scroll(app, until: textFound) else { return XCTFail(app.debugDescription) }
+        textFound.tap()
+        let no = app.buttons["No"]
+        guard no.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        no.tap()
+
+        let back = app.navigationBars["Condition 1"].buttons.firstMatch
+        guard back.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        back.tap()
+        let attempt = app.textFields["Attempt"]
+        guard attempt.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        for _ in 0..<4 where !attempt.isHittable {
+            app.swipeDown()
+        }
+        guard attempt.isHittable else { return XCTFail(app.debugDescription) }
+        attempt.tap()
+        attempt.typeText("2")
+        let save = app.navigationBars["Edit conditions"].buttons["Save"]
+        guard save.waitForExistence(timeout: 5), save.isEnabled else { return XCTFail(app.debugDescription) }
+        save.tap()
+        guard save.waitForNonExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+
+        guard scroll(app, until: edit) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+        guard scroll(app, until: attempt) else { return XCTFail(app.debugDescription) }
+        XCTAssertEqual(attempt.value as? String, "2", app.debugDescription)
+        capture(app, name: "Saved root processing filter")
+        guard scroll(app, until: branch) else { return XCTFail(app.debugDescription) }
+        branch.tap()
+        guard scroll(app, until: textFound) else { return XCTFail(app.debugDescription) }
+        capture(app, name: "Saved nested processing filter")
+        textFound.tap()
+        guard no.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        XCTAssertTrue(no.isSelected, app.debugDescription)
+    }
+
     func testNonOwnersCannotReadWorkflowConfigurationOrUseLifecycleActions() {
         let app = launch(arguments: ["--read-only"])
         XCTAssertTrue(app.staticTexts["Owner access required"].waitForExistence(timeout: 10), app.debugDescription)
