@@ -5,6 +5,68 @@ import Testing
 @testable import FolioKit
 
 struct WorkflowConditionTreeTests {
+    @Test func matchingAnEmptyTitleKeepsGroupedAndUnadvertisedFilters() throws {
+        let choice = WorkflowTriggerChoice(
+            id: "document.title_changed", title: "Title changes", target: .document,
+            conditionFields: [
+                .init(id: "event.document_change.before", title: "Previous title", valueType: "text")
+            ]
+        )
+        var tree = try decode(
+            """
+            {"any": [], "all": [{"event": {"actor": {"type": "system"},
+                "document_change": {"type": "title", "after": "Invoice"}}}]}
+            """
+        )
+        var child = try #require(tree[.all]?.first)
+        var change = try #require(child.metadataChange(for: choice))
+        change.setTitleMatch(true, for: .before)
+        child.setMetadataChange(change)
+        tree[.all] = [child]
+
+        let expected = try decode(
+            """
+            {"any": [], "all": [{"event": {"actor": {"type": "system"},
+                "document_change": {"type": "title", "before": "", "after": "Invoice"}}}]}
+            """
+        )
+        #expect(try tree.payload() == expected.payload())
+    }
+
+    @Test func tagReplacementInAGroupValidatesBothSides() throws {
+        let choice = WorkflowTriggerChoice(
+            id: "document.tags_changed", title: "Tags change", target: .document,
+            conditionFields: [
+                .init(id: "event.document_change.added_id", title: "Added tag", valueType: "identifier"),
+                .init(id: "event.document_change.removed_id", title: "Removed tag", valueType: "identifier"),
+                .init(id: "event.document_change.state", title: "Tag change", valueType: "text"),
+            ]
+        )
+        let added = "aaaaaaaa-0000-4000-8000-000000000001"
+        let removed = "aaaaaaaa-0000-4000-8000-000000000002"
+        var tree = try decode("{\"all\":[{}]}")
+        var child = try #require(tree[.all]?.first)
+        var change = try #require(child.metadataChange(for: choice))
+        change[.state] = "added"
+        change[.addedID] = added
+        change[.removedID] = removed
+        child.setMetadataChange(change)
+        tree[.all] = [child]
+        #expect(tree.validationMessage(fields: [], metadataChoice: choice) != nil)
+
+        change[.state] = "replaced"
+        child.setMetadataChange(change)
+        tree[.all] = [child]
+        #expect(tree.validationMessage(fields: [], metadataChoice: choice) == nil)
+        let expected = try decode(
+            """
+            {"all":[{"event":{"document_change":{"type":"tags","state":"replaced",
+                "added_id":"\(added)","removed_id":"\(removed)"}}}]}
+            """
+        )
+        #expect(try tree.payload() == expected.payload())
+    }
+
     @Test func editingNestedFieldsPreservesUnknownPredicatesAndEmptyAlternatives() throws {
         let original = """
             {

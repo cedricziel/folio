@@ -247,6 +247,12 @@ action and reopens the amount and currency. `WorkflowActionDraftTests` checks
 all ten typed values and clearing a field. Keep the document metadata tests
 when changing the shared value controls.
 
+For document metadata changes in grouped conditions, add `WorkflowConditionTreeTests`
+and `WorkflowDocumentConditionTests` to the package filter. Verify that changing one
+predicate preserves its group and sibling filters, an empty title remains an exact
+match, and the save uses the workflow's vault and expected revision.
+The iPhone fixture saves a tag replacement in a group and reopens the new tag.
+
 ## Verify Apple vault management
 
 Use the isolated package procedure above for `ManagementRequestTests`,

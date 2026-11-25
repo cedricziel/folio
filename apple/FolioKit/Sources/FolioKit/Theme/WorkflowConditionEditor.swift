@@ -5,6 +5,8 @@ struct WorkflowConditionEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var tree: WorkflowConditionTree?
     @State private var choice: WorkflowTriggerChoice?
+    @State private var metadataOptions: [WorkflowMetadataConditionDraft.Option]?
+    @State private var metadataOptionsError: String?
     @State private var isSaving = false
     @State private var needsReload = false
     @State private var loadError: String?
@@ -23,13 +25,16 @@ struct WorkflowConditionEditor: View {
                         for: choice, includeLegacyDefaults: workflow.selectedTriggers.count == 1)
                     let supportsActor = WorkflowConditionTree.Actor.isAvailable(for: choice)
                     WorkflowConditionBranch(
-                        node: tree, fields: fields, supportsActor: supportsActor, depth: 0,
+                        node: tree, fields: fields, supportsActor: supportsActor,
+                        metadataChoice: metadataChoice, metadataOptions: metadataOptions,
+                        metadataOptionsError: metadataOptionsError, reloadMetadataOptions: loadMetadataOptions,
+                        depth: 0,
                         remaining: { WorkflowConditionTree.maximumNodes - tree.wrappedValue.count }
                     )
                     .disabled(isSaving || needsReload)
-                    if let message = tree.wrappedValue.validationMessage(fields: fields, supportsActor: supportsActor)
-                        ?? saveError
-                    {
+                    if let message = tree.wrappedValue.validationMessage(
+                        fields: fields, supportsActor: supportsActor, metadataChoice: metadataChoice
+                    ) ?? saveError {
                         Text(message).foregroundStyle(Color.danger)
                     }
                 } else if let loadError {
@@ -50,6 +55,7 @@ struct WorkflowConditionEditor: View {
                 }
             }
             .task { await load() }
+            .task(id: metadataKind) { await loadMetadataOptions() }
         }
         .interactiveDismissDisabled(isSaving)
     }
@@ -58,9 +64,38 @@ struct WorkflowConditionEditor: View {
         guard !needsReload, let tree, let choice else { return false }
         return tree.validationMessage(
             fields: WorkflowConditionTree.Field.available(
-                for: choice, includeLegacyDefaults: workflow.selectedTriggers.count == 1),
-            supportsActor: WorkflowConditionTree.Actor.isAvailable(for: choice)
+                for: choice, includeLegacyDefaults: workflow.selectedTriggers.count == 1
+            ),
+            supportsActor: WorkflowConditionTree.Actor.isAvailable(for: choice), metadataChoice: metadataChoice
         ) == nil
+    }
+
+    private var metadataChoice: WorkflowTriggerChoice? {
+        workflow.selectedTriggers.count == 1 ? choice : nil
+    }
+
+    private var metadataKind: TaxonomyKind? {
+        guard let metadataChoice, let draft = WorkflowMetadataConditionDraft(metadataChoice, saved: nil),
+            draft.loadsIdentifiers
+        else { return nil }
+        return draft.kind.taxonomyKind
+    }
+
+    private func loadMetadataOptions() async {
+        metadataOptions = nil
+        metadataOptionsError = nil
+        guard let kind = metadataKind else { return }
+        do {
+            let entries = try await service.workflowActionTaxonomy(kind, vaultID: workflow.vaultID)
+            guard !Task.isCancelled, metadataKind == kind else { return }
+            metadataOptions = entries.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                .map { .init($0.id.uuidString.lowercased(), $0.name) }
+        } catch {
+            guard !Task.isCancelled, metadataKind == kind else { return }
+            metadataOptionsError = WorkflowLifecycleViewModel.message(
+                error, fallback: "Couldn't load classification choices. Try again."
+            )
+        }
     }
 
     private func load() async {
@@ -69,7 +104,7 @@ struct WorkflowConditionEditor: View {
         do {
             async let choices = service.workflowTriggerChoices(vaultID: workflow.vaultID)
             async let conditions = service.loadWorkflowConditions(workflow)
-            guard let current = WorkflowTriggerChoice.matching(workflow.selectedTriggers, in: try await choices) else {
+            guard let current = try WorkflowTriggerChoice.matching(workflow.selectedTriggers, in: await choices) else {
                 throw FolioError.unreadableResponse
             }
             tree = try await conditions
@@ -103,11 +138,17 @@ private struct WorkflowConditionBranch: View {
     @Binding var node: WorkflowConditionTree
     let fields: [WorkflowConditionTree.Field]
     let supportsActor: Bool
+    let metadataChoice: WorkflowTriggerChoice?
+    let metadataOptions: [WorkflowMetadataConditionDraft.Option]?
+    let metadataOptionsError: String?
+    let reloadMetadataOptions: @MainActor () async -> Void
     let depth: Int
     let remaining: () -> Int
 
     var body: some View {
-        let hasAdditional = node.hasAdditionalFilters(fields: fields, supportsActor: supportsActor)
+        let hasAdditional = node.hasAdditionalFilters(
+            fields: fields, supportsActor: supportsActor, metadataChoice: metadataChoice
+        )
         if !fields.isEmpty || supportsActor || hasAdditional {
             Section("Filters") {
                 ForEach(fields) { field in
@@ -150,6 +191,20 @@ private struct WorkflowConditionBranch: View {
                 }
             }
         }
+        if let choice = metadataChoice, let change = node.metadataChange(for: choice) {
+            Section("Document change") {
+                WorkflowMetadataConditionFields(
+                    draft: Binding(
+                        get: { node.metadataChange(for: choice) ?? change },
+                        set: { node.setMetadataChange($0) }
+                    ), identifierOptions: metadataOptions
+                )
+                if let metadataOptionsError {
+                    Text(metadataOptionsError).foregroundStyle(Color.danger)
+                    Button("Try again") { Task { await reloadMetadataOptions() } }
+                }
+            }
+        }
         ForEach(WorkflowConditionTree.Match.allCases) { kind in
             Section(kind.title) {
                 if let children = node[kind] {
@@ -161,7 +216,9 @@ private struct WorkflowConditionBranch: View {
                             Form {
                                 WorkflowConditionBranch(
                                     node: binding(for: child, in: kind), fields: fields,
-                                    supportsActor: supportsActor, depth: depth + 1, remaining: remaining
+                                    supportsActor: supportsActor, metadataChoice: metadataChoice,
+                                    metadataOptions: metadataOptions, metadataOptionsError: metadataOptionsError,
+                                    reloadMetadataOptions: reloadMetadataOptions, depth: depth + 1, remaining: remaining
                                 )
                             }
                             .navigationTitle("Condition \(index + 1)")
@@ -194,6 +251,38 @@ private struct WorkflowConditionBranch: View {
         } set: { updated in
             guard let index = node[kind]?.firstIndex(where: { $0.id == child.id }) else { return }
             node[kind]?[index] = updated
+        }
+    }
+}
+
+private struct WorkflowMetadataConditionFields: View {
+    @Binding var draft: WorkflowMetadataConditionDraft
+    let identifierOptions: [WorkflowMetadataConditionDraft.Option]?
+
+    var body: some View {
+        ForEach(draft.fields) { field in
+            let value = Binding(get: { draft[field.key] }, set: { draft[field.key] = $0 })
+            if draft.kind == .title {
+                let enabled = Binding(
+                    get: { draft.matchesTitle(field.key) },
+                    set: { draft.setTitleMatch($0, for: field.key) }
+                )
+                Toggle("Match \(field.title.lowercased())", isOn: enabled)
+                if enabled.wrappedValue {
+                    TextField(field.title, text: value).autocorrectionDisabled()
+                }
+            } else {
+                let options = field.key.isIdentifier ? (identifierOptions ?? []) : draft.kind.states
+                Picker(field.title, selection: value) {
+                    Text("Any").tag("")
+                    if !value.wrappedValue.isEmpty, !options.contains(where: { $0.id == value.wrappedValue }) {
+                        Text("Saved selection").tag(value.wrappedValue)
+                    }
+                    ForEach(options) { option in Text(option.title).tag(option.id) }
+                }
+                .disabled(field.key.isIdentifier && identifierOptions == nil)
+                .accessibilityIdentifier("workflow-metadata-\(field.key.rawValue)")
+            }
         }
     }
 }
