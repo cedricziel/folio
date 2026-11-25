@@ -498,6 +498,14 @@ on a mobile viewport.
 
 ## Verify managed source lifecycle
 
+For managed-source workflow triggers, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflows source_lifecycle_events`.
+The real SQLite and PostgreSQL producers cover owner scope, disabled sources,
+retained deletion, restoration, and configuration exclusion from deliveries.
+They remove the last direct owner after queuing a run and verify that delivery
+and matching of a later occurrence both stop. Run the ingestion outcome scope
+tests when changing their shared authority check.
+
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test source_lifecycle`
 with disposable SQLite and PostgreSQL fixtures. The shared contract covers actor
 metadata, retained import ledger and status, disabled scheduling after deletion,
@@ -527,6 +535,13 @@ before merging; passing assertions alone do not verify the rendered labels.
 
 ## Verify classification lifecycle
 
+For classification workflow triggers, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflows classification_events`.
+The producer-to-delivery contract covers all twelve transitions, frozen names,
+duplicate delivery, cross-vault scope, and a classification deleted while an
+update delivery waits. The web fixture in `workflow-condition-groups.spec.ts`
+verifies that the editor saves a classification trigger with occurrence filters.
+
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test taxonomy_lifecycle --test repository_contract`
 for SQLite/PostgreSQL soft deletion, stable identity, retained document references,
 name reuse, restore conflicts, actor metadata, and transactional lifecycle events.
@@ -544,6 +559,14 @@ The fixture shows the screen in a window, so check macOS sheet sizing by opening
 Classifications from the WorkspaceView sidebar; package tests do not verify layout.
 
 ## Verify retained vaults and owner grants
+
+For owner-only vault activity workflow triggers, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflows vault_activity`.
+This checks the committed rename, restore and membership transitions in SQLite
+and PostgreSQL. Both databases verify that vault deletion and loss of the
+last direct owner stop queued deliveries. The membership payload uses the
+captured grant transition, including after the principal receives another role.
+Vault creation precedes workflow setup. Workflows require an active vault.
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test vault_lifecycle` against disposable SQLite and PostgreSQL fixtures. It covers scoped actor/lineage metadata, atomic initial ownership, no-op and rollback suppression, protected defaults, retained references, owner-only recovery, permanent audit history after outbox pruning, lifecycle history retained after more than 100 newer document audit events, and cancellation/fencing of pending workflow runs.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test vault_lifecycle --test vaults` for owner, viewer, and unrelated-admin boundaries, forged lifecycle fields, deleted-vault scoping, and management controls. Existing document-focused drains must acknowledge every event while returning only document projections; dedicated lifecycle contracts inspect all envelopes.

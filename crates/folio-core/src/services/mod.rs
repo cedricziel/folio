@@ -3,6 +3,7 @@
 //! This module contains the core business logic that orchestrates
 //! domain operations using the port traits.
 
+mod classification_workflow_access;
 mod file_identities;
 mod file_sizes;
 mod idempotent_uploads;
@@ -16,9 +17,11 @@ pub mod notifications;
 mod outbox_dispatcher;
 mod paperless_sources;
 mod revision_originals;
+mod vault_workflow_access;
 mod vaults;
 mod workflow_engine;
 
+pub use classification_workflow_access::ClassificationWorkflowAccess;
 pub use file_identities::backfill_original_identities;
 pub use file_sizes::backfill_file_sizes;
 pub use idempotent_uploads::{ClaimTiming, IdempotentUploads, UploadOutcome};
@@ -35,6 +38,7 @@ pub use paperless_sources::{
     authorize_paperless, ensure_paperless_slot, split_shadowed_paperless, PAPERLESS_SLOT_TAKEN,
 };
 pub use revision_originals::{replace_document_original, NewRevisionOriginal};
+pub use vault_workflow_access::VaultWorkflowAccess;
 pub use vaults::{VaultService, PERSONAL_NAME};
 pub use workflow_engine::WorkflowEngine;
 

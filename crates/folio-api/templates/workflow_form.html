@@ -30,7 +30,7 @@
             <input type="hidden" name="trigger_selection" value="on">
             <label for="trigger">When</label>
             <select class="select" id="trigger" name="trigger" data-workflow-form-target="trigger" data-action="change->workflow-form#sync">
-                {% for t in triggers %}<option value="{{ t.value }}"{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}{% if t.selected %} selected{% endif %} data-document-actions="{{ t.document_actions }}">{{ t.label }}</option>{% endfor %}
+                {% for t in triggers %}<option value="{{ t.value }}"{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}{% if t.selected %} selected{% endif %} data-document-actions="{{ t.document_actions }}"{% if t.occurrence_only %} data-occurrence-only="true"{% endif %}>{{ t.label }}</option>{% endfor %}
             </select>
             <div data-workflow-form-target="additionalTriggers">
                 {% for row in additional_triggers %}
@@ -38,7 +38,7 @@
                     <select class="select" aria-label="Additional trigger {{ row.position }}" name="trigger_additional_{{ row.position }}"
                             data-action="change->workflow-form#sync">
                         <option value="">Choose a trigger</option>
-                        {% for t in row.choices %}<option value="{{ t.value }}"{% if t.selected %} selected{% endif %} data-document-actions="{{ t.document_actions }}"{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}>{{ t.label }}</option>{% endfor %}
+                        {% for t in row.choices %}<option value="{{ t.value }}"{% if t.selected %} selected{% endif %} data-document-actions="{{ t.document_actions }}"{% if t.occurrence_only %} data-occurrence-only="true"{% endif %}{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}>{{ t.label }}</option>{% endfor %}
                     </select>
                     <button type="button" class="f-btn f-btn-quiet" data-action="workflow-form#moveTriggerUp" hidden>Move up</button>
                     <button type="button" class="f-btn f-btn-quiet" data-action="workflow-form#removeTrigger" hidden>Remove</button>
@@ -49,7 +49,7 @@
                 <div class="workflow-trigger-row">
                     <select class="select" data-action="change->workflow-form#sync">
                         <option value="">Choose a trigger</option>
-                        {% for t in triggers %}<option value="{{ t.value }}" data-document-actions="{{ t.document_actions }}"{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}>{{ t.label }}</option>{% endfor %}
+                        {% for t in triggers %}<option value="{{ t.value }}" data-document-actions="{{ t.document_actions }}"{% if t.occurrence_only %} data-occurrence-only="true"{% endif %}{% if !t.processing_keys.is_empty() %} data-processing-keys="{{ t.processing_keys }}"{% endif %}>{{ t.label }}</option>{% endfor %}
                     </select>
                     <button type="button" class="f-btn f-btn-quiet" data-action="workflow-form#moveTriggerUp">Move up</button>
                     <button type="button" class="f-btn f-btn-quiet" data-action="workflow-form#removeTrigger">Remove</button>
@@ -159,6 +159,10 @@
             <legend class="legend">Only if the event matches</legend>
             <label for="event_subject_id">Subject ID</label>
             <input class="input" type="text" id="event_subject_id" name="event_subject_id" value="{{ values.event_subject_id }}">
+            <div data-workflow-form-target="workflowRunFilter" hidden>
+                <label for="event_workflow_id">Source workflow ID</label>
+                <input class="input" type="text" id="event_workflow_id" name="event_workflow_id" value="{{ values.event_workflow_id.as_deref().unwrap_or("") }}" disabled>
+            </div>
             <label for="event_actor">Who made the change</label>
             <select class="select" id="event_actor" name="event_actor" data-workflow-form-target="actor" data-action="change->workflow-form#sync">
                 <option value="">Anyone</option>
@@ -382,7 +386,7 @@
                 <legend class="legend">Then Folio does</legend>
                 <p class="hint">Every step runs, in this order. Leave a step empty to skip it.</p>
 
-                <div class="action-card" data-workflow-form-target="documentAction">
+                <div class="action-card">
                     <p class="heading">Add tags</p>
                     {% if action_tags.is_empty() %}
                     <p class="hint">No tags yet. <a href="{{ "/manage"|vault_url }}">Create one</a>.</p>
@@ -393,7 +397,7 @@
                     {% endif %}
                 </div>
 
-                <div class="action-card" data-workflow-form-target="documentAction">
+                <div class="action-card">
                     <label class="heading" for="action_correspondent_id">Set who it is from</label>
                     <select class="select" id="action_correspondent_id" name="action_correspondent_id">
                         <option value="">Leave as is</option>
@@ -401,7 +405,7 @@
                     </select>
                 </div>
 
-                <div class="action-card" data-workflow-form-target="documentAction">
+                <div class="action-card">
                     <label class="heading" for="action_document_type_id">Set the type</label>
                     <select class="select" id="action_document_type_id" name="action_document_type_id">
                         <option value="">Leave as is</option>

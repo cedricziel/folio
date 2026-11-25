@@ -91,6 +91,7 @@ struct TriggerChoice {
     selected: bool,
     processing_keys: String,
     document_actions: bool,
+    occurrence_only: bool,
 }
 
 struct AdditionalTrigger {
@@ -310,6 +311,7 @@ struct FormValues {
     document_type_id: String,
     filename_glob: String,
     event_subject_id: String,
+    event_workflow_id: Option<String>,
     event_actor: Option<String>,
     event_user_id: String,
     ingest_source_id: String,
@@ -892,6 +894,11 @@ impl FormValues {
                 .and_then(|event| event.subject_id)
                 .map(|id| id.to_string())
                 .unwrap_or_default(),
+            event_workflow_id: c
+                .event
+                .as_ref()
+                .and_then(|event| event.workflow_id)
+                .map(|id| id.to_string()),
             event_actor: Some(event_actor.into()),
             event_user_id,
             ingest_source_id: c
@@ -1085,6 +1092,18 @@ impl FormValues {
             None => existing.and_then(|workflow| workflow.conditions.event.clone()),
             Some(mode) => {
                 let subject_id = id(&self.event_subject_id, "event subject ID")?;
+                let workflow_id = if let Some(value) = self.event_workflow_id.as_deref() {
+                    id(value, "source workflow ID")?
+                } else if selected
+                    .iter()
+                    .all(|trigger| trigger.terminal_run_status().is_some())
+                {
+                    existing
+                        .and_then(|workflow| workflow.conditions.event.as_ref())
+                        .and_then(|event| event.workflow_id)
+                } else {
+                    None
+                };
                 let actor = match mode {
                     "" => None,
                     "system" => Some(WorkflowActorCondition::System),
@@ -1129,12 +1148,14 @@ impl FormValues {
                 let metadata = metadata_condition(&self, metadata_trigger)?;
                 let document_change = self.document_condition(trigger)?;
                 (subject_id.is_some()
+                    || workflow_id.is_some()
                     || actor.is_some()
                     || ingest.is_some()
                     || metadata.is_some()
                     || document_change.is_some())
                 .then_some(WorkflowEventConditions {
                     subject_id,
+                    workflow_id,
                     actor,
                     ingest,
                     metadata,
@@ -1176,9 +1197,11 @@ impl FormValues {
                 trigger.entry_transition().is_none()
                     && !trigger.is_ingest_outcome()
                     && !trigger.is_custom_metadata()
-                    && !trigger.is_saved_view()
+                    && !trigger.uses_only_occurrence_filters()
             }) || (self.trigger_selection.is_some()
-                && selected.iter().any(|trigger| trigger.is_saved_view())))
+                && selected
+                    .iter()
+                    .any(|trigger| trigger.uses_only_occurrence_filters())))
         {
             conditions.mime_type = optional(&self.mime_type);
             conditions.tag_id = id(&self.tag_id, "tag")?;
@@ -1200,7 +1223,7 @@ impl FormValues {
                 workflow.trigger.entry_transition().is_none()
                     && !workflow.trigger.is_ingest_outcome()
                     && !workflow.trigger.is_custom_metadata()
-                    && !workflow.trigger.is_saved_view()
+                    && !workflow.trigger.uses_only_occurrence_filters()
             })
         {
             conditions.mime_type = None;
@@ -1398,6 +1421,8 @@ fn trigger_choices(selected: &str) -> Vec<TriggerChoice> {
             label: trigger.label.clone(),
             selected: trigger.event_type == selected,
             document_actions: trigger.target == WorkflowTarget::Document,
+            occurrence_only: WorkflowTrigger::parse(&trigger.event_type)
+                .is_some_and(WorkflowTrigger::uses_only_occurrence_filters),
             processing_keys: if trigger.event_type.starts_with("document.processing.") {
                 trigger
                     .condition_fields

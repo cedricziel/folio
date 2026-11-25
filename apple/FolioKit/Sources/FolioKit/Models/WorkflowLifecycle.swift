@@ -65,6 +65,10 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
     }
 
     public var triggerTitle: String {
+        Self.title(forTrigger: trigger)
+    }
+
+    static func title(forTrigger trigger: String) -> String {
         switch trigger {
         case "document.uploaded": "When a document is added"
         case "document.processed": "When a document has been read"
@@ -87,6 +91,14 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         case "source.failed": "Source became unavailable"
         case "source.recovered": "Source recovered"
         case "workflow.scheduled": "On a schedule"
+        case "workflow.created": "When a workflow is created"
+        case "workflow.updated": "When a workflow changes"
+        case "workflow.enabled": "When a workflow is enabled"
+        case "workflow.disabled": "When a workflow is disabled"
+        case "workflow.deleted": "When a workflow moves to Trash"
+        case "workflow.restored": "When a workflow is restored"
+        case "workflow_run.succeeded": "When a workflow run succeeds"
+        case "workflow_run.failed": "When a workflow run fails"
         case "document.metadata.changed": "When custom field values change"
         case "metadata_field.created": "When a custom field is created"
         case "metadata_field.updated": "When a custom field changes"
@@ -96,6 +108,30 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         case "metadata_option.updated": "When a custom field option changes"
         case "metadata_option.deleted": "When a custom field option is retired"
         case "metadata_option.restored": "When a custom field option is restored"
+        case "saved_view.created": "When a shared saved view is created"
+        case "saved_view.updated": "When a shared saved view is updated"
+        case "saved_view.deleted": "When a shared saved view is deleted"
+        case "tag.created": "When a tag is created"
+        case "tag.updated": "When a tag is updated"
+        case "tag.deleted": "When a tag is deleted"
+        case "tag.restored": "When a tag is restored"
+        case "correspondent.created": "When a correspondent is created"
+        case "correspondent.updated": "When a correspondent is updated"
+        case "correspondent.deleted": "When a correspondent is deleted"
+        case "correspondent.restored": "When a correspondent is restored"
+        case "document_type.created": "When a document type is created"
+        case "document_type.updated": "When a document type is updated"
+        case "document_type.deleted": "When a document type is deleted"
+        case "document_type.restored": "When a document type is restored"
+        case "source.created": "When a managed source is created"
+        case "source.updated": "When a managed source is updated"
+        case "source.deleted": "When a managed source is deleted"
+        case "source.restored": "When a managed source is restored"
+        case "vault.updated": "When this vault is renamed"
+        case "vault.restored": "When this vault is restored"
+        case "vault_membership.granted": "When a vault membership is granted"
+        case "vault_membership.role_changed": "When a vault member’s role changes"
+        case "vault_membership.revoked": "When a vault membership is revoked"
         default: trigger
         }
     }

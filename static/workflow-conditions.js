@@ -20,6 +20,7 @@ const scalarFields = {
   email_attachment_glob: "source.email_attachment_glob",
   email_mailbox_glob: "source.email_mailbox_glob",
   event_subject_id: "event.subject_id",
+  event_workflow_id: "event.workflow_id",
   ingest_source_id: "event.ingest.source_id",
   ingest_source_kind: "event.ingest.source_kind",
   ingest_reason: "event.ingest.reason_code",
@@ -311,7 +312,7 @@ export class WorkflowConditionEditor {
 
   sync(visibility) {
     this.visibility = visibility;
-    const { trigger, scheduled, ingest, outcome, health, metadata, metadataValues, documentFilters, processingKeys = [] } = visibility;
+    const { trigger, scheduled, ingest, outcome, health, metadata, metadataValues, workflowRun, documentFilters, processingKeys = [] } = visibility;
     this.root.toggleAttribute("data-condition-clock", scheduled);
     this.root.hidden = scheduled && this.container(this.root).childElementCount === 0;
     this.root.querySelector("[data-condition-clock-note]").hidden = !scheduled;
@@ -328,7 +329,10 @@ export class WorkflowConditionEditor {
       };
       const documentFields = ["mime_type", "filename_glob", "tag_id", "correspondent_id", "document_type_id"].some((name) => draft[name] != null);
       show("documentFilter", documentFilters || documentFields || Boolean(draft.source));
-      show("eventFilter", !ingest || Boolean(draft.event?.actor || draft.event?.subject_id));
+      show("eventFilter", !ingest || Boolean(draft.event?.actor || draft.event?.subject_id || draft.event?.workflow_id));
+      const showWorkflowRun = workflowRun || Boolean(draft.event?.workflow_id);
+      show("workflowRunFilter", showWorkflowRun);
+      fields.get("event_workflow_id").disabled = !showWorkflowRun;
       show("ingestFilter", outcome || health || Boolean(draft.event?.ingest));
       show("ingestReasonLabel", trigger !== "source.recovered" || Boolean(draft.event?.ingest?.reason_code));
       show("ingestReason", trigger !== "source.recovered" || Boolean(draft.event?.ingest?.reason_code));

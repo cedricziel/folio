@@ -206,6 +206,13 @@ impl WorkflowTriggerRegistry {
                     definition
                         .condition_fields
                         .extend(snapshot_condition_fields(trigger));
+                    if trigger.terminal_run_status().is_some() {
+                        definition.condition_fields.push(WorkflowConditionField {
+                            key: "event.workflow_id".into(),
+                            label: "Source workflow ID".into(),
+                            value_type: WorkflowConditionType::Identifier,
+                        });
+                    }
                     if trigger.is_custom_metadata() {
                         use WorkflowConditionType::{Identifier, MetadataValue, Text};
                         let mut fields = vec![
@@ -492,6 +499,70 @@ mod tests {
             .validate_actions(&["tag.created", "tag.created"], &[webhook()])
             .is_err());
         assert!(registry.validate_actions(&["tag.created"], &[]).is_err());
+    }
+
+    #[test]
+    fn consumable_vault_activity_uses_event_targets() {
+        let registry = WorkflowTriggerRegistry::built_in();
+        for name in [
+            "vault.updated",
+            "vault.restored",
+            "vault_membership.granted",
+            "vault_membership.role_changed",
+            "vault_membership.revoked",
+        ] {
+            let definition = registry.get(name).expect(name);
+            assert_eq!(definition.target, WorkflowTarget::Event);
+            assert_eq!(definition.condition_fields.len(), 3);
+            assert!(registry.validate_actions(&[name], &[webhook()]).is_ok());
+            assert!(registry
+                .validate_actions(&[name], &[WorkflowAction::SkipImport])
+                .is_err());
+        }
+        assert!(registry.get("vault.created").is_none());
+        assert!(registry.get("vault.deleted").is_none());
+    }
+
+    #[test]
+    fn classification_events_catalog_has_only_occurrence_filters_and_webhook_actions() {
+        let registry = WorkflowTriggerRegistry::built_in();
+        for subject in ["tag", "correspondent", "document_type"] {
+            for operation in ["created", "updated", "deleted", "restored"] {
+                let event_type = format!("{subject}.{operation}");
+                let definition = registry.get(&event_type).expect(&event_type);
+                assert_eq!(definition.subject_type, subject);
+                assert_eq!(definition.target, WorkflowTarget::Event);
+                assert!(definition
+                    .condition_fields
+                    .iter()
+                    .any(|field| field.key == "event.subject_id"));
+                assert!(definition
+                    .condition_fields
+                    .iter()
+                    .all(|field| field.key.starts_with("event.")));
+                assert!(registry
+                    .validate_actions(&[&event_type], &[webhook()])
+                    .is_ok());
+                assert!(registry
+                    .validate_actions(&[&event_type], &[WorkflowAction::SkipImport])
+                    .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn managed_source_lifecycle_catalog_exposes_event_targets() {
+        let registry = WorkflowTriggerRegistry::built_in();
+        for operation in ["created", "updated", "deleted", "restored"] {
+            let event_type = format!("source.{operation}");
+            let definition = registry.get(&event_type).expect(&event_type);
+            assert_eq!(definition.subject_type, "source");
+            assert_eq!(definition.target, WorkflowTarget::Event);
+            assert_eq!(definition.condition_fields.len(), 3);
+            assert!(registry
+                .validate_actions(&[&event_type], &[webhook()])
+                .is_ok());
+        }
     }
 
     #[test]

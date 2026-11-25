@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Id, IngestResult, MetadataKind, MetadataValue, SourceKind, UserId, WebhookIngest,
-    WebhookProcessing, WorkflowDocumentConditions, WorkflowTrigger, WorkflowTriggerRegistry,
+    WebhookProcessing, WebhookWorkflowRun, WorkflowDocumentConditions, WorkflowTrigger,
+    WorkflowTriggerRegistry,
 };
 use crate::processing_events::{ProcessingEventStage, ProcessingReason};
 use crate::{DomainEventEnvelope, Error, Result};
@@ -312,6 +313,9 @@ pub struct WorkflowEventConditions {
     #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
     pub subject_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
+    pub workflow_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<WorkflowActorCondition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingest: Option<WorkflowIngestConditions>,
@@ -341,6 +345,9 @@ impl WorkflowEventConditions {
 
     pub fn matches(&self, event: &DomainEventEnvelope) -> bool {
         self.subject_id.is_none_or(|id| event.subject().id == id)
+            && self.workflow_id.is_none_or(|id| {
+                WebhookWorkflowRun::from_envelope(event).is_some_and(|run| run.workflow_id == id)
+            })
             && self
                 .ingest
                 .as_ref()

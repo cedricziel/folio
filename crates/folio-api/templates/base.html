@@ -994,6 +994,7 @@ Stimulus.register(
       "discard",
       "documentFilter",
       "eventFilter",
+      "workflowRunFilter",
       "actor",
       "actorUser",
       "ingestFilter",
@@ -1104,8 +1105,9 @@ Stimulus.register(
         select.selectedOptions[0]?.dataset.processingKeys?.split(" ") ?? []);
       const processingKeys = processingFields[0].filter((key) => processingFields.every((fields) => fields.includes(key)));
       syncProcessingFields(this.processingFilterTarget, processingKeys);
-      const savedView = selected.some((value) => value.startsWith("saved_view."));
-      const documentFilters = !scheduled && !savedView && selected.some((value) =>
+      const occurrenceOnly = selectors.some((select) =>
+        select.selectedOptions[0]?.dataset.occurrenceOnly === "true");
+      const documentFilters = !scheduled && !occurrenceOnly && selected.some((value) =>
         !value.startsWith("document_note.") && !value.startsWith("document_comment.") &&
         !value.startsWith("ingest.") && value !== "source.failed" && value !== "source.recovered" &&
         value !== "document.metadata.changed" && !value.startsWith("metadata_field.") && !value.startsWith("metadata_option."));
@@ -1127,6 +1129,10 @@ Stimulus.register(
         filter.hidden = !active;
         filter.disabled = !active;
       }
+      const workflowRun = activeTriggers.length > 0 && activeTriggers.every((value) => value.startsWith("workflow_run."));
+      const workflowRunInput = this.workflowRunFilterTarget.querySelector("input");
+      this.workflowRunFilterTarget.hidden = !(workflowRun || workflowRunInput.value);
+      workflowRunInput.disabled = this.workflowRunFilterTarget.hidden;
       this.conditionEditor.sync({
         trigger,
         scheduled,
@@ -1136,6 +1142,7 @@ Stimulus.register(
         metadata,
         metadataValues,
         processingKeys,
+        workflowRun,
         documentFilters,
       });
       this.metadataFilterTarget.hidden = !metadata;

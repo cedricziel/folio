@@ -87,6 +87,35 @@ test("edits a nested exact money condition without changing its previous value",
   }]);
 });
 
+test("saves a vault membership trigger with only occurrence filters", async ({ page }) => {
+  test.skip(
+    Boolean(process.env.E2E_BASE_URL) || !process.env.FOLIO_VERIFY_ENV,
+    "Workflow editing requires the disposable global-setup instance",
+  );
+
+  await page.goto("/workflows/new");
+  await page.getByRole("textbox", { name: "Name", exact: true }).fill(uniqueTitle("Vault grant changed"));
+  await page.getByRole("checkbox", { name: "Enabled", exact: true }).uncheck();
+  const trigger = page.getByRole("combobox", { name: "When", exact: true });
+  await trigger.selectOption("vault_membership.role_changed");
+  await expect(page.getByRole("group", { name: "Only if the document matches" })).toBeHidden();
+  await expect(page.getByRole("combobox", { name: "Action to add" }).locator('option[value="add_tags"]')).toBeDisabled();
+  const event = page.getByRole("group", { name: "Only if the event matches" });
+  const subject = "067da63b-4127-5d04-9b65-2ba26a0289c5";
+  const subjectID = event.getByRole("textbox", { name: "Subject ID", exact: true });
+  await subjectID.fill(subject);
+  await event.getByRole("combobox", { name: "Who made the change" }).selectOption("user");
+  await event.getByRole("textbox", { name: "User ID", exact: true }).fill("owner");
+  await page.getByRole("combobox", { name: "Action to add" }).selectOption("webhook");
+  await page.getByRole("button", { name: "Add action", exact: true }).click();
+  await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
+
+  await page.getByRole("button", { name: "Save workflow", exact: true }).click();
+  await expect(page).toHaveURL(/\/workflows\/[0-9a-f-]{36}$/);
+  await expect(trigger).toHaveValue("vault_membership.role_changed");
+  await expect(subjectID).toHaveValue(subject);
+});
+
 test("edits a shared saved-view trigger with only occurrence filters", async ({ page }) => {
   test.skip(
     Boolean(process.env.E2E_BASE_URL) || !process.env.FOLIO_VERIFY_ENV,
@@ -168,4 +197,37 @@ test("keeps a document action visible when switching to a saved-view trigger", a
     trigger: "saved_view.deleted",
     actions: [{ type: "webhook", url: "http://127.0.0.1:9/unused" }],
   });
+});
+
+test("authors a workflow outcome with a nested source-workflow filter", async ({ page }) => {
+  test.skip(
+    Boolean(process.env.E2E_BASE_URL) || !process.env.FOLIO_VERIFY_ENV,
+    "Workflow editing requires the disposable global-setup instance",
+  );
+
+  const sourceID = "d328c55a-1bf3-4590-b878-ad432191caba";
+  await page.goto("/workflows/new");
+  await page.getByRole("textbox", { name: "Name", exact: true }).fill(uniqueTitle("Workflow failure alert"));
+  await page.getByRole("checkbox", { name: "Enabled", exact: true }).uncheck();
+  await page.getByRole("combobox", { name: "When", exact: true }).selectOption("workflow_run.failed");
+  await expect(page.getByRole("textbox", { name: "File type", exact: true })).toHaveCount(0);
+  const editor = page.getByRole("group", { name: "Nested conditions", exact: true });
+  const rootControls = editor.locator(":scope > [data-condition-add]");
+  await rootControls.getByRole("combobox", { name: "Group operator" }).selectOption("all");
+  await rootControls.getByRole("button", { name: "Add group", exact: true }).click();
+  const all = editor.getByRole("group", { name: "All of these", exact: true });
+  await all.getByRole("button", { name: "Add branch", exact: true }).click();
+  const field = all.getByRole("textbox", { name: "Source workflow ID", exact: true });
+  await field.fill(sourceID);
+  await page.getByRole("combobox", { name: "Action to add" }).selectOption("webhook");
+  await page.getByRole("button", { name: "Add action", exact: true }).click();
+  await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
+  await page.getByRole("button", { name: "Save workflow", exact: true }).click();
+  await expect(page).toHaveURL(/\/workflows\/[0-9a-f-]{36}$/);
+  await expect(field).toHaveValue(sourceID);
+
+  const id = new URL(page.url()).pathname.split("/").pop();
+  const response = await page.request.get(`/api/workflows/${id}`);
+  expect(response.ok()).toBeTruthy();
+  expect((await response.json()).conditions).toEqual({ all: [{ event: { workflow_id: sourceID } }] });
 });

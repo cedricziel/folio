@@ -82,7 +82,7 @@ public final class WorkflowLifecycleViewModel {
             return labels.joined(separator: " · ")
         }
         return workflow.selectedTriggers.map { id in
-            triggerTitles[id] ?? (id == workflow.trigger ? workflow.triggerTitle : id)
+            triggerTitles[id] ?? WorkflowConfigurationSummary.title(forTrigger: id)
         }.joined(separator: " · ")
     }
 

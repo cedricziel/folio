@@ -61,6 +61,48 @@ pub enum WorkflowTrigger {
     SavedViewUpdated,
     #[serde(rename = "saved_view.deleted")]
     SavedViewDeleted,
+    #[serde(rename = "tag.created")]
+    TagCreated,
+    #[serde(rename = "tag.updated")]
+    TagUpdated,
+    #[serde(rename = "tag.deleted")]
+    TagDeleted,
+    #[serde(rename = "tag.restored")]
+    TagRestored,
+    #[serde(rename = "correspondent.created")]
+    CorrespondentCreated,
+    #[serde(rename = "correspondent.updated")]
+    CorrespondentUpdated,
+    #[serde(rename = "correspondent.deleted")]
+    CorrespondentDeleted,
+    #[serde(rename = "correspondent.restored")]
+    CorrespondentRestored,
+    #[serde(rename = "document_type.created")]
+    DocumentTypeCreated,
+    #[serde(rename = "document_type.updated")]
+    DocumentTypeUpdated,
+    #[serde(rename = "document_type.deleted")]
+    DocumentTypeDeleted,
+    #[serde(rename = "document_type.restored")]
+    DocumentTypeRestored,
+    #[serde(rename = "source.created")]
+    SourceCreated,
+    #[serde(rename = "source.updated")]
+    SourceUpdated,
+    #[serde(rename = "source.deleted")]
+    SourceDeleted,
+    #[serde(rename = "source.restored")]
+    SourceRestored,
+    #[serde(rename = "vault.updated")]
+    VaultUpdated,
+    #[serde(rename = "vault.restored")]
+    VaultRestored,
+    #[serde(rename = "vault_membership.granted")]
+    MembershipGranted,
+    #[serde(rename = "vault_membership.role_changed")]
+    MembershipRoleChanged,
+    #[serde(rename = "vault_membership.revoked")]
+    MembershipRevoked,
     #[serde(rename = "metadata_field.created")]
     MetadataFieldCreated,
     #[serde(rename = "metadata_field.updated")]
@@ -142,10 +184,26 @@ pub enum WorkflowTrigger {
     DocumentThumbnailRetryScheduled,
     #[serde(rename = "workflow.scheduled")]
     Scheduled,
+    #[serde(rename = "workflow.created")]
+    WorkflowCreated,
+    #[serde(rename = "workflow.updated")]
+    WorkflowUpdated,
+    #[serde(rename = "workflow.enabled")]
+    WorkflowEnabled,
+    #[serde(rename = "workflow.disabled")]
+    WorkflowDisabled,
+    #[serde(rename = "workflow.deleted")]
+    WorkflowDeleted,
+    #[serde(rename = "workflow.restored")]
+    WorkflowRestored,
+    #[serde(rename = "workflow_run.succeeded")]
+    WorkflowRunSucceeded,
+    #[serde(rename = "workflow_run.failed")]
+    WorkflowRunFailed,
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 60] = [
+    pub const ALL: [WorkflowTrigger; 89] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -167,6 +225,27 @@ impl WorkflowTrigger {
         Self::SavedViewCreated,
         Self::SavedViewUpdated,
         Self::SavedViewDeleted,
+        Self::TagCreated,
+        Self::TagUpdated,
+        Self::TagDeleted,
+        Self::TagRestored,
+        Self::CorrespondentCreated,
+        Self::CorrespondentUpdated,
+        Self::CorrespondentDeleted,
+        Self::CorrespondentRestored,
+        Self::DocumentTypeCreated,
+        Self::DocumentTypeUpdated,
+        Self::DocumentTypeDeleted,
+        Self::DocumentTypeRestored,
+        Self::SourceCreated,
+        Self::SourceUpdated,
+        Self::SourceDeleted,
+        Self::SourceRestored,
+        Self::VaultUpdated,
+        Self::VaultRestored,
+        Self::MembershipGranted,
+        Self::MembershipRoleChanged,
+        Self::MembershipRevoked,
         Self::MetadataFieldCreated,
         Self::MetadataFieldUpdated,
         Self::MetadataFieldDeleted,
@@ -206,6 +285,14 @@ impl WorkflowTrigger {
         Self::DocumentThumbnailSkipped,
         Self::DocumentThumbnailRetryScheduled,
         Self::Scheduled,
+        Self::WorkflowCreated,
+        Self::WorkflowUpdated,
+        Self::WorkflowEnabled,
+        Self::WorkflowDisabled,
+        Self::WorkflowDeleted,
+        Self::WorkflowRestored,
+        Self::WorkflowRunSucceeded,
+        Self::WorkflowRunFailed,
     ];
 
     /// The wire name, as used in payloads and the database
@@ -232,6 +319,27 @@ impl WorkflowTrigger {
             Self::SavedViewCreated => "saved_view.created",
             Self::SavedViewUpdated => "saved_view.updated",
             Self::SavedViewDeleted => "saved_view.deleted",
+            Self::TagCreated => "tag.created",
+            Self::TagUpdated => "tag.updated",
+            Self::TagDeleted => "tag.deleted",
+            Self::TagRestored => "tag.restored",
+            Self::CorrespondentCreated => "correspondent.created",
+            Self::CorrespondentUpdated => "correspondent.updated",
+            Self::CorrespondentDeleted => "correspondent.deleted",
+            Self::CorrespondentRestored => "correspondent.restored",
+            Self::DocumentTypeCreated => "document_type.created",
+            Self::DocumentTypeUpdated => "document_type.updated",
+            Self::DocumentTypeDeleted => "document_type.deleted",
+            Self::DocumentTypeRestored => "document_type.restored",
+            Self::SourceCreated => "source.created",
+            Self::SourceUpdated => "source.updated",
+            Self::SourceDeleted => "source.deleted",
+            Self::SourceRestored => "source.restored",
+            Self::VaultUpdated => "vault.updated",
+            Self::VaultRestored => "vault.restored",
+            Self::MembershipGranted => "vault_membership.granted",
+            Self::MembershipRoleChanged => "vault_membership.role_changed",
+            Self::MembershipRevoked => "vault_membership.revoked",
             Self::MetadataFieldCreated => "metadata_field.created",
             Self::MetadataFieldUpdated => "metadata_field.updated",
             Self::MetadataFieldDeleted => "metadata_field.deleted",
@@ -275,6 +383,14 @@ impl WorkflowTrigger {
                 "document.processing.thumbnail.retry_scheduled"
             }
             Self::Scheduled => "workflow.scheduled",
+            Self::WorkflowCreated => "workflow.created",
+            Self::WorkflowUpdated => "workflow.updated",
+            Self::WorkflowEnabled => "workflow.enabled",
+            Self::WorkflowDisabled => "workflow.disabled",
+            Self::WorkflowDeleted => "workflow.deleted",
+            Self::WorkflowRestored => "workflow.restored",
+            Self::WorkflowRunSucceeded => "workflow_run.succeeded",
+            Self::WorkflowRunFailed => "workflow_run.failed",
         }
     }
 
@@ -302,6 +418,27 @@ impl WorkflowTrigger {
             Self::SavedViewCreated => "When a shared saved view is created",
             Self::SavedViewUpdated => "When a shared saved view is updated",
             Self::SavedViewDeleted => "When a shared saved view is deleted",
+            Self::TagCreated => "When a tag is created",
+            Self::TagUpdated => "When a tag is updated",
+            Self::TagDeleted => "When a tag is deleted",
+            Self::TagRestored => "When a tag is restored",
+            Self::CorrespondentCreated => "When a correspondent is created",
+            Self::CorrespondentUpdated => "When a correspondent is updated",
+            Self::CorrespondentDeleted => "When a correspondent is deleted",
+            Self::CorrespondentRestored => "When a correspondent is restored",
+            Self::DocumentTypeCreated => "When a document type is created",
+            Self::DocumentTypeUpdated => "When a document type is updated",
+            Self::DocumentTypeDeleted => "When a document type is deleted",
+            Self::DocumentTypeRestored => "When a document type is restored",
+            Self::SourceCreated => "When a managed source is created",
+            Self::SourceUpdated => "When a managed source is updated",
+            Self::SourceDeleted => "When a managed source is deleted",
+            Self::SourceRestored => "When a managed source is restored",
+            Self::VaultUpdated => "When this vault is renamed",
+            Self::VaultRestored => "When this vault is restored",
+            Self::MembershipGranted => "When a vault membership is granted",
+            Self::MembershipRoleChanged => "When a vault member’s role changes",
+            Self::MembershipRevoked => "When a vault membership is revoked",
             Self::MetadataFieldCreated => "When a custom field is created",
             Self::MetadataFieldUpdated => "When a custom field is updated",
             Self::MetadataFieldDeleted => "When a custom field is retired",
@@ -341,6 +478,14 @@ impl WorkflowTrigger {
             Self::DocumentThumbnailSkipped => "Preview generation skipped",
             Self::DocumentThumbnailRetryScheduled => "Preview generation retry scheduled",
             Self::Scheduled => "On a schedule",
+            Self::WorkflowCreated => "When a workflow is created",
+            Self::WorkflowUpdated => "When a workflow changes",
+            Self::WorkflowEnabled => "When a workflow is enabled",
+            Self::WorkflowDisabled => "When a workflow is disabled",
+            Self::WorkflowDeleted => "When a workflow moves to Trash",
+            Self::WorkflowRestored => "When a workflow is restored",
+            Self::WorkflowRunSucceeded => "When a workflow run succeeds",
+            Self::WorkflowRunFailed => "When a workflow run fails",
         }
     }
 
@@ -385,6 +530,27 @@ impl WorkflowTrigger {
             Self::SavedViewCreated
             | Self::SavedViewUpdated
             | Self::SavedViewDeleted
+            | Self::TagCreated
+            | Self::TagUpdated
+            | Self::TagDeleted
+            | Self::TagRestored
+            | Self::CorrespondentCreated
+            | Self::CorrespondentUpdated
+            | Self::CorrespondentDeleted
+            | Self::CorrespondentRestored
+            | Self::DocumentTypeCreated
+            | Self::DocumentTypeUpdated
+            | Self::DocumentTypeDeleted
+            | Self::DocumentTypeRestored
+            | Self::SourceCreated
+            | Self::SourceUpdated
+            | Self::SourceDeleted
+            | Self::SourceRestored
+            | Self::VaultUpdated
+            | Self::VaultRestored
+            | Self::MembershipGranted
+            | Self::MembershipRoleChanged
+            | Self::MembershipRevoked
             | Self::MetadataFieldCreated
             | Self::MetadataFieldUpdated
             | Self::MetadataFieldDeleted
@@ -404,13 +570,33 @@ impl WorkflowTrigger {
             | Self::IngestFailed
             | Self::SourceFailed
             | Self::SourceRecovered
-            | Self::Scheduled => WorkflowTarget::Event,
+            | Self::Scheduled
+            | Self::WorkflowCreated
+            | Self::WorkflowUpdated
+            | Self::WorkflowEnabled
+            | Self::WorkflowDisabled
+            | Self::WorkflowDeleted
+            | Self::WorkflowRestored
+            | Self::WorkflowRunSucceeded
+            | Self::WorkflowRunFailed => WorkflowTarget::Event,
             Self::IngestReceived => WorkflowTarget::IngestCandidate,
         }
     }
 
     pub fn is_processing_outcome(self) -> bool {
         self.as_str().starts_with("document.processing.")
+    }
+
+    pub fn is_workflow_definition(self) -> bool {
+        matches!(
+            self,
+            Self::WorkflowCreated
+                | Self::WorkflowUpdated
+                | Self::WorkflowEnabled
+                | Self::WorkflowDisabled
+                | Self::WorkflowDeleted
+                | Self::WorkflowRestored
+        )
     }
 
     pub fn is_ingest_outcome(self) -> bool {
@@ -423,6 +609,63 @@ impl WorkflowTrigger {
                 | Self::SourceFailed
                 | Self::SourceRecovered
         )
+    }
+
+    pub fn is_vault_activity(self) -> bool {
+        matches!(
+            self,
+            Self::VaultUpdated
+                | Self::VaultRestored
+                | Self::MembershipGranted
+                | Self::MembershipRoleChanged
+                | Self::MembershipRevoked
+        )
+    }
+
+    pub fn classification_subject(self) -> Option<&'static str> {
+        match self {
+            Self::TagCreated | Self::TagUpdated | Self::TagDeleted | Self::TagRestored => {
+                Some("tag")
+            }
+            Self::CorrespondentCreated
+            | Self::CorrespondentUpdated
+            | Self::CorrespondentDeleted
+            | Self::CorrespondentRestored => Some("correspondent"),
+            Self::DocumentTypeCreated
+            | Self::DocumentTypeUpdated
+            | Self::DocumentTypeDeleted
+            | Self::DocumentTypeRestored => Some("document_type"),
+            _ => None,
+        }
+    }
+
+    /// The producing run's status for a terminal outcome trigger.
+    pub fn terminal_run_status(self) -> Option<RunStatus> {
+        match self {
+            Self::WorkflowRunSucceeded => Some(RunStatus::Succeeded),
+            Self::WorkflowRunFailed => Some(RunStatus::Failed),
+            _ => None,
+        }
+    }
+
+    pub fn is_source_lifecycle(self) -> bool {
+        matches!(
+            self,
+            Self::SourceCreated | Self::SourceUpdated | Self::SourceDeleted | Self::SourceRestored
+        )
+    }
+
+    pub fn is_vault_resource_event(self) -> bool {
+        self.is_saved_view()
+            || self.classification_subject().is_some()
+            || self.is_source_lifecycle()
+            || self.is_vault_activity()
+    }
+
+    pub fn uses_only_occurrence_filters(self) -> bool {
+        self.is_vault_resource_event()
+            || self.is_workflow_definition()
+            || self.terminal_run_status().is_some()
     }
 
     pub fn is_custom_metadata(self) -> bool {
@@ -676,12 +919,32 @@ impl WorkflowConditions {
     }
 
     fn validate_event_conditions(&self, trigger: WorkflowTrigger) -> Result<()> {
-        if trigger.is_saved_view() && self.has_snapshot_filters() {
+        if (trigger.terminal_run_status().is_some() || trigger.is_workflow_definition())
+            && self.has_snapshot_filters()
+        {
             return Err(Error::Validation(
-                "Saved view workflows do not have document filters".into(),
+                "Document and source filters are unavailable for the selected workflow event"
+                    .into(),
             ));
         }
+        if trigger.is_vault_resource_event() && self.has_snapshot_filters() {
+            let message = if trigger.is_saved_view() {
+                "Saved view workflows do not have document filters"
+            } else if trigger.classification_subject().is_some() {
+                "Classification workflows do not have document filters"
+            } else if trigger.is_source_lifecycle() {
+                "Managed source workflows do not have document filters"
+            } else {
+                "Vault activity workflows do not have document filters"
+            };
+            return Err(Error::Validation(message.into()));
+        }
         if let Some(event) = &self.event {
+            if event.workflow_id.is_some() && trigger.terminal_run_status().is_none() {
+                return Err(Error::Validation(
+                    "Source workflow ID is available for workflow run outcomes".into(),
+                ));
+            }
             if let Some(ingest) = &event.ingest {
                 ingest.validate_trigger(trigger)?;
             }
@@ -1098,6 +1361,10 @@ impl WorkflowInput {
                     "Only webhook actions can run when a document is deleted"
                 } else if self.trigger == WorkflowTrigger::Scheduled {
                     "Scheduled workflows take only webhook actions"
+                } else if self.trigger.is_workflow_definition() {
+                    "Workflow definition events take only webhook actions"
+                } else if self.trigger.terminal_run_status().is_some() {
+                    "Workflow run outcome workflows take only webhook actions"
                 } else if self.trigger.is_ingest_outcome() {
                     "Ingestion outcome workflows take only webhook actions"
                 } else if self.trigger.is_custom_metadata()
@@ -1106,6 +1373,12 @@ impl WorkflowInput {
                     "Custom field and option workflows take only webhook actions"
                 } else if self.trigger.is_saved_view() {
                     "Saved view workflows take only webhook actions"
+                } else if self.trigger.classification_subject().is_some() {
+                    "Classification workflows take only webhook actions"
+                } else if self.trigger.is_source_lifecycle() {
+                    "Managed source workflows take only webhook actions"
+                } else if self.trigger.is_vault_activity() {
+                    "Vault activity workflows take only webhook actions"
                 } else if self.trigger.target() == WorkflowTarget::Event {
                     "Only webhook actions can run for this document lifecycle event"
                 } else {

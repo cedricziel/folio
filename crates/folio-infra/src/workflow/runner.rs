@@ -12,7 +12,9 @@ use folio_core::models::{
 };
 use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::ports::{DocumentRepository, SavedViewRepository, WorkflowRepository};
-use folio_core::services::IngestWorkflowAccess;
+use folio_core::services::{
+    ClassificationWorkflowAccess, IngestWorkflowAccess, VaultWorkflowAccess,
+};
 
 use super::webhook::{WebhookClient, WebhookRequest};
 
@@ -54,6 +56,8 @@ pub struct WorkflowRunner {
     client: WebhookClient,
     ingest_access: Option<Arc<IngestWorkflowAccess>>,
     saved_views: Option<Arc<dyn SavedViewRepository>>,
+    classification_access: Option<Arc<ClassificationWorkflowAccess>>,
+    vault_access: Option<Arc<VaultWorkflowAccess>>,
 }
 
 impl WorkflowRunner {
@@ -68,6 +72,8 @@ impl WorkflowRunner {
             client,
             ingest_access: None,
             saved_views: None,
+            classification_access: None,
+            vault_access: None,
         }
     }
 
@@ -78,6 +84,16 @@ impl WorkflowRunner {
 
     pub fn with_saved_views(mut self, repo: Arc<dyn SavedViewRepository>) -> Self {
         self.saved_views = Some(repo);
+        self
+    }
+
+    pub fn with_classification_access(mut self, access: Arc<ClassificationWorkflowAccess>) -> Self {
+        self.classification_access = Some(access);
+        self
+    }
+
+    pub fn with_vault_access(mut self, access: Arc<VaultWorkflowAccess>) -> Self {
+        self.vault_access = Some(access);
         self
     }
 
@@ -146,6 +162,76 @@ impl WorkflowRunner {
         } else {
             None
         };
+        let classification = if run.event.classification_subject().is_some() {
+            let payload: WebhookPayload = serde_json::from_str(&run.payload).map_err(|error| {
+                Error::Repository(format!("Invalid classification workflow payload: {error}"))
+            })?;
+            let Some(subject) = payload.classification.filter(|subject| {
+                payload.event == run.event
+                    && subject.vault_id == vault
+                    && payload.source_event.is_some()
+                    && payload.document.is_none()
+                    && run.document_id.is_none()
+            }) else {
+                return self
+                    .finish(
+                        &mut run,
+                        RunStatus::Failed,
+                        Some("Missing classification workflow context".into()),
+                    )
+                    .await;
+            };
+            Some(subject)
+        } else {
+            None
+        };
+        let managed_source = if run.event.is_source_lifecycle() {
+            let payload: WebhookPayload = serde_json::from_str(&run.payload).map_err(|error| {
+                Error::Repository(format!("Invalid managed source workflow payload: {error}"))
+            })?;
+            let Some(source) = payload.source.filter(|source| {
+                payload.event == run.event
+                    && source.vault_id == vault
+                    && payload.source_event.is_some()
+                    && payload.document.is_none()
+                    && run.document_id.is_none()
+            }) else {
+                return self
+                    .finish(
+                        &mut run,
+                        RunStatus::Failed,
+                        Some("Missing managed source workflow context".into()),
+                    )
+                    .await;
+            };
+            Some(source)
+        } else {
+            None
+        };
+        let vault_activity_run = run.event.is_vault_activity();
+        if vault_activity_run {
+            let payload: WebhookPayload = serde_json::from_str(&run.payload).map_err(|error| {
+                Error::Repository(format!("Invalid vault activity workflow payload: {error}"))
+            })?;
+            let valid_context = payload.event == run.event
+                && payload.vault_activity.is_some_and(|activity| {
+                    activity.vault_id == vault && activity.matches_trigger(run.event)
+                })
+                && payload.source_event.is_some()
+                && payload.document.is_none()
+                && run.document_id.is_none();
+            if !valid_context {
+                return self
+                    .finish(
+                        &mut run,
+                        RunStatus::Failed,
+                        Some("Missing vault activity workflow context".into()),
+                    )
+                    .await;
+            }
+        }
+        let requires_owner =
+            run.event.is_workflow_definition() || run.event.terminal_run_status().is_some();
         let lineage = run.source_identity()?.map(|source| MutationLineage {
             correlation_id: source.correlation_id,
             causation_id: Some(source.event_id),
@@ -189,6 +275,21 @@ impl WorkflowRunner {
                     }
                 }
             }
+            if requires_owner {
+                let allowed = match &self.ingest_access {
+                    Some(access) => access.permits_owner_events(vault).await?,
+                    None => false,
+                };
+                if !allowed {
+                    self.finish(
+                        &mut run,
+                        RunStatus::Failed,
+                        Some("Workflow event is no longer authorized".into()),
+                    )
+                    .await?;
+                    return Ok(RunOutcome::Failed);
+                }
+            }
             if let Some(ingest) = &ingest {
                 let allowed = if let Some(access) = &self.ingest_access {
                     access
@@ -229,6 +330,66 @@ impl WorkflowRunner {
                             &mut run,
                             RunStatus::Failed,
                             Some("Saved view is no longer shared in the workflow's vault".into()),
+                        )
+                        .await;
+                }
+            }
+            if let Some(subject) = &classification {
+                let allowed = if let Some(access) = &self.classification_access {
+                    run.event.target().accepts(action)
+                        && access.permits(run.event, vault, subject.subject_id).await?
+                } else {
+                    false
+                };
+                if !allowed {
+                    return self
+                        .finish(
+                            &mut run,
+                            RunStatus::Failed,
+                            Some(
+                                "Classification is no longer available in the workflow's vault"
+                                    .into(),
+                            ),
+                        )
+                        .await;
+                }
+            }
+            if let Some(source) = &managed_source {
+                let allowed = if let Some(access) = &self.ingest_access {
+                    run.event.target().accepts(action)
+                        && access
+                            .permits_managed_lifecycle(
+                                vault,
+                                source.source_id,
+                                source.kind,
+                                run.event == WorkflowTrigger::SourceDeleted,
+                            )
+                            .await?
+                } else {
+                    false
+                };
+                if !allowed {
+                    return self
+                        .finish(
+                            &mut run,
+                            RunStatus::Failed,
+                            Some("Managed source or workflow is no longer authorized".into()),
+                        )
+                        .await;
+                }
+            }
+            if vault_activity_run {
+                let allowed = if let Some(access) = &self.vault_access {
+                    run.event.target().accepts(action) && access.permits(vault).await?
+                } else {
+                    false
+                };
+                if !allowed {
+                    return self
+                        .finish(
+                            &mut run,
+                            RunStatus::Failed,
+                            Some("Vault activity is no longer authorized".into()),
                         )
                         .await;
                 }
