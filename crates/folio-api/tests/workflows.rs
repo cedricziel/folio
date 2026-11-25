@@ -1905,6 +1905,7 @@ async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
         "document.uploaded",
         "document.title_changed",
         "document.deleted",
+        "document.date_offset",
     ] {
         assert_eq!(field_type(trigger, "mime_type"), Some("text"));
         assert_eq!(field_type(trigger, "filename_glob"), Some("text"));
@@ -1932,6 +1933,8 @@ async fn trigger_catalog_describes_only_fields_backed_by_the_occurrence() {
     }
     assert_eq!(field_type("ingest.received", "tag_id"), None);
     assert_eq!(field_type("ingest.received", "event.subject_id"), None);
+    assert_eq!(field_type("document.date_offset", "event.subject_id"), None);
+    assert_eq!(field_type("document.date_offset", "event.actor.type"), None);
 
     for trigger in [
         "document_note.created",
@@ -2534,4 +2537,112 @@ async fn workflow_definition_editor_preserves_the_subject_and_actor() {
         stored["conditions"],
         json!({"event": {"subject_id": subject, "actor": {"type": "user", "user_id": "vault-owner"}}}),
     );
+}
+
+#[tokio::test]
+async fn clock_schedule_requires_a_solo_trigger_in_the_ordered_api() {
+    let app = test_app().await;
+    let cadence = json!({"type": "once", "at": "2040-01-03T09:00:00.123456789Z"});
+    let mut body = json!({
+        "name": "Clock",
+        "cadence": cadence,
+        "actions": [{"type": "webhook", "url": "https://example.test/clock"}],
+    });
+    for selections in [
+        ["workflow.scheduled", "document.uploaded"],
+        ["metadata_field.updated", "workflow.scheduled"],
+    ] {
+        body["triggers"] = json!(selections);
+        let (status, response) =
+            json_request(&app, "POST", "/api/workflows", Some(body.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response["error"],
+            "A clock schedule must be the only trigger"
+        );
+    }
+    body["triggers"] = json!(["workflow.scheduled"]);
+    let (status, scheduled) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(scheduled["trigger"], "workflow.scheduled");
+    assert_eq!(scheduled["triggers"], json!(["workflow.scheduled"]));
+    assert_eq!(scheduled["cadence"], cadence);
+}
+
+#[tokio::test]
+async fn web_editor_roundtrips_a_document_date_offset_with_document_filters() {
+    let app = test_app().await;
+    let form = "name=Invoice+follow-up&trigger=document.date_offset&enabled=on&offset_days=-2&offset_time=09%3A30%3A00.123456789&filename_glob=invoice-*.pdf&webhook_url=https%3A%2F%2Fexample.com%2Fhook";
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/workflows")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let path = response.headers()["location"].to_str().unwrap();
+    let (status, html) = send(&app, "GET", path, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains(r#"name="offset_days" value="-2""#));
+    assert!(html.contains(r#"name="offset_time" value="09:30:00.123456789""#));
+    let (status, saved) = json_request(&app, "GET", &format!("/api{path}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["trigger"], "document.date_offset");
+    assert_eq!(
+        saved["cadence"],
+        json!({"type": "document_date_offset", "days": -2, "time_utc": "09:30:00.123456789"})
+    );
+    assert_eq!(saved["conditions"]["filename_glob"], "invoice-*.pdf");
+
+    for triggers in [
+        ["document.date_offset", "document.uploaded"],
+        ["document.updated", "document.date_offset"],
+    ] {
+        let (status, response) = json_request(
+            &app,
+            "POST",
+            "/api/workflows",
+            Some(json!({
+                "name": "Mixed date schedule",
+                "triggers": triggers,
+                "cadence": saved["cadence"],
+                "conditions": saved["conditions"],
+                "actions": saved["actions"],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response["error"],
+            "A document date schedule must be the only trigger"
+        );
+    }
+
+    let event_filter = json!({
+        "name": "Event filter on date schedule",
+        "trigger": "document.date_offset",
+        "cadence": saved["cadence"],
+        "conditions": {"any": [{"event": {"actor": {"type": "system"}}}]},
+        "actions": saved["actions"],
+    });
+    let (status, response) = json_request(&app, "POST", "/api/workflows", Some(event_filter)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response["error"],
+        "Document date schedules do not have an event actor or subject",
+    );
+
+    let invalid = json!({
+        "name": "Mismatched schedule",
+        "trigger": "document.date_offset",
+        "cadence": {"type": "once", "at": "2030-01-03T09:00:00Z"},
+        "actions": [{"type": "webhook", "url": "https://example.com/hook"}]
+    });
+    let (status, _) = json_request(&app, "POST", "/api/workflows", Some(invalid)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

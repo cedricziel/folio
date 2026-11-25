@@ -329,7 +329,7 @@ export class WorkflowConditionEditor {
       };
       const documentFields = ["mime_type", "filename_glob", "tag_id", "correspondent_id", "document_type_id"].some((name) => draft[name] != null);
       show("documentFilter", documentFilters || documentFields || Boolean(draft.source));
-      show("eventFilter", !ingest || Boolean(draft.event?.actor || draft.event?.subject_id || draft.event?.workflow_id));
+      show("eventFilter", (!ingest && trigger !== "document.date_offset") || Boolean(draft.event?.actor || draft.event?.subject_id || draft.event?.workflow_id));
       const showWorkflowRun = workflowRun || Boolean(draft.event?.workflow_id);
       show("workflowRunFilter", showWorkflowRun);
       fields.get("event_workflow_id").disabled = !showWorkflowRun;

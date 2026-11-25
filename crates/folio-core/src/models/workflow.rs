@@ -200,10 +200,12 @@ pub enum WorkflowTrigger {
     WorkflowRunSucceeded,
     #[serde(rename = "workflow_run.failed")]
     WorkflowRunFailed,
+    #[serde(rename = "document.date_offset")]
+    DocumentDateOffset,
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 89] = [
+    pub const ALL: [WorkflowTrigger; 90] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -293,6 +295,7 @@ impl WorkflowTrigger {
         Self::WorkflowRestored,
         Self::WorkflowRunSucceeded,
         Self::WorkflowRunFailed,
+        Self::DocumentDateOffset,
     ];
 
     /// The wire name, as used in payloads and the database
@@ -391,6 +394,7 @@ impl WorkflowTrigger {
             Self::WorkflowRestored => "workflow.restored",
             Self::WorkflowRunSucceeded => "workflow_run.succeeded",
             Self::WorkflowRunFailed => "workflow_run.failed",
+            Self::DocumentDateOffset => "document.date_offset",
         }
     }
 
@@ -486,6 +490,7 @@ impl WorkflowTrigger {
             Self::WorkflowRestored => "When a workflow is restored",
             Self::WorkflowRunSucceeded => "When a workflow run succeeds",
             Self::WorkflowRunFailed => "When a workflow run fails",
+            Self::DocumentDateOffset => "Relative to the document date",
         }
     }
 
@@ -526,7 +531,8 @@ impl WorkflowTrigger {
             | Self::DocumentThumbnailCompleted
             | Self::DocumentThumbnailFailed
             | Self::DocumentThumbnailSkipped
-            | Self::DocumentThumbnailRetryScheduled => WorkflowTarget::Document,
+            | Self::DocumentThumbnailRetryScheduled
+            | Self::DocumentDateOffset => WorkflowTarget::Document,
             Self::SavedViewCreated
             | Self::SavedViewUpdated
             | Self::SavedViewDeleted
@@ -1311,14 +1317,33 @@ impl WorkflowInput {
         if triggers.len() > 1 && triggers.contains(&WorkflowTrigger::Scheduled) {
             return invalid("A clock schedule must be the only trigger");
         }
+        if triggers.len() != 1 && triggers.contains(&WorkflowTrigger::DocumentDateOffset) {
+            return invalid("A document date schedule must be the only trigger");
+        }
         match (self.trigger, self.cadence) {
-            (WorkflowTrigger::Scheduled, Some(cadence)) => {
+            (
+                WorkflowTrigger::Scheduled,
+                Some(cadence @ (WorkflowCadence::Once { .. } | WorkflowCadence::Recurring { .. })),
+            ) => {
                 cadence.validate()?;
                 if self.conditions != WorkflowConditions::default() {
                     return invalid("A clock schedule has no document or event to filter");
                 }
             }
-            (WorkflowTrigger::Scheduled, None) => return invalid("Set a schedule"),
+            (
+                WorkflowTrigger::DocumentDateOffset,
+                Some(cadence @ WorkflowCadence::DocumentDateOffset { .. }),
+            ) => {
+                cadence.validate()?;
+                if self.conditions.requires_event_context() {
+                    return invalid(
+                        "Document date schedules do not have an event actor or subject",
+                    );
+                }
+            }
+            (WorkflowTrigger::Scheduled | WorkflowTrigger::DocumentDateOffset, _) => {
+                return invalid("Choose a schedule for the selected trigger");
+            }
             (_, Some(_)) => return invalid("A cadence requires a scheduled trigger"),
             (_, None) => {}
         }

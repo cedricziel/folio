@@ -33,3 +33,22 @@ Vault owners SHALL be able to configure one-time and recurring UTC clocks for we
 
 - **WHEN** an owner enters a leap-second instant as the start of a recurring clock
 - **THEN** Folio rejects the definition before it can acquire a schedule cursor
+
+#### Scenario: An event selection includes a schedule
+
+- **WHEN** a workflow selects a clock or document date offset alongside another trigger
+- **THEN** Folio rejects the configuration
+
+### Requirement: Document date schedules
+
+Vault owners SHALL be able to configure a signed offset in whole calendar days and a UTC time. At each occurrence, Folio SHALL select active documents in the workflow's vault whose document date matches the offset. The workflow SHALL apply its document conditions before queueing its ordered actions. Folio SHALL persist the document-page cursor in the same transaction as the queued runs and jobs.
+
+#### Scenario: Restart while claiming a date
+
+- **WHEN** Folio restarts after queueing the first page of matching documents
+- **THEN** it resumes from the saved cursor and queues each matching document once
+
+#### Scenario: Offset schedule has an occurrence filter
+
+- **WHEN** a vault owner saves a document date schedule with an event subject or actor condition
+- **THEN** Folio rejects the definition and keeps any previous revision

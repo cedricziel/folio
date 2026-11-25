@@ -36,7 +36,10 @@ pub(crate) fn edited_clock_cursor(
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
     let cursor = if workflow.cadence != input.cadence {
-        input.cadence.map(|cadence| clock_time(cadence.first_at()))
+        input
+            .cadence
+            .and_then(|cadence| cadence.first_cursor(now))
+            .map(clock_time)
     } else {
         current.map(str::to_owned)
     };

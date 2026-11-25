@@ -99,6 +99,7 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         case "workflow.restored": "When a workflow is restored"
         case "workflow_run.succeeded": "When a workflow run succeeds"
         case "workflow_run.failed": "When a workflow run fails"
+        case "document.date_offset": "Relative to the document date"
         case "document.metadata.changed": "When custom field values change"
         case "metadata_field.created": "When a custom field is created"
         case "metadata_field.updated": "When a custom field changes"

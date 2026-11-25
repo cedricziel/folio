@@ -82,6 +82,15 @@
             {% endif %}
         </fieldset>
 
+        <fieldset class="field" data-workflow-form-target="dateOffset"{% if values.trigger != "document.date_offset" %} hidden disabled{% endif %}>
+            <legend class="legend">Document date schedule</legend>
+            <label for="offset-days">Days from the document date</label>
+            <input class="input" type="number" id="offset-days" name="offset_days" value="{{ values.offset_days }}" step="1" required>
+            <p class="hint">Use a negative number to run before the document date.</p>
+            <label for="offset-time">Time of day (UTC)</label>
+            <input class="input" type="text" id="offset-time" name="offset_time" value="{{ values.offset_time }}" placeholder="09:00:00" required>
+        </fieldset>
+
         <fieldset class="field" data-workflow-form-target="documentFilter">
             <legend class="legend">Only if the document matches</legend>
             <p class="hint">Leave a field empty to match any document.</p>

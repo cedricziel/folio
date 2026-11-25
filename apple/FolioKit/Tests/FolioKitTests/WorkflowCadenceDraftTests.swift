@@ -9,6 +9,7 @@ struct WorkflowCadenceDraftTests {
         arguments: [
             ("workflow.scheduled", #"{"type":"once","at":"2032-02-29T09:30:00.123456789Z"}"#),
             ("workflow.scheduled", #"{"type":"once","at":"2016-12-31T23:59:60Z"}"#),
+            ("document.date_offset", #"{"type":"document_date_offset","days":-3,"time_utc":"09:30:00.123456789"}"#),
             (
                 "workflow.scheduled",
                 #"{"type":"recurring","first_at":"2032-02-29T09:30:00.123456789Z","interval_seconds":4294967295}"#
@@ -38,6 +39,25 @@ struct WorkflowCadenceDraftTests {
         draft.frequency = .recurring
         draft.interval = interval
         #expect(!draft.isValid(for: "workflow.scheduled"))
+    }
+
+    @Test func dateOffsetAcceptsMinutesAndValidatesCalendarRange() throws {
+        var draft = WorkflowCadenceDraft()
+        draft.days = "-2"
+        draft.time = "09:30"
+        let trigger = "document.date_offset"
+        let payload = try #require(try draft.payload(for: trigger))
+        guard case .case3(let offset) = payload else {
+            Issue.record("Expected a document date offset")
+            return
+        }
+        #expect(offset.days == -2)
+        #expect(offset.timeUtc == "09:30:00")
+        draft.days = "-3652059"
+        #expect(!draft.isValid(for: trigger))
+        draft.days = "0"
+        draft.time = "23:59:60"
+        #expect(!draft.isValid(for: trigger))
     }
 
     @Test func aLeapSecondCannotStartARecurringClock() {

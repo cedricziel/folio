@@ -20,6 +20,16 @@ struct WorkflowScheduleFields: View {
                 }
                 validation
             }
+        case .documentDate:
+            Section {
+                TextField("Offset in days", text: $cadence.days)
+                utcField("Time in UTC", example: "09:00:00", text: $cadence.time)
+                validation
+            } header: {
+                Text("Document date schedule")
+            } footer: {
+                Text("Use a negative offset for days before the document date, or zero for the same date.")
+            }
         case nil:
             EmptyView()
         }

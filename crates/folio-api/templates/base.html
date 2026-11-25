@@ -986,6 +986,7 @@ Stimulus.register(
       "cadence",
       "cadenceMode",
       "cadenceRepeat",
+      "dateOffset",
       "source",
       "folder",
       "email",
@@ -1062,6 +1063,7 @@ Stimulus.register(
     sync() {
       const selectors = this.triggerSelectors();
       const selected = selectors.map((select) => select.value);
+      const schedules = ["workflow.scheduled", "document.date_offset"];
       for (const [index, select] of selectors.entries()) {
         if (index > 0) {
           select.name = "trigger_additional_" + index;
@@ -1076,7 +1078,7 @@ Stimulus.register(
           remove.setAttribute("aria-label", "Remove additional trigger " + index);
         }
         for (const option of select.options) {
-          const singleOnly = option.value === "workflow.scheduled" || option.value === "ingest.received";
+          const singleOnly = schedules.includes(option.value) || option.value === "ingest.received";
           option.disabled = option.value !== select.value && option.value !== "" &&
             ((selectors.length > 1 && singleOnly) ||
               selected.some((name, other) => other !== index && option.value === name));
@@ -1084,13 +1086,16 @@ Stimulus.register(
       }
       const trigger = this.triggerTarget.value;
       const scheduled = trigger === "workflow.scheduled";
+      const dateOffset = trigger === "document.date_offset";
+      this.dateOffsetTarget.hidden = !dateOffset;
+      this.dateOffsetTarget.disabled = !dateOffset;
       this.cadenceTarget.hidden = !scheduled;
       this.cadenceTarget.disabled = !scheduled;
       this.cadenceRepeatTarget.hidden = this.cadenceModeTarget.value !== "recurring";
       this.cadenceRepeatTarget.querySelector("input").disabled = this.cadenceRepeatTarget.hidden;
       const ingest = trigger === "ingest.received";
       this.addTriggerTarget.hidden = false;
-      this.addTriggerTarget.disabled = selected.includes("ingest.received") || selected.includes("workflow.scheduled") ||
+      this.addTriggerTarget.disabled = selected.includes("ingest.received") || selected.some((value) => schedules.includes(value)) ||
         selected.includes("") || selectors.length >= this.triggerTarget.options.length;
       const documentActions = selectors
         .filter((select) => select.value)
@@ -1175,7 +1180,7 @@ Stimulus.register(
       this.ingestRetryLabelTarget.hidden = !outcome && !this.ingestRetryTarget.value;
       this.ingestRetryTarget.hidden = this.ingestRetryLabelTarget.hidden;
       this.ingestRetryTarget.disabled = this.ingestRetryTarget.hidden;
-      this.eventFilterTarget.hidden = scheduled || ingest;
+      this.eventFilterTarget.hidden = scheduled || dateOffset || ingest;
       this.eventFilterTarget.disabled = this.eventFilterTarget.hidden;
       this.actorUserTarget.hidden = this.actorTarget.value !== "user";
       this.actionsTarget.hidden = !this.editor.sync(documentActions, ingest);

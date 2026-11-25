@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "openapi", schema(value_type = String, format = Date))]
 pub struct DocumentDate(NaiveDate);
 
+impl DocumentDate {
+    pub(crate) fn from_naive_date(date: NaiveDate) -> Option<Self> {
+        (1..=9999).contains(&date.year()).then_some(Self(date))
+    }
+}
+
 impl FromStr for DocumentDate {
     type Err = &'static str;
 

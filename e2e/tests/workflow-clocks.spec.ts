@@ -71,6 +71,14 @@ test("removes saved root filters, grouped filters and document actions when conv
 
   await page.goto(`/workflows/${id}`);
   const trigger = page.getByRole("combobox", { name: "When", exact: true });
+  await page.getByRole("button", { name: "Add trigger", exact: true }).click();
+  const second = page.getByRole("combobox", { name: "Additional trigger 1", exact: true });
+  await second.selectOption("document.updated");
+  await expect(second.locator("option[value='workflow.scheduled']")).toBeDisabled();
+  await expect(trigger.locator("option[value='workflow.scheduled']")).toBeDisabled();
+  await expect(second.locator("option[value='document.date_offset']")).toBeDisabled();
+  await expect(trigger.locator("option[value='document.date_offset']")).toBeDisabled();
+  await page.getByRole("button", { name: "Remove additional trigger 1", exact: true }).click();
   await trigger.selectOption("workflow.scheduled");
   await page.getByRole("checkbox", { name: "Remove saved filters outside groups" }).check();
   await expect(page.getByRole("checkbox", { name: "Remove saved actions other than webhooks" })).toHaveCount(0);
@@ -98,4 +106,40 @@ test("removes saved root filters, grouped filters and document actions when conv
     conditions: {},
     actions: [{ type: "webhook", url: "http://127.0.0.1:9/unused", method: "POST", headers: {} }],
   });
+});
+
+test("authors a signed document date offset while keeping document conditions", async ({ page }) => {
+  test.skip(
+    Boolean(process.env.E2E_BASE_URL) || !process.env.FOLIO_VERIFY_ENV,
+    "Workflow editing requires the disposable global-setup instance",
+  );
+  const tagName = uniqueTitle("Scheduled invoice");
+  const tag = await page.request.post("/api/tags", { data: { name: tagName } });
+  expect(tag.ok()).toBeTruthy();
+  await page.goto("/workflows/new");
+  await page.getByRole("textbox", { name: "Name", exact: true }).fill(uniqueTitle("Offset reminder"));
+  await page.getByRole("combobox", { name: "When", exact: true }).selectOption("document.date_offset");
+  const days = page.getByRole("spinbutton", { name: "Days from the document date" });
+  const time = page.getByRole("textbox", { name: "Time of day (UTC)", exact: true });
+  await expect(page.getByRole("group", { name: "Only if the document matches" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Only if the event matches" })).toBeHidden();
+  await days.fill("-3");
+  await time.fill("09:30");
+  await page.getByRole("textbox", { name: "File name", exact: true }).fill("invoice-*.pdf");
+  await expect(page.getByRole("button", { name: "Add trigger", exact: true })).toBeDisabled();
+  const kind = page.getByRole("combobox", { name: "Action to add" });
+  const addAction = page.getByRole("button", { name: "Add action", exact: true });
+  await kind.selectOption("add_tags");
+  await addAction.click();
+  const action = page.getByRole("checkbox", { name: tagName, exact: true });
+  await action.check();
+  await kind.selectOption("webhook");
+  await addAction.click();
+  await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
+  await page.getByRole("button", { name: "Save workflow", exact: true }).click();
+  await expect(page).toHaveURL(/\/workflows\/[0-9a-f-]{36}$/);
+  await expect(days).toHaveValue("-3");
+  await expect(time).toHaveValue("09:30:00");
+  await expect(action).toBeChecked();
+  await expect(page.getByRole("textbox", { name: "File name", exact: true })).toHaveValue("invoice-*.pdf");
 });

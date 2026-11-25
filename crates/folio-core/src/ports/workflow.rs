@@ -56,7 +56,12 @@ pub trait WorkflowRepository: Send + Sync {
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool>;
 
     /// Advance due clocks and persist each run and its job in the same transaction.
-    async fn enqueue_due_schedules(&self, now: DateTime<Utc>, limit: u32) -> Result<usize>;
+    async fn enqueue_due_schedules(
+        &self,
+        now: DateTime<Utc>,
+        limit: u32,
+        public_url: &str,
+    ) -> Result<usize>;
 
     async fn find_run(&self, id: Id) -> Result<Option<WorkflowRun>>;
 

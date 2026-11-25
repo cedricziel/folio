@@ -481,6 +481,17 @@ keeps each masked credential with its original row, changing destinations
 rejects masked values, and stale revisions cannot overwrite a newer definition.
 The lifecycle test verifies the conditional update on both databases.
 
+## Verify workflow schedules
+
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_schedules`
+with an isolated Cargo target. Both database fixtures cover a signed document
+date offset, a vault and condition filter, two simultaneous claimants, a
+restart between pages, a document whose date changes after its first occurrence,
+and cancellation of queued runs after a switch to event triggers. Run
+`workflow-clocks.spec.ts` with the disposable browser instance to verify UTC
+authoring. The Apple classification fixture verifies that an offset change
+keeps the document filters and actions through the revision-checked update.
+
 ## Verify ordered document workflow actions
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_document_actions --test workflows --test workflow_lifecycle --test repository_contract`

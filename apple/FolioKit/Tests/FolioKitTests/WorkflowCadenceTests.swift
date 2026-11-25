@@ -21,4 +21,30 @@ struct WorkflowCadenceTests {
         let expected = try #require(JSONSerialization.jsonObject(with: Data(cadence.utf8)) as? NSDictionary)
         #expect(actual == expected)
     }
+
+    @Test
+    func generatedClientPreservesSignedDateOffsetsAndDocumentConditions() throws {
+        let body = Data(
+            #"""
+            {
+              "name": "Invoice reminder",
+              "triggers": ["document.date_offset"],
+              "cadence": {
+                "type": "document_date_offset",
+                "days": -3,
+                "time_utc": "09:30:00.123456789"
+              },
+              "conditions": {"filename_glob": "invoice-*.pdf"},
+              "actions": [{"type": "webhook", "url": "https://example.test/reminder"}]
+            }
+            """#.utf8
+        )
+        let input = try JSONDecoder().decode(Components.Schemas.WorkflowInput.self, from: body)
+        #expect(input.trigger == nil)
+        #expect(input.triggers?.map(\.rawValue) == ["document.date_offset"])
+        let encoded = try JSONEncoder().encode(input)
+        let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? NSDictionary)
+        let expected = try #require(JSONSerialization.jsonObject(with: body) as? NSDictionary)
+        #expect(actual == expected)
+    }
 }

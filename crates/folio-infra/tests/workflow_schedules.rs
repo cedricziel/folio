@@ -2,8 +2,8 @@ mod common;
 
 use chrono::{Duration, Utc};
 use folio_core::models::{
-    RunStatus, WebhookMethod, WebhookPayload, WorkflowAction, WorkflowCadence, WorkflowConditions,
-    WorkflowInput, WorkflowTrigger,
+    CreateDocument, DocumentDate, RunStatus, UpdateDocument, WebhookMethod, WebhookPayload,
+    WorkflowAction, WorkflowCadence, WorkflowConditions, WorkflowInput, WorkflowTrigger,
 };
 use folio_infra::Database;
 use testcontainers_modules::postgres::Postgres;
@@ -31,6 +31,7 @@ async fn contract(url: &str) {
     db.migrate().await.unwrap();
     let repos = db.repositories().await;
     let vault = repos.vaults.instance_default().await.unwrap();
+    document_date_contract(&db, url).await;
     let now = Utc::now();
     let paused_recurring = configuration(WorkflowCadence::Recurring {
         first_at: now - Duration::minutes(30),
@@ -48,7 +49,11 @@ async fn contract(url: &str) {
         .await
         .unwrap();
     assert_eq!(
-        repos.workflows.enqueue_due_schedules(now, 8).await.unwrap(),
+        repos
+            .workflows
+            .enqueue_due_schedules(now, 8, "https://folio.test")
+            .await
+            .unwrap(),
         0
     );
     repos
@@ -57,13 +62,17 @@ async fn contract(url: &str) {
         .await
         .unwrap();
     assert_eq!(
-        repos.workflows.enqueue_due_schedules(now, 8).await.unwrap(),
+        repos
+            .workflows
+            .enqueue_due_schedules(now, 8, "https://folio.test")
+            .await
+            .unwrap(),
         0
     );
     assert_eq!(
         repos
             .workflows
-            .enqueue_due_schedules(now + Duration::minutes(30), 8)
+            .enqueue_due_schedules(now + Duration::minutes(30), 8, "https://folio.test")
             .await
             .unwrap(),
         1
@@ -96,13 +105,17 @@ async fn contract(url: &str) {
         .await
         .unwrap();
     assert_eq!(
-        repos.workflows.enqueue_due_schedules(now, 8).await.unwrap(),
+        repos
+            .workflows
+            .enqueue_due_schedules(now, 8, "https://folio.test")
+            .await
+            .unwrap(),
         0
     );
     assert_eq!(
         repos
             .workflows
-            .enqueue_due_schedules(now + Duration::minutes(30), 8)
+            .enqueue_due_schedules(now + Duration::minutes(30), 8, "https://folio.test")
             .await
             .unwrap(),
         1
@@ -116,7 +129,7 @@ async fn contract(url: &str) {
     assert_eq!(
         repos
             .workflows
-            .enqueue_due_schedules(at - Duration::nanoseconds(1), 8)
+            .enqueue_due_schedules(at - Duration::nanoseconds(1), 8, "https://folio.test")
             .await
             .unwrap(),
         0
@@ -125,14 +138,18 @@ async fn contract(url: &str) {
     let pending_before = repos.jobs.pending_count().await.unwrap();
     let restarted = Database::connect(url).await.unwrap().repositories().await;
     let (left, right) = tokio::join!(
-        repos.workflows.enqueue_due_schedules(at, 8),
-        restarted.workflows.enqueue_due_schedules(at, 8),
+        repos
+            .workflows
+            .enqueue_due_schedules(at, 8, "https://folio.test"),
+        restarted
+            .workflows
+            .enqueue_due_schedules(at, 8, "https://folio.test"),
     );
     assert_eq!(left.unwrap() + right.unwrap(), 1);
     assert_eq!(
         restarted
             .workflows
-            .enqueue_due_schedules(at, 8)
+            .enqueue_due_schedules(at, 8, "https://folio.test")
             .await
             .unwrap(),
         0
@@ -169,7 +186,11 @@ async fn contract(url: &str) {
         .await
         .unwrap();
     assert_eq!(
-        repos.workflows.enqueue_due_schedules(at, 8).await.unwrap(),
+        repos
+            .workflows
+            .enqueue_due_schedules(at, 8, "https://folio.test")
+            .await
+            .unwrap(),
         0
     );
     assert_eq!(
@@ -197,7 +218,7 @@ async fn contract(url: &str) {
     assert_eq!(
         repos
             .workflows
-            .enqueue_due_schedules(catch_up, 8)
+            .enqueue_due_schedules(catch_up, 8, "https://folio.test")
             .await
             .unwrap(),
         16
@@ -237,7 +258,7 @@ async fn contract(url: &str) {
     assert_eq!(
         repos
             .workflows
-            .enqueue_due_schedules(next, 8)
+            .enqueue_due_schedules(next, 8, "https://folio.test")
             .await
             .unwrap(),
         0
@@ -250,7 +271,7 @@ async fn contract(url: &str) {
     assert_eq!(
         repos
             .workflows
-            .enqueue_due_schedules(next, 8)
+            .enqueue_due_schedules(next, 8, "https://folio.test")
             .await
             .unwrap(),
         1
@@ -273,6 +294,47 @@ async fn contract(url: &str) {
         .unwrap();
     assert_eq!(newest.definition_revision, Some(resumed.revision));
 
+    let selections = vec![
+        WorkflowTrigger::DocumentRestored,
+        WorkflowTrigger::MetadataFieldUpdated,
+    ];
+    let converted = repos
+        .workflows
+        .replace(
+            vault,
+            clock.id,
+            WorkflowInput {
+                name: resumed.name,
+                enabled: resumed.enabled,
+                trigger: selections[0],
+                triggers: selections.clone(),
+                cadence: None,
+                conditions: resumed.conditions,
+                actions: resumed.actions,
+            },
+            Some(resumed.revision),
+        )
+        .await
+        .unwrap();
+    assert_eq!(converted.triggers, selections);
+    assert!(converted.cadence.is_none());
+    for trigger in selections {
+        let selected = repos.workflows.list_enabled(vault, trigger).await.unwrap();
+        assert!(selected.iter().any(|workflow| workflow.id == clock.id));
+    }
+    assert_eq!(
+        repos
+            .workflows
+            .enqueue_due_schedules(next + Duration::hours(1), 8, "https://folio.test")
+            .await
+            .unwrap(),
+        0
+    );
+    let cancelled = repos.workflows.find_run(newest.id).await.unwrap().unwrap();
+    assert_eq!(cancelled.status, RunStatus::Failed);
+    assert_eq!(cancelled.definition_revision, Some(resumed.revision));
+    assert_eq!(cancelled.payload, newest.payload);
+
     let failing_at = next + Duration::minutes(10);
     let failing = repos
         .workflows
@@ -294,7 +356,7 @@ async fn contract(url: &str) {
     }
     assert!(repos
         .workflows
-        .enqueue_due_schedules(failing_at, 8)
+        .enqueue_due_schedules(failing_at, 8, "https://folio.test")
         .await
         .is_err());
     assert!(repos
@@ -320,7 +382,7 @@ async fn contract(url: &str) {
     assert_eq!(
         repos
             .workflows
-            .enqueue_due_schedules(failing_at, 8)
+            .enqueue_due_schedules(failing_at, 8, "https://folio.test")
             .await
             .unwrap(),
         1
@@ -334,6 +396,233 @@ async fn contract(url: &str) {
             .len(),
         1
     );
+}
+
+async fn document_date_contract(db: &Database, url: &str) {
+    let repos = db.repositories().await;
+    let vault = repos.vaults.instance_default().await.unwrap();
+    let other = repos.vaults.create("Other dates", None).await.unwrap().id;
+    let time = "09:30:00".parse().unwrap();
+    let at = (Utc::now() + Duration::days(2))
+        .date_naive()
+        .and_time(time)
+        .and_utc();
+    let cadence = WorkflowCadence::DocumentDateOffset {
+        days: -1,
+        time_utc: time,
+    };
+    let date = cadence.document_date_at(at).unwrap();
+    let create = |name: String| CreateDocument {
+        title: name.clone(),
+        original_filename: Some(name),
+        ..Default::default()
+    };
+    let set_date = |date: DocumentDate| UpdateDocument {
+        document_date: Some(Some(date)),
+        ..Default::default()
+    };
+    let mut ids = Vec::with_capacity(65);
+    for index in 0..65 {
+        let document = repos
+            .documents
+            .create(vault, create(format!("invoice-{index}.pdf")))
+            .await
+            .unwrap();
+        repos
+            .documents
+            .update(vault, document.id, set_date(date))
+            .await
+            .unwrap();
+        ids.push(document.id);
+    }
+    for (owner, filename) in [
+        (other, "invoice-other.pdf"),
+        (vault, "receipt.pdf"),
+        (vault, "invoice-trash.pdf"),
+    ] {
+        let document = repos
+            .documents
+            .create(owner, create(filename.into()))
+            .await
+            .unwrap();
+        repos
+            .documents
+            .update(owner, document.id, set_date(date))
+            .await
+            .unwrap();
+        if filename == "invoice-trash.pdf" {
+            repos.documents.delete(owner, document.id).await.unwrap();
+        }
+    }
+    repos
+        .documents
+        .create(vault, create("invoice-undated.pdf".into()))
+        .await
+        .unwrap();
+
+    let workflow = repos
+        .workflows
+        .create(
+            vault,
+            WorkflowInput {
+                name: "Relative to invoice date".into(),
+                trigger: WorkflowTrigger::DocumentDateOffset,
+                conditions: WorkflowConditions {
+                    filename_glob: Some("invoice-*.pdf".into()),
+                    ..Default::default()
+                },
+                ..configuration(cadence)
+            },
+        )
+        .await
+        .unwrap();
+
+    let shortly_before = at - Duration::nanoseconds(1);
+    for _ in 0..3 {
+        assert_eq!(
+            repos
+                .workflows
+                .enqueue_due_schedules(shortly_before, 4, "https://folio.test")
+                .await
+                .unwrap(),
+            0
+        );
+    }
+    let restarted = Database::connect(url).await.unwrap().repositories().await;
+    let (left, right) = tokio::join!(
+        repos
+            .workflows
+            .enqueue_due_schedules(at, 4, "https://folio.test"),
+        restarted
+            .workflows
+            .enqueue_due_schedules(at, 4, "https://folio.test"),
+    );
+    let initially_queued = left.unwrap() + right.unwrap();
+    assert!((63..=65).contains(&initially_queued));
+    let remaining = restarted
+        .workflows
+        .enqueue_due_schedules(at, 4, "https://folio.test")
+        .await
+        .unwrap();
+    assert_eq!(initially_queued + remaining, 65);
+    assert_eq!(
+        restarted
+            .workflows
+            .enqueue_due_schedules(at, 4, "https://folio.test")
+            .await
+            .unwrap(),
+        0
+    );
+
+    let runs = repos
+        .workflows
+        .list_runs(vault, workflow.id, 100)
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 65);
+    let mut received: Vec<_> = runs
+        .iter()
+        .map(|run| {
+            let document = run.document_id.unwrap();
+            let payload: WebhookPayload = serde_json::from_str(&run.payload).unwrap();
+            assert_eq!(run.event, WorkflowTrigger::DocumentDateOffset);
+            assert_eq!(run.definition_revision, Some(workflow.revision));
+            assert_eq!(payload.occurred_at, at);
+            let snapshot = payload.document.unwrap();
+            assert_eq!(snapshot.id, document);
+            assert_eq!(snapshot.document_date, Some(date));
+            assert_eq!(
+                snapshot.urls.api,
+                format!("https://folio.test/api/documents/{document}")
+            );
+            document
+        })
+        .collect();
+    received.sort_unstable();
+    ids.sort_unstable();
+    assert_eq!(received, ids);
+
+    let next_at = at + Duration::days(1);
+    let next_date = cadence.document_date_at(next_at).unwrap();
+    repos
+        .documents
+        .update(vault, ids[0], set_date(next_date))
+        .await
+        .unwrap();
+    assert_eq!(
+        restarted
+            .workflows
+            .enqueue_due_schedules(next_at, 4, "https://folio.test")
+            .await
+            .unwrap(),
+        1
+    );
+    let runs = repos
+        .workflows
+        .list_runs(vault, workflow.id, 100)
+        .await
+        .unwrap();
+    let received: Vec<_> = runs
+        .iter()
+        .filter(|run| run.document_id == Some(ids[0]))
+        .map(|run| {
+            serde_json::from_str::<WebhookPayload>(&run.payload)
+                .unwrap()
+                .document
+                .unwrap()
+                .document_date
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(received.len(), 2);
+    assert!(received.contains(&date));
+    assert!(received.contains(&next_date));
+
+    let selected = vec![
+        WorkflowTrigger::DocumentRestored,
+        WorkflowTrigger::DocumentUpdated,
+    ];
+    let converted = repos
+        .workflows
+        .replace(
+            vault,
+            workflow.id,
+            WorkflowInput {
+                trigger: selected[0],
+                triggers: selected.clone(),
+                cadence: None,
+                name: workflow.name,
+                enabled: workflow.enabled,
+                conditions: workflow.conditions,
+                actions: workflow.actions,
+            },
+            Some(workflow.revision),
+        )
+        .await
+        .unwrap();
+    assert_eq!(converted.triggers, selected);
+    assert!(converted.cadence.is_none());
+    assert_eq!(
+        restarted
+            .workflows
+            .enqueue_due_schedules(next_at + Duration::days(1), 4, "https://folio.test")
+            .await
+            .unwrap(),
+        0
+    );
+    let retained = repos
+        .workflows
+        .list_runs(vault, workflow.id, 100)
+        .await
+        .unwrap();
+    assert_eq!(retained.len(), runs.len());
+    for run in retained {
+        let original = runs.iter().find(|old| old.id == run.id).unwrap();
+        assert_eq!(run.status, RunStatus::Failed);
+        assert_eq!(run.payload, original.payload);
+        assert_eq!(run.definition_revision, Some(workflow.revision));
+    }
+    repos.workflows.delete(vault, workflow.id).await.unwrap();
 }
 
 #[tokio::test]
