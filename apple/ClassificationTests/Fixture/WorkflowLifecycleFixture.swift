@@ -7,11 +7,15 @@ struct WorkflowLifecycleFixture: View {
     @State private var service = WorkflowLifecycleFixtureService()
 
     @State private var editorService = WorkflowEditorFixtureProtocol.service()
+    @State private var memberService = WorkflowMemberFixtureProtocol.service()
 
     var body: some View {
+        let readOnly = ProcessInfo.processInfo.arguments.contains("--workflow-member")
+        let workflowService: any WorkflowLifecycleService =
+            if readOnly { memberService } else if usesGeneratedEditing { editorService } else { service }
         WorkflowLifecycleView(
             vaultID: WorkflowLifecycleFixtureService.vaultID,
-            service: usesGeneratedEditing ? editorService : service,
+            service: workflowService,
             canManage: !ProcessInfo.processInfo.arguments.contains("--read-only")
         )
     }
@@ -347,6 +351,65 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
             if count == 0 { return data }
             guard count > 0 else { return nil }
             data.append(buffer, count: count)
+        }
+    }
+}
+
+private final class WorkflowMemberFixtureProtocol: URLProtocol, @unchecked Sendable {
+    private static let host = "workflow-member-fixture.test"
+    private static let id = "00000000-0000-4000-8000-000000000001"
+    private static let vault = WorkflowLifecycleFixtureService.vaultID.uuidString.lowercased()
+
+    static func service() -> LiveFolioService {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [Self.self]
+        return LiveFolioService(
+            baseURL: URL(string: "https://\(host)")!, session: URLSession(configuration: configuration)
+        )
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == host }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let (status, json) = Self.response(for: request)
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(json.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+
+    private static func response(for request: URLRequest) -> (Int, String) {
+        guard request.httpMethod == "GET", request.value(forHTTPHeaderField: "X-Folio-Vault") == vault else {
+            return (403, "{}")
+        }
+        switch request.url?.path {
+        case "/api/workflows/summaries":
+            return (
+                200,
+                """
+                [{"id":"\(id)","vault_id":"\(vault)","name":"Invoice notifications","enabled":true,
+                  "trigger":"document.processed","action_count":2,"trigger_selection":[
+                  {"event_type":"document.processed","label":"When a document has been read"},
+                  {"event_type":"saved_view.updated","label":"When a shared saved view is updated"}],
+                  "created_at":"2026-11-02T12:34:56Z","updated_at":"2026-11-02T12:35:00Z"}]
+                """
+            )
+        case "/api/workflows/\(id)/run-summaries":
+            return (
+                200,
+                """
+                [{"id":"00000000-0000-4000-8000-000000000002","vault_id":"\(vault)","workflow_id":"\(id)",
+                  "event":"document.uploaded","status":"failed","attempts":3,"completed_actions":1,
+                  "created_at":"2026-11-02T12:34:56Z","finished_at":"2026-11-02T12:35:00Z"}]
+                """
+            )
+        default:
+            return (403, "{}")
         }
     }
 }

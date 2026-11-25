@@ -319,13 +319,31 @@ async fn resolve(
     })
 }
 
+fn workflow_member_read_path(api: bool, path: &str) -> bool {
+    let collection = if api {
+        "/workflows/summaries"
+    } else {
+        "/workflows"
+    };
+    let history = if api { "run-summaries" } else { "history" };
+    path == collection
+        || path
+            .strip_prefix("/workflows/")
+            .and_then(|rest| rest.split_once('/'))
+            .is_some_and(|(_, tail)| tail == history)
+}
+
 async fn action(state: &AppState, request: &mut Request, vault: VaultId) -> ApiResult<VaultAction> {
     let path = request.uri().path();
+    let api = path.starts_with("/api/");
     let path = path.strip_prefix("/api").unwrap_or(path);
     let mutation = !matches!(
         *request.method(),
         Method::GET | Method::HEAD | Method::OPTIONS
     );
+    if !mutation && workflow_member_read_path(api, path) {
+        return Ok(VaultAction::Read);
+    }
     if path == "/workflows"
         || path.starts_with("/workflows/")
         || path == "/sources"

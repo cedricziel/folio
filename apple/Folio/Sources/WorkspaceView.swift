@@ -285,9 +285,11 @@ struct WorkspaceView: View {
                     Label("Ingestion activity", systemImage: "tray.and.arrow.down")
                 }
             }
-            if workspace.selectedVault?.role == .owner, service is any WorkflowLifecycleService {
+            if let vault = workspace.selectedVault, service is any WorkflowLifecycleService,
+                vault.role == .owner || service is any WorkflowMemberReadService
+            {
                 Button {
-                    workflowVault = workspace.selectedVault
+                    workflowVault = vault
                 } label: {
                     Label("Workflows", systemImage: "arrow.triangle.branch")
                 }

@@ -8,10 +8,10 @@
     <header class="page-head">
         <div class="page-head-row">
             <h1 class="title">{% if deleted %}Deleted workflows{% else %}Workflows{% endif %}</h1>
-            <div class="head-actions">
+            {% if can_manage %}<div class="head-actions">
                 {% if deleted %}<a href="{{ "/workflows"|vault_url }}" class="f-btn">Active workflows</a>{% else %}<a href="{{ "/workflows?deleted=true"|vault_url }}" class="f-btn">Deleted workflows</a>{% endif %}
                 <a href="{{ "/workflows/new"|vault_url }}" class="f-btn f-btn-primary">New workflow</a>
-            </div>
+            </div>{% endif %}
         </div>
         {% if deleted %}<p class="lede">Deleted workflows stop matching events and keep their run history. Restoring does not restart old runs.</p>{% else %}
         <p class="lede">When something happens to a document, Folio can tag it, file it, or notify another service.</p>{% endif %}
@@ -19,15 +19,15 @@
 
     {% if rows.is_empty() %}
     <div class="f-notice">
-        <p>{% if deleted %}No deleted workflows.{% else %}No workflows yet. Create one to send a webhook when a document is uploaded or finished processing.{% endif %}</p>
+        <p>{% if deleted %}No deleted workflows.{% else %}No workflows yet.{% if can_manage %} Create one to send a webhook when a document is uploaded or finished processing.{% endif %}{% endif %}</p>
     </div>
     {% else %}
     <div class="f-list">
         {% for row in rows %}
         <div class="f-row f-row-plain workflow-row">
             <div class="row-main">
-                {% if deleted %}<span class="f-row-title">{{ row.name }}</span>{% else %}<a href="{{ "/workflows"|vault_url }}/{{ row.id }}" class="f-row-title">{{ row.name }}</a>{% endif %}
-                <div class="f-row-sub lifecycle-meta"><span class="f-meta">{{ row.lifecycle_summary }}</span></div>
+                {% if deleted || !can_manage %}<span class="f-row-title">{{ row.name }}</span>{% else %}<a href="{{ "/workflows"|vault_url }}/{{ row.id }}" class="f-row-title">{{ row.name }}</a>{% endif %}
+                {% if can_manage %}<div class="f-row-sub lifecycle-meta"><span class="f-meta">{{ row.lifecycle_summary }}</span></div>{% endif %}
                 <div class="f-row-sub">
                     <span>{% for label in row.trigger_labels %}{% if !loop.first %} · {% endif %}{{ label }}{% endfor %}</span>
                     {% if !row.enabled %}<span class="f-status f-status-pending">Off</span>{% endif %}
@@ -42,7 +42,7 @@
             </div>
             <div class="form-actions">
                 <a href="{{ "/workflows"|vault_url }}/{{ row.id }}/history" class="f-btn f-btn-quiet">Run history</a>
-                {% if deleted %}
+                {% if can_manage %}{% if deleted %}
                 <form action="{{ "/workflows"|vault_url }}/{{ row.id }}/restore" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-primary">Restore</button>
                 </form>
@@ -50,7 +50,7 @@
                 <form action="{{ "/workflows"|vault_url }}/{{ row.id }}/toggle" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-quiet">{% if row.enabled %}Turn off{% else %}Turn on{% endif %}</button>
                 </form>
-                {% endif %}
+                {% endif %}{% endif %}
             </div>
         </div>
         {% endfor %}

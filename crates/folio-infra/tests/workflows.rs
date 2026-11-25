@@ -1991,6 +1991,18 @@ impl WorkflowRepository for RestoreVaultAfterLookup {
     ) -> folio_core::Result<Vec<WorkflowRun>> {
         self.inner.list_runs(vault, id, limit).await
     }
+
+    async fn list_active_document_runs(
+        &self,
+        vault: folio_core::models::VaultId,
+        workflow_id: Id,
+        events: &[WorkflowTrigger],
+        limit: u32,
+    ) -> folio_core::Result<Vec<WorkflowRun>> {
+        self.inner
+            .list_active_document_runs(vault, workflow_id, events, limit)
+            .await
+    }
 }
 
 #[tokio::test]
@@ -2295,6 +2307,18 @@ impl WorkflowRepository for DeleteAfterLocalAction {
         limit: u32,
     ) -> folio_core::Result<Vec<WorkflowRun>> {
         self.inner.list_runs(vault, id, limit).await
+    }
+
+    async fn list_active_document_runs(
+        &self,
+        vault: folio_core::models::VaultId,
+        workflow_id: Id,
+        events: &[WorkflowTrigger],
+        limit: u32,
+    ) -> folio_core::Result<Vec<WorkflowRun>> {
+        self.inner
+            .list_active_document_runs(vault, workflow_id, events, limit)
+            .await
     }
 }
 

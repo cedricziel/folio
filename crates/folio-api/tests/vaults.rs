@@ -1284,6 +1284,165 @@ async fn editor_cannot_manage_vault_workflows() {
 }
 
 #[tokio::test]
+async fn workflow_members_read_summaries_without_owner_data_or_controls() {
+    use folio_core::models::{RunStatus, WorkflowInput, WorkflowRun, WorkflowTrigger};
+
+    let h = harness_requiring_login().await;
+    let owner = sign_in(&h, "member-workflows-owner").await;
+    let viewer = sign_in(&h, "member-workflows-viewer").await;
+    let stranger = sign_in(&h, "member-workflows-stranger").await;
+    h.members
+        .grant(
+            owner.vault,
+            &Principal::User(viewer.user.clone()),
+            VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let workflow = h
+        .state
+        .workflow_repo
+        .create(
+            owner.vault,
+            serde_json::from_value::<WorkflowInput>(serde_json::json!({
+                "name": "Notify intake", "triggers": ["document.processed", "document.uploaded"],
+                "conditions": {"filename_glob": "sensitive-filter"},
+                "actions": [{"type":"webhook", "method":"POST", "url":"https://receiver.test/private",
+                    "secret":"private-signature", "headers":{"Authorization":"sensitive-header"}}]
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let own = h
+        .state
+        .document_repo
+        .create(owner.vault, CreateDocument::default())
+        .await
+        .unwrap();
+    let foreign = h
+        .state
+        .document_repo
+        .create(stranger.vault, CreateDocument::default())
+        .await
+        .unwrap();
+    let mut ids = Vec::new();
+    for (trigger, document) in [
+        (WorkflowTrigger::DocumentUploaded, own.id),
+        (WorkflowTrigger::DocumentUpdated, foreign.id),
+        (WorkflowTrigger::IngestImported, own.id),
+    ] {
+        let mut run = WorkflowRun::new(
+            owner.vault,
+            workflow.id,
+            trigger,
+            Some(document),
+            "{}".into(),
+        )
+        .with_definition(&workflow);
+        run.created_at += chrono::Duration::seconds(ids.len() as i64);
+        assert!(h.state.workflow_repo.create_run(&run).await.unwrap());
+        run.status = RunStatus::Failed;
+        run.last_error = Some("sensitive-run-error".into());
+        run.response_status = Some(503);
+        h.state.workflow_repo.update_run(&run).await.unwrap();
+        ids.push(run.id.to_string());
+    }
+
+    let prefix = format!("/vaults/{}", owner.vault);
+    let api = format!("{prefix}/api/workflows");
+    let path = format!("{prefix}/workflows");
+    let history = format!("{path}/{}/history", workflow.id);
+    let summary = format!("{api}/summaries");
+    let runs = format!("{api}/{}/run-summaries?limit=1", workflow.id);
+    let definition = format!("{api}/{}", workflow.id);
+
+    for (url, marker) in [
+        (&summary, "Notify intake"),
+        (&runs, ids[0].as_str()),
+        (&path, "Notify intake"),
+        (&history, "Failed"),
+    ] {
+        let response = h
+            .app
+            .clone()
+            .oneshot(request("GET", url, &viewer, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{url}");
+        let body = text(response).await;
+        assert!(body.contains(marker), "{url}: {body}");
+        if url == &summary {
+            let rows: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(rows[0]["trigger"], "document.processed");
+            assert_eq!(
+                rows[0]["trigger_selection"],
+                serde_json::json!([
+                    {"event_type":"document.processed","label":"When a document has been read"},
+                    {"event_type":"document.uploaded","label":"When a document is added"}
+                ])
+            );
+        }
+        if url == &path || url == &history {
+            assert!(body.contains("When a document has been read · When a document is added"));
+        }
+        for hidden in [
+            "receiver.test",
+            "private-signature",
+            "sensitive-header",
+            "sensitive-filter",
+            "sensitive-run-error",
+            ids[1].as_str(),
+            ids[2].as_str(),
+            "New workflow",
+            "Edit workflow",
+            "Turn off",
+        ] {
+            assert!(!body.contains(hidden), "{url} exposed {hidden}");
+        }
+    }
+
+    for (method, url) in [
+        ("GET", definition.as_str()),
+        ("PUT", definition.as_str()),
+        ("POST", api.as_str()),
+        ("GET", &format!("{path}/{}", workflow.id)),
+    ] {
+        let response = h
+            .app
+            .clone()
+            .oneshot(request(method, url, &viewer, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {url}");
+    }
+
+    for url in [&summary, &runs] {
+        let response = h
+            .app
+            .clone()
+            .oneshot(request("GET", url, &stranger, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{url}");
+    }
+
+    let owner_run = format!("{definition}/runs");
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &owner_run, &owner, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let owner_body = text(response).await;
+    assert!(owner_body.contains("sensitive-run-error"));
+    assert!(owner_body.contains(&ids[2]));
+}
+
+#[tokio::test]
 async fn trash_actions_enforce_vault_and_document_permissions() {
     let h = harness_requiring_login().await;
     let owner = sign_in(&h, "trash-owner").await;

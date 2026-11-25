@@ -12,6 +12,7 @@ public final class WorkflowLifecycleViewModel {
     public private(set) var mutationError: String?
     public private(set) var accessDenied = false
     public let canManage: Bool
+    public var canRead: Bool { canManage || service is any WorkflowMemberReadService }
     private let vaultID: UUID
     private let service: any WorkflowLifecycleService
     private var requestID = UUID()
@@ -24,7 +25,7 @@ public final class WorkflowLifecycleViewModel {
     }
 
     public func load(deleted: Bool? = nil) async {
-        guard canManage, !isMutating else { return }
+        guard canRead, !isMutating, canManage || deleted != true else { return }
         if let deleted, self.deleted != deleted {
             self.deleted = deleted
             workflows = []
@@ -42,7 +43,14 @@ public final class WorkflowLifecycleViewModel {
             }
         }
         do {
-            let rows = try await service.workflowConfigurations(vaultID: vaultID, deleted: showDeleted)
+            let rows: [WorkflowConfigurationSummary]
+            if canManage {
+                rows = try await service.workflowConfigurations(vaultID: vaultID, deleted: showDeleted)
+            } else if let memberRead = service as? any WorkflowMemberReadService {
+                rows = try await memberRead.memberWorkflowConfigurations(vaultID: vaultID)
+            } else {
+                return
+            }
             guard requestID == request, !Task.isCancelled else { return }
             guard rows.allSatisfy({ $0.vaultID == vaultID && ($0.deletedAt != nil) == showDeleted }) else {
                 throw FolioError.unreadableResponse
@@ -52,11 +60,12 @@ public final class WorkflowLifecycleViewModel {
             accessDenied = false
         } catch {
             guard requestID == request, !Task.isCancelled else { return }
-            if Self.isForbidden(error) {
+            if Self.isForbidden(error) || (!canManage && Self.isUnavailableToMember(error)) {
                 workflows = []
                 accessDenied = true
             }
-            self.error = Self.message(error, fallback: "Couldn't load workflows. Try again.")
+            self.error = Self.message(
+                error, fallback: "Couldn't load workflows. Try again.", canManage: canManage)
         }
     }
 
@@ -69,7 +78,10 @@ public final class WorkflowLifecycleViewModel {
     }
 
     func triggerTitle(for workflow: WorkflowConfigurationSummary) -> String {
-        workflow.selectedTriggers.map { id in
+        if let labels = workflow.triggerLabels {
+            return labels.joined(separator: " · ")
+        }
+        return workflow.selectedTriggers.map { id in
             triggerTitles[id] ?? (id == workflow.trigger ? workflow.triggerTitle : id)
         }.joined(separator: " · ")
     }
@@ -137,12 +149,22 @@ public final class WorkflowLifecycleViewModel {
         return false
     }
 
-    static func message(_ error: Error, fallback: String) -> String {
-        if isForbidden(error) {
-            return "Only vault owners can manage workflows."
+    static func isUnavailableToMember(_ error: Error) -> Bool {
+        switch error as? FolioError {
+        case .server(status: 404, message: _), .signInRequired: true
+        default: false
         }
+    }
+
+    static func message(_ error: Error, fallback: String, canManage: Bool = true) -> String {
         if let error = error as? FolioError, error == .signInRequired {
             return "Sign in again to continue."
+        }
+        if !canManage && (isForbidden(error) || isUnavailableToMember(error)) {
+            return "Workflow summaries aren't available for this vault."
+        }
+        if isForbidden(error) {
+            return "Only vault owners can manage workflows."
         }
         return fallback
     }
@@ -169,7 +191,8 @@ public final class WorkflowHistoryViewModel {
     }
 
     public func load() async {
-        guard canManage else { return }
+        let memberRead = service as? any WorkflowMemberReadService
+        guard canManage || memberRead != nil else { return }
         let request = UUID()
         requestID = request
         isLoading = true
@@ -180,7 +203,14 @@ public final class WorkflowHistoryViewModel {
             }
         }
         do {
-            let rows = try await service.workflowHistory(vaultID: vaultID, workflowID: workflowID)
+            let rows: [WorkflowExecutionSummary]
+            if canManage {
+                rows = try await service.workflowHistory(vaultID: vaultID, workflowID: workflowID)
+            } else if let memberRead {
+                rows = try await memberRead.memberWorkflowHistory(vaultID: vaultID, workflowID: workflowID)
+            } else {
+                return
+            }
             guard requestID == request, !Task.isCancelled else { return }
             guard rows.allSatisfy({ $0.vaultID == vaultID && $0.workflowID == workflowID }) else {
                 throw FolioError.unreadableResponse
@@ -190,11 +220,14 @@ public final class WorkflowHistoryViewModel {
             accessDenied = false
         } catch {
             guard requestID == request, !Task.isCancelled else { return }
-            if WorkflowLifecycleViewModel.isForbidden(error) {
+            if WorkflowLifecycleViewModel.isForbidden(error)
+                || (!canManage && WorkflowLifecycleViewModel.isUnavailableToMember(error))
+            {
                 runs = []
                 accessDenied = true
             }
-            self.error = WorkflowLifecycleViewModel.message(error, fallback: "Couldn't load run history. Try again.")
+            self.error = WorkflowLifecycleViewModel.message(
+                error, fallback: "Couldn't load run history. Try again.", canManage: canManage)
         }
     }
 }

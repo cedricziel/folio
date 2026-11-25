@@ -247,9 +247,7 @@ pub mod filters {
 
     #[askama::filter_fn]
     pub fn can_workflows(_: bool, _: &dyn askama::Values) -> askama::Result<bool> {
-        Ok(CURRENT_VAULT
-            .try_with(|ctx| ctx.role == VaultRole::Owner)
-            .unwrap_or(false))
+        Ok(CURRENT_VAULT.try_with(|_| ()).is_ok())
     }
 
     #[askama::filter_fn]

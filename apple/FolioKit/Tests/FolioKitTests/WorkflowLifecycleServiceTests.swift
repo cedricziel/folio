@@ -561,6 +561,73 @@ import Testing
         }
     }
 
+    @MainActor @Test func membersUseReadOnlyRoutesAndClearDataAfterRevocation() async throws {
+        let live = service()
+        let runID = UUID(uuidString: "99999999-8888-4777-8666-555555555555")!
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
+            switch request.url?.path {
+            case "/folio/api/workflows/summaries":
+                return (
+                    200,
+                    """
+                    [{"id":"\(workflowID)","vault_id":"\(vaultID)","name":"File invoices","enabled":true,
+                    "trigger":"document.processed","action_count":2,"trigger_selection":[
+                    {"event_type":"document.processed","label":"When a document has been read"},
+                    {"event_type":"saved_view.updated","label":"When a shared saved view is updated"}],
+                    "created_at":"2026-11-02T12:34:56Z","updated_at":"2026-11-02T12:35:00Z"}]
+                    """
+                )
+            case "/folio/api/workflows/\(workflowID.uuidString.lowercased())/run-summaries":
+                #expect(request.url?.query == "limit=50")
+                return (
+                    200,
+                    """
+                    [{"id":"\(runID)","vault_id":"\(vaultID)","workflow_id":"\(workflowID)",
+                    "event":"document.uploaded","status":"succeeded","attempts":2,"completed_actions":2,
+                    "created_at":"2026-11-02T12:34:56Z","finished_at":"2026-11-02T12:35:00Z"}]
+                    """
+                )
+            default:
+                Issue.record("Unexpected workflow request: \(request.httpMethod ?? "") \(request.url?.path ?? "")")
+                return (404, "{}")
+            }
+        }
+        let list = WorkflowLifecycleViewModel(vaultID: vaultID, service: live, canManage: false)
+        let history = WorkflowHistoryViewModel(
+            vaultID: vaultID, workflowID: workflowID, service: live, canManage: false)
+        #expect(list.canRead)
+        #expect(!list.canManage)
+        await list.load()
+        let summary = try #require(list.workflows.first)
+        #expect(summary.id == workflowID)
+        #expect(summary.actionCount == 2)
+        #expect(summary.selectedTriggers == ["document.processed", "saved_view.updated"])
+        #expect(
+            list.triggerTitle(for: summary)
+                == "When a document has been read · When a shared saved view is updated")
+        #expect(summary.createdBy == nil)
+        #expect(!(await list.moveToTrash(summary)))
+        await list.load(deleted: true)
+        #expect(!list.deleted)
+        await history.load()
+        let run = try #require(history.runs.first)
+        #expect(run.id == runID)
+        #expect(run.completedActions == 2)
+        #expect(run.finishedAt != nil)
+        #expect(run.lastError == nil)
+        #expect(run.responseStatus == nil)
+
+        LifecycleURLProtocol.handler = { _ in (404, "{}") }
+        await list.load()
+        await history.load()
+        #expect(list.workflows.isEmpty)
+        #expect(list.accessDenied)
+        #expect(history.runs.isEmpty)
+        #expect(history.accessDenied)
+    }
+
     private func service() -> LiveFolioService {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [LifecycleURLProtocol.self]

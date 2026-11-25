@@ -9,17 +9,19 @@
         {% if deleted %}<a href="{{ "/workflows?deleted=true"|vault_url }}" class="back-link">Deleted workflows</a>{% else %}<a href="{{ "/workflows"|vault_url }}" class="back-link">Workflows</a>{% endif %}
         <div class="page-head-row">
             <h1 class="title">{{ name }} history</h1>
-            {% if deleted %}
+            {% if can_manage %}{% if deleted %}
             <form action="{{ "/workflows"|vault_url }}/{{ id }}/restore" method="post" data-turbo="false">
                 <button type="submit" class="f-btn f-btn-primary">Restore</button>
             </form>
-            {% else %}<a href="{{ "/workflows"|vault_url }}/{{ id }}" class="f-btn">Edit workflow</a>{% endif %}
+            {% else %}<a href="{{ "/workflows"|vault_url }}/{{ id }}" class="f-btn">Edit workflow</a>{% endif %}{% endif %}
         </div>
-        <p class="f-meta lifecycle-meta">{{ lifecycle_summary }}</p>
+        {% if can_manage %}<p class="f-meta lifecycle-meta">{{ lifecycle_summary }}</p>{% else %}
+        <p class="f-meta">{% for label in trigger_labels %}{% if !loop.first %} · {% endif %}{{ label }}{% endfor %} · {% if enabled %}On{% else %}Off{% endif %} · {{ action_count }} {% if action_count == 1 %}action{% else %}actions{% endif %}</p>
+        {% endif %}
         {% if deleted %}<p class="lede">Pending runs were stopped when this workflow was deleted. Restoring preserves history and resumes enabled workflows for future events.</p>{% endif %}
     </header>
     {% if runs.is_empty() %}<div class="f-notice"><p>No runs yet.</p></div>{% else %}
-    <p class="f-meta">The 20 most recent runs are shown. Times are UTC.</p>
+    <p class="f-meta">Showing up to 20 recent{% if !can_manage %} visible{% endif %} runs. Times are UTC.</p>
     <div class="f-list">
         {% for run in runs %}
         <div class="f-row f-row-plain">

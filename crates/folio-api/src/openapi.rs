@@ -134,6 +134,8 @@ use crate::routes::{
         workflows::restore_workflow,
         workflows::test_workflow,
         workflows::list_runs,
+        workflows::list_member_workflows,
+        workflows::list_member_runs,
         sources::list_sources,
         sources::get_source,
         sources::list_source_outcomes,

@@ -24,19 +24,21 @@ public struct WorkflowLifecycleView: View {
     public var body: some View {
         NavigationStack {
             List {
-                if model.canManage {
-                    Picker(
-                        "Show workflows",
-                        selection: Binding(
-                            get: { model.deleted },
-                            set: { deleted in Task { await model.load(deleted: deleted) } }
-                        )
-                    ) {
-                        Text("Active").tag(false)
-                        Text("Trash").tag(true)
+                if model.canRead {
+                    if model.canManage {
+                        Picker(
+                            "Show workflows",
+                            selection: Binding(
+                                get: { model.deleted },
+                                set: { deleted in Task { await model.load(deleted: deleted) } }
+                            )
+                        ) {
+                            Text("Active").tag(false)
+                            Text("Trash").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(model.isMutating)
                     }
-                    .pickerStyle(.segmented)
-                    .disabled(model.isMutating)
                     if let error = model.error {
                         Text(error).foregroundStyle(Color.danger)
                         Button("Try again") { Task { await model.load() } }
@@ -106,6 +108,7 @@ public struct WorkflowLifecycleView: View {
     }
 
     private var emptyDescription: Text? {
+        guard model.canManage else { return nil }
         if model.deleted {
             return Text("Removed configurations and their run history appear here.")
         }
@@ -135,7 +138,7 @@ private struct WorkflowLifecycleDetail: View {
     ) {
         _workflow = State(initialValue: workflow)
         self.lifecycle = lifecycle
-        editingService = service as? any WorkflowTriggerEditingService
+        editingService = lifecycle.canManage ? service as? any WorkflowTriggerEditingService : nil
         _history = State(
             initialValue: WorkflowHistoryViewModel(
                 vaultID: workflow.vaultID, workflowID: workflow.id, service: service, canManage: lifecycle.canManage
@@ -147,8 +150,12 @@ private struct WorkflowLifecycleDetail: View {
         List {
             if lifecycle.accessDenied || history.accessDenied {
                 ContentUnavailableView(
-                    "Owner access required", systemImage: "lock",
-                    description: Text("Only vault owners can manage workflows.")
+                    lifecycle.canManage ? "Owner access required" : "Workflow unavailable", systemImage: "lock",
+                    description: Text(
+                        lifecycle.canManage
+                            ? "Only vault owners can manage workflows."
+                            : "Workflow summaries aren't available for this vault."
+                    )
                 )
                 Button("Try again") {
                     Task {
@@ -186,8 +193,12 @@ private struct WorkflowLifecycleDetail: View {
                     LabeledContent("Updated") {
                         Text(workflow.updatedAt, format: .dateTime.year().month().day().hour().minute())
                     }
-                    LabeledContent("Created by", value: workflow.createdBy ?? "System or unknown")
-                    LabeledContent("Updated by", value: workflow.updatedBy ?? "System or unknown")
+                    if lifecycle.canManage {
+                        LabeledContent("Created by", value: workflow.createdBy ?? "System or unknown")
+                        LabeledContent("Updated by", value: workflow.updatedBy ?? "System or unknown")
+                    } else if let count = workflow.actionCount {
+                        LabeledContent("Actions", value: count.formatted())
+                    }
                     if let deletedAt = workflow.deletedAt {
                         LabeledContent("Moved to Trash") {
                             Text(deletedAt, format: .dateTime.year().month().day().hour().minute())
@@ -228,37 +239,43 @@ private struct WorkflowLifecycleDetail: View {
                             }
                         }
                     }
-                    Text("Shows up to 50 recent runs, including history retained in Trash.")
-                        .font(FolioTheme.Typography.bodySm).foregroundStyle(Color.inkMuted)
+                    Text(
+                        lifecycle.canManage
+                            ? "Shows up to 50 recent runs, including history retained in Trash."
+                            : "Shows up to 50 recent runs visible in this vault."
+                    )
+                    .font(FolioTheme.Typography.bodySm).foregroundStyle(Color.inkMuted)
                 }
-                Section {
-                    if let error = lifecycle.mutationError {
-                        Text(error).foregroundStyle(Color.danger)
-                    }
-                    if lifecycle.isMutating {
-                        ProgressView("Saving workflow…")
-                    }
-                    if workflow.deletedAt != nil {
-                        Button(lifecycle.mutationError == nil ? "Restore workflow" : "Try restoring again") {
-                            Task {
-                                if await lifecycle.restore(workflow) {
-                                    dismiss()
+                if lifecycle.canManage {
+                    Section {
+                        if let error = lifecycle.mutationError {
+                            Text(error).foregroundStyle(Color.danger)
+                        }
+                        if lifecycle.isMutating {
+                            ProgressView("Saving workflow…")
+                        }
+                        if workflow.deletedAt != nil {
+                            Button(lifecycle.mutationError == nil ? "Restore workflow" : "Try restoring again") {
+                                Task {
+                                    if await lifecycle.restore(workflow) {
+                                        dismiss()
+                                    }
                                 }
                             }
-                        }
-                    } else {
-                        Button(
-                            lifecycle.mutationError == nil ? "Move workflow to Trash" : "Try moving to Trash again",
-                            role: .destructive
-                        ) {
-                            confirmingTrash = true
+                        } else {
+                            Button(
+                                lifecycle.mutationError == nil ? "Move workflow to Trash" : "Try moving to Trash again",
+                                role: .destructive
+                            ) {
+                                confirmingTrash = true
+                            }
                         }
                     }
+                    .disabled(lifecycle.isMutating || !lifecycle.canManage)
                 }
-                .disabled(lifecycle.isMutating || !lifecycle.canManage)
             }
         }
-        .navigationTitle(workflow.name)
+        .navigationTitle(lifecycle.accessDenied || history.accessDenied ? "Workflow" : workflow.name)
         .refreshable { await history.load() }
         .task {
             lifecycle.dismissMutationError()

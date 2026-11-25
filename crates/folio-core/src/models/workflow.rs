@@ -923,6 +923,10 @@ pub struct Workflow {
 }
 
 impl Workflow {
+    pub fn selected_triggers(&self) -> &[WorkflowTrigger] {
+        selected_triggers(&self.trigger, &self.triggers)
+    }
+
     pub fn check_revision(&self, expected: Option<i64>) -> Result<()> {
         if expected.is_some_and(|revision| revision != self.revision) {
             return Err(Error::Conflict(
@@ -1004,13 +1008,20 @@ fn default_enabled() -> bool {
     true
 }
 
+fn selected_triggers<'a>(
+    primary: &'a WorkflowTrigger,
+    selection: &'a [WorkflowTrigger],
+) -> &'a [WorkflowTrigger] {
+    if selection.is_empty() {
+        std::slice::from_ref(primary)
+    } else {
+        selection
+    }
+}
+
 impl WorkflowInput {
     pub fn selected_triggers(&self) -> &[WorkflowTrigger] {
-        if self.triggers.is_empty() {
-            std::slice::from_ref(&self.trigger)
-        } else {
-            &self.triggers
-        }
+        selected_triggers(&self.trigger, &self.triggers)
     }
 
     pub fn keep_legacy_trigger_selection(&mut self, existing: &Workflow) {
