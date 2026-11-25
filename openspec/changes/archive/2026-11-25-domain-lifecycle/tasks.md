@@ -16,12 +16,12 @@
 ## 4. Domain event amendment
 - [x] Add failing contract tests for versioned envelopes, actor/vault/subject identity, legacy payloads, rollback/no-op suppression, retry identity, and correlation/causation.
 - [x] Extend the existing outbox and publish lifecycle transitions transactionally on both databases.
-- [ ] Integrate document/non-document trigger contracts with the workflow slice and verify both web and Apple trigger selection.
+- [x] Integrate document/non-document trigger contracts with the workflow slice and verify both web and Apple trigger selection.
 
 ## 5. Verification and delivery
 - [x] Run project-local verify in disposable environments and update covered behavior.
 - [x] Run make format, make lint, and make test.
-- [ ] Archive completed specifications, merge reviewable PRs, and verify their merged status.
+- [x] Archive completed specifications, merge reviewable PRs, and verify their merged status.
 
 
 ## 6. Classification delivery
@@ -49,6 +49,7 @@ The foundation increments are merged:
 | Source/workflow lifecycle, document attribution, and retained source outcomes | [#311](https://github.com/cedricziel/folio/pull/311), [#312](https://github.com/cedricziel/folio/pull/312), [#313](https://github.com/cedricziel/folio/pull/313), [#518](https://github.com/cedricziel/folio/pull/518) |
 | Vault lifecycle, owner history filtering, and native authorization | [#317](https://github.com/cedricziel/folio/pull/317), [#503](https://github.com/cedricziel/folio/pull/503), [#510](https://github.com/cedricziel/folio/pull/510), [#512](https://github.com/cedricziel/folio/pull/512) |
 | Native source, workflow, and vault management | [#513](https://github.com/cedricziel/folio/pull/513), [#515](https://github.com/cedricziel/folio/pull/515), [#516](https://github.com/cedricziel/folio/pull/516) |
+| Workflow trigger catalogs and scoped lifecycle dispatch | [#522](https://github.com/cedricziel/folio/pull/522), [#615](https://github.com/cedricziel/folio/pull/615), [#617](https://github.com/cedricziel/folio/pull/617), [#620](https://github.com/cedricziel/folio/pull/620), [#633](https://github.com/cedricziel/folio/pull/633) |
 
 Required server CI ran the workspace Cargo commands behind the Makefile's format,
 lint, and test targets, with formatting checked rather than rewritten. Isolated
@@ -65,8 +66,10 @@ and large Dynamic Type are not claimed by those captures. The package run expose
 an existing Shortcut fixture storage defect; [#569](https://github.com/cedricziel/folio/pull/569)
 keeps intent fixtures on in-memory progress storage and explicit test scopes.
 
-The workflow integration item remains open. Document note/comment triggers shipped
-in [#522](https://github.com/cedricziel/folio/pull/522), but lifecycle-subject dispatch
-for vaults, memberships, taxonomy, ingestion sources, and workflows, plus Apple
-trigger selection, belongs to the expanded workflow slice. Keep this change
-unarchived until that work and its verification are complete.
+The workflow integration merged in [#633](https://github.com/cedricziel/folio/pull/633).
+SQLite and PostgreSQL tests cover scoped lifecycle dispatch, owner access lost
+before delivery, and workflow outcomes retained after outbox pruning. The
+isolated workflow checks passed 20 Chromium tests, 55 focused Swift tests, and
+three iPhone tests. The iPhone tests cover trigger order, saved labels, and
+editing a workflow outcome condition. The catalog checks preserve the 52
+trigger identifiers available to installed pickers.

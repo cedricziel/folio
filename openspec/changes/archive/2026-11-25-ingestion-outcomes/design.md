@@ -2,7 +2,7 @@
 
 ## Shared dependencies
 
-Use foundation `DomainEventEnvelope` version 1 and the existing transactional outbox. Keep integer delivery cursor and UUID event identity. This slice does not create a bus or change source CRUD events. Foundation contract is `openspec/changes/domain-lifecycle/design.md`. Workflow triggers come from the typed registry merged in #280 (`openspec/changes/archive/2026-11-03-workflow-trigger-catalog`).
+Use foundation `DomainEventEnvelope` version 1 and the existing transactional outbox. Keep integer delivery cursor and UUID event identity. This slice does not create a bus or change source CRUD events. Foundation contract is `openspec/changes/archive/2026-11-25-domain-lifecycle/design.md`. Workflow triggers come from the typed registry merged in #280 (`openspec/changes/archive/2026-11-03-workflow-trigger-catalog`).
 
 ## Events and payloads
 
