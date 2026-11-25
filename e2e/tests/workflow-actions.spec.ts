@@ -58,6 +58,7 @@ test("edits document action details and keeps Trash last", async ({ page }) => {
   );
   await page.goto("/workflows/new");
   await page.getByRole("textbox", { name: "Name", exact: true }).fill(uniqueTitle("File reviewed invoices"));
+  await page.getByRole("checkbox", { name: "Enabled", exact: true }).uncheck();
   const add = page.getByRole("button", { name: "Add action", exact: true });
   const kind = page.getByRole("combobox", { name: "Action to add" });
   for (const action of ["rename_document", "set_document_date", "set_reviewed", "trash_document"]) {
@@ -80,7 +81,9 @@ test("edits document action details and keeps Trash last", async ({ page }) => {
   const id = new URL(page.url()).pathname.split("/").pop();
   const saved = await page.request.get(`/api/workflows/${id}`);
   expect(saved.ok()).toBeTruthy();
-  expect((await saved.json()).actions).toEqual([
+  const workflow = await saved.json();
+  expect(workflow.enabled).toBe(false);
+  expect(workflow.actions).toEqual([
     { type: "set_document_date", date: "2026-11-20" },
     { type: "rename_document", title: "Reviewed invoice" },
     { type: "set_reviewed", reviewed: true },
