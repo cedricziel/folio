@@ -8,8 +8,8 @@ use tracing::instrument;
 use super::{capture_document, insert_domain_event};
 use crate::database::workflow_lifecycle::workflow_event;
 use crate::database::workflow_schedule::{
-    clock_cursor, clock_time, decode_cadence, edited_clock_cursor, encode_cadence,
-    resumed_clock_cursor,
+    claim_schedule_window, clock_cursor, clock_time, decode_cadence, edited_clock_cursor,
+    encode_cadence, resumed_clock_cursor,
 };
 use folio_core::error::{Error, Result};
 use folio_core::events::EventOrigin;
@@ -552,7 +552,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
             let cadence = workflow
                 .cadence
                 .ok_or_else(|| repo_err("A clock cursor needs a cadence"))?;
-            let window = cadence.claim_window(cursor, now)?;
+            let window = claim_schedule_window(cadence, cursor, now, last_document.is_some())?;
             if matches!(cadence, WorkflowCadence::DocumentDateOffset { .. }) {
                 let Some(&at) = window.due.first() else {
                     continue;

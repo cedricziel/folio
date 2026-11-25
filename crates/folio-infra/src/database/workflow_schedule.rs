@@ -1,6 +1,6 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use folio_core::{
-    models::{Workflow, WorkflowCadence, WorkflowInput},
+    models::{DueWorkflowOccurrences, Workflow, WorkflowCadence, WorkflowInput},
     Error, Result,
 };
 
@@ -13,6 +13,20 @@ pub(crate) fn clock_cursor(value: Option<&str>) -> Result<Option<DateTime<Utc>>>
         .map(str::parse)
         .transpose()
         .map_err(|error| Error::Repository(format!("Invalid workflow clock cursor: {error}")))
+}
+
+pub(crate) fn claim_schedule_window(
+    cadence: WorkflowCadence,
+    cursor: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+    has_document_page: bool,
+) -> Result<DueWorkflowOccurrences> {
+    // Finish a persisted page before applying the catch-up limit to later occurrences.
+    let through = match (cadence, cursor, has_document_page) {
+        (WorkflowCadence::DocumentDateOffset { .. }, Some(at), true) => now.min(at),
+        _ => now,
+    };
+    cadence.claim_window(cursor, through)
 }
 
 pub(crate) fn encode_cadence(cadence: Option<WorkflowCadence>) -> Result<Option<String>> {

@@ -488,27 +488,29 @@ async fn document_date_contract(db: &Database, url: &str) {
             0
         );
     }
-    let restarted = Database::connect(url).await.unwrap().repositories().await;
-    let (left, right) = tokio::join!(
-        repos
-            .workflows
-            .enqueue_due_schedules(at, 4, "https://folio.test"),
-        restarted
-            .workflows
-            .enqueue_due_schedules(at, 4, "https://folio.test"),
-    );
-    let initially_queued = left.unwrap() + right.unwrap();
-    assert!((63..=65).contains(&initially_queued));
-    let remaining = restarted
+    let initially_queued = repos
         .workflows
         .enqueue_due_schedules(at, 4, "https://folio.test")
         .await
         .unwrap();
-    assert_eq!(initially_queued + remaining, 65);
+    assert!((63..=64).contains(&initially_queued));
+
+    let downtime = Duration::days(20);
+    let after_downtime = at + downtime;
+    let restarted = Database::connect(url).await.unwrap().repositories().await;
+    let (left, right) = tokio::join!(
+        repos
+            .workflows
+            .enqueue_due_schedules(after_downtime, 4, "https://folio.test"),
+        restarted
+            .workflows
+            .enqueue_due_schedules(after_downtime, 4, "https://folio.test"),
+    );
+    assert_eq!(initially_queued + left.unwrap() + right.unwrap(), 65);
     assert_eq!(
         restarted
             .workflows
-            .enqueue_due_schedules(at, 4, "https://folio.test")
+            .enqueue_due_schedules(after_downtime, 4, "https://folio.test")
             .await
             .unwrap(),
         0
@@ -542,21 +544,22 @@ async fn document_date_contract(db: &Database, url: &str) {
     ids.sort_unstable();
     assert_eq!(received, ids);
 
-    let next_at = at + Duration::days(1);
+    let next_at = after_downtime + Duration::days(1);
     let next_date = cadence.document_date_at(next_at).unwrap();
     repos
         .documents
         .update(vault, ids[0], set_date(next_date))
         .await
         .unwrap();
-    assert_eq!(
-        restarted
+    let mut queued = 0;
+    for _ in 0..=downtime.num_days() {
+        queued += restarted
             .workflows
             .enqueue_due_schedules(next_at, 4, "https://folio.test")
             .await
-            .unwrap(),
-        1
-    );
+            .unwrap();
+    }
+    assert_eq!(queued, 1);
     let runs = repos
         .workflows
         .list_runs(vault, workflow.id, 100)

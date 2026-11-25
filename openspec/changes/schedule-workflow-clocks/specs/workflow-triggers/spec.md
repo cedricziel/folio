@@ -45,8 +45,8 @@ Vault owners SHALL be able to configure a signed offset in whole calendar days a
 
 #### Scenario: Restart while claiming a date
 
-- **WHEN** Folio restarts after queueing the first page of matching documents
-- **THEN** it resumes from the saved cursor and queues each matching document once
+- **WHEN** Folio restarts with a saved document page cursor, even after the catch-up window has moved past that date
+- **THEN** it finishes the saved occurrence and queues each remaining match once before applying the catch-up limit to later dates
 
 #### Scenario: Offset schedule has an occurrence filter
 
