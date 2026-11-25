@@ -26,6 +26,9 @@ struct WorkflowLifecycleFixture: View {
             || arguments.contains("--workflow-schedule") || arguments.contains("--workflow-document-actions")
             || arguments.contains("--workflow-create-multiple")
             || arguments.contains("--workflow-custom-field-actions")
+            || arguments.contains("--workflow-foundation-trigger")
+            || arguments.contains("--workflow-resource-labels")
+            || arguments.contains("--workflow-outcome-condition")
             || arguments.contains("--workflow-ingestion-conditions")
             || arguments.contains("--workflow-metadata-conditions")
             || arguments.contains("--workflow-processing-conditions")
@@ -160,7 +163,14 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
         "--workflow-ingestion-conditions")
     private static let processingConditionEditing = ProcessInfo.processInfo.arguments.contains(
         "--workflow-processing-conditions")
+    private static let outcomeConditionEditing = ProcessInfo.processInfo.arguments.contains(
+        "--workflow-outcome-condition")
+    private static let foundationTriggerEditing = ProcessInfo.processInfo.arguments.contains(
+        "--workflow-foundation-trigger")
+    private static let foundationTrigger = "vault_membership.role_changed"
     private static let watchedSource = "923553bf-9c39-4990-90ae-41250d12d03e"
+
+    private static let sourceWorkflow = "d328c55a-1bf3-4590-b878-ad432191caba"
 
     private static func initialWorkflow() -> SavedWorkflow {
         var workflow = SavedWorkflow()
@@ -173,6 +183,17 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
             workflow.cadence = Data(
                 #"{"type":"recurring","first_at":"2032-02-29T09:30:00.123456789Z","interval_seconds":3600}"#.utf8)
             workflow.conditions = Data("{}".utf8)
+        }
+        if outcomeConditionEditing {
+            workflow.trigger = "workflow_run.failed"
+            workflow.conditions = Data(#"{"event":{"actor":{"type":"system"}}}"#.utf8)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--workflow-resource-labels") {
+            workflow.trigger = "saved_view.updated"
+            workflow.triggers = ["saved_view.updated", "vault_membership.role_changed"]
+        }
+        if foundationTriggerEditing {
+            workflow.triggers = [workflow.trigger, "saved_view.updated"]
         }
         if ingestionConditionEditing {
             workflow.trigger = "ingest.failed"
@@ -273,6 +294,12 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
             }
             return (201, workflow)
         case ("GET", "/api/workflows/triggers"):
+            if foundationTriggerEditing {
+                let query = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
+                guard query?.queryItems?.contains(.init(name: "include_extended", value: "true")) == true else {
+                    return (200, "[]")
+                }
+            }
             if metadataEditing {
                 return (
                     200,
@@ -299,6 +326,13 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 "subject_type":"document","target":"document","condition_fields":[
                   {"key":"data.attempt","label":"Attempt","value_type":"integer"},
                   {"key":"data.has_text","label":"Text found","value_type":"boolean"}]},
+                {"event_type":"vault_membership.role_changed","label":"When a vault member’s role changes",
+                "subject_type":"vault_membership","target":"event","condition_fields":[]},
+                {"event_type":"saved_view.updated","label":"When a shared saved view is updated",
+                "subject_type":"saved_view","target":"event","condition_fields":[]},
+                {"event_type":"workflow_run.failed","label":"When a workflow run fails","subject_type":"workflow_run",
+                "target":"event","condition_fields":[{"key":"event.workflow_id","label":"Source workflow ID","value_type":"identifier"},
+                {"key":"event.actor.type","label":"Actor type","value_type":"text"}]},
                 {"event_type":"ingest.imported","label":"Item imported","subject_type":"ingest","target":"event",
                 "condition_fields":[{"key":"data.source_id","label":"Source ID","value_type":"identifier"},
                 {"key":"data.source_kind","label":"Source kind","value_type":"text"},
@@ -389,6 +423,15 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                     schedule == ["type": "once", "at": "2032-02-29T09:30:00.123456789Z"]
                 else { return (400, #"{"error":"Unexpected cadence"}"#) }
             }
+            if outcomeConditionEditing {
+                guard trigger == "workflow_run.failed", let event = filters["event"] as? [String: Any],
+                    event["workflow_id"] as? String == sourceWorkflow,
+                    (event["actor"] as? [String: String]) == ["type": "system"],
+                    actions.map({ $0["url"] as? String }) == ["https://first.test/hook", "https://second.test/hook"],
+                    (actions.first?["headers"] as? [String: String])?["Authorization"] == "********",
+                    actions.last?["secret"] as? String == "********"
+                else { return (400, #"{"error":"Unexpected outcome condition"}"#) }
+            }
             let triggers = input["triggers"] as? [String]
             if metadataEditing {
                 let group = filters["all"] as? [[String: Any]]
@@ -400,6 +443,14 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                     event?["actor"] as? [String: String] == ["type": "system"],
                     event?["document_change"] as? [String: String] == expectedChange
                 else { return (400, #"{"error":"Unexpected metadata condition"}"#) }
+            }
+            if foundationTriggerEditing {
+                guard trigger == foundationTrigger, triggers == [foundationTrigger, "saved_view.updated"],
+                    name == "Invoice notifications", enabled, (filters["any"] as? [Any])?.isEmpty == true,
+                    actions.map({ $0["url"] as? String }) == ["https://first.test/hook", "https://second.test/hook"],
+                    (actions.first?["headers"] as? [String: String])?["Authorization"] == "********",
+                    actions.last?["secret"] as? String == "********"
+                else { return (400, #"{"error":"Foundation trigger save changed the workflow definition"}"#) }
             }
             if creatingMultiple {
                 guard trigger == createdSelection[0], triggers == createdSelection

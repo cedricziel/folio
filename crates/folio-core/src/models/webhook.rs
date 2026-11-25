@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Correspondent, Document, DocumentSource, DocumentType, Id, Tag, UserId, VaultId,
-    ViewPresentation, ViewVisibility, WorkflowTrigger,
+    Correspondent, Document, DocumentSource, DocumentType, Id, SourceKind, Tag, UserId, VaultId,
+    VaultRole, ViewPresentation, ViewVisibility, WorkflowTrigger,
 };
 
 /// Current payload version
@@ -148,6 +148,97 @@ pub struct WebhookProcessing {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookMembership {
+    pub principal_type: String,
+    pub principal_id: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub before_role: Option<VaultRole>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub role: Option<VaultRole>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookVaultActivity {
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    pub subject_id: uuid::Uuid,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub actor_id: Option<UserId>,
+    pub causation_id: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WebhookMembership, required = false))]
+    pub membership: Option<WebhookMembership>,
+}
+
+impl WebhookVaultActivity {
+    pub(crate) fn from_occurrence(
+        trigger: WorkflowTrigger,
+        event: &crate::DomainEventEnvelope,
+    ) -> Option<Self> {
+        let (name, membership) = match event.subject().subject_type.as_str() {
+            "vault" if event.data()["deleted_at"].is_null() => {
+                (Some(event.data()["name"].as_str()?.to_owned()), None)
+            }
+            "vault_membership" => (
+                None,
+                Some(WebhookMembership::deserialize(event.data()).ok()?),
+            ),
+            _ => return None,
+        };
+        let activity = Self {
+            vault_id: event.vault_id(),
+            subject_id: event.subject().id,
+            actor_id: event.actor_id().cloned(),
+            causation_id: event.causation_id(),
+            name,
+            membership,
+        };
+        (event.audience() == &crate::EventAudience::Owners
+            && event.event_type() == trigger.as_str()
+            && event.document_id().is_none()
+            && activity.matches_trigger(trigger))
+        .then_some(activity)
+    }
+
+    pub fn matches_trigger(&self, trigger: WorkflowTrigger) -> bool {
+        if matches!(
+            trigger,
+            WorkflowTrigger::VaultUpdated | WorkflowTrigger::VaultRestored
+        ) {
+            return self.subject_id == self.vault_id.0
+                && self
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| !name.trim().is_empty())
+                && self.membership.is_none();
+        }
+        let Some(member) = &self.membership else {
+            return false;
+        };
+        let expected_subject = Id::new_v5(
+            &self.vault_id.0,
+            format!("{}:{}", member.principal_type, member.principal_id).as_bytes(),
+        );
+        self.name.is_none()
+            && matches!(member.principal_type.as_str(), "user" | "group")
+            && !member.principal_id.trim().is_empty()
+            && self.subject_id == expected_subject
+            && match (trigger, member.before_role, member.role) {
+                (WorkflowTrigger::MembershipGranted, None, Some(_))
+                | (WorkflowTrigger::MembershipRevoked, Some(_), None) => true,
+                (WorkflowTrigger::MembershipRoleChanged, Some(before), Some(after)) => {
+                    before != after
+                }
+                _ => false,
+            }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WebhookSavedView {
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub vault_id: VaultId,
@@ -158,6 +249,172 @@ pub struct WebhookSavedView {
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub actor_id: Option<UserId>,
     pub causation_id: Option<uuid::Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookClassification {
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    pub subject_id: uuid::Uuid,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub actor_id: Option<UserId>,
+    pub causation_id: Option<uuid::Uuid>,
+}
+
+impl WebhookClassification {
+    pub(crate) fn from_occurrence(
+        trigger: WorkflowTrigger,
+        event: &crate::DomainEventEnvelope,
+    ) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct ClassificationData {
+            id: Id,
+            vault_id: VaultId,
+            name: String,
+            color: Option<String>,
+            deleted_at: Option<DateTime<Utc>>,
+        }
+
+        let subject = trigger.classification_subject()?;
+        if event.event_type() != trigger.as_str()
+            || event.subject().subject_type != subject
+            || event.audience() != &crate::EventAudience::Vault
+            || event.document_id().is_some()
+        {
+            return None;
+        }
+        let data = ClassificationData::deserialize(event.data()).ok()?;
+        if data.id != event.subject().id
+            || data.vault_id != event.vault_id()
+            || data.deleted_at.is_some() != trigger.as_str().ends_with(".deleted")
+        {
+            return None;
+        }
+        Some(Self {
+            vault_id: data.vault_id,
+            subject_id: data.id,
+            name: data.name,
+            color: data.color.filter(|_| subject == "tag"),
+            actor_id: event.actor_id().cloned(),
+            causation_id: event.causation_id(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookSource {
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    pub source_id: uuid::Uuid,
+    pub name: String,
+    pub kind: SourceKind,
+    pub enabled: bool,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub actor_id: Option<UserId>,
+    pub causation_id: Option<uuid::Uuid>,
+}
+
+impl WebhookSource {
+    pub(crate) fn from_occurrence(
+        trigger: WorkflowTrigger,
+        event: &crate::DomainEventEnvelope,
+    ) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct SourceData {
+            name: String,
+            kind: SourceKind,
+            enabled: bool,
+        }
+
+        if !trigger.is_source_lifecycle()
+            || event.event_type() != trigger.as_str()
+            || event.subject().subject_type != "source"
+            || event.audience() != &crate::EventAudience::Owners
+            || event.document_id().is_some()
+        {
+            return None;
+        }
+        let data = SourceData::deserialize(event.data()).ok()?;
+        Some(Self {
+            vault_id: event.vault_id(),
+            source_id: event.subject().id,
+            name: data.name,
+            kind: data.kind,
+            enabled: data.enabled,
+            actor_id: event.actor_id().cloned(),
+            causation_id: event.causation_id(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookWorkflow {
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub id: Id,
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    pub name: String,
+    pub enabled: bool,
+    pub trigger: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub actor_id: Option<super::UserId>,
+    pub causation_id: Option<uuid::Uuid>,
+}
+
+impl WebhookWorkflow {
+    pub(crate) fn from_envelope(event: &crate::DomainEventEnvelope) -> Option<Self> {
+        if event.subject().subject_type != "workflow" || event.document_id().is_some() {
+            return None;
+        }
+        let data = event.data();
+        Some(Self {
+            id: event.subject().id,
+            vault_id: event.vault_id(),
+            name: data.get("name")?.as_str()?.to_owned(),
+            enabled: data.get("enabled")?.as_bool()?,
+            trigger: data.get("trigger")?.as_str()?.to_owned(),
+            actor_id: event.actor_id().cloned(),
+            causation_id: event.causation_id(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookWorkflowRun {
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub id: Id,
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub workflow_id: Id,
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    pub causation_id: Option<uuid::Uuid>,
+}
+
+impl WebhookWorkflowRun {
+    pub(crate) fn from_envelope(event: &crate::DomainEventEnvelope) -> Option<Self> {
+        let id = event.subject().id;
+        if event.subject().subject_type != "workflow_run"
+            || event.mutation_id() != id
+            || event.document_id().is_some()
+            || event.actor_id().is_some()
+        {
+            return None;
+        }
+        let workflow_id = Id::parse_str(event.data().get("workflow_id")?.as_str()?).ok()?;
+        Some(Self {
+            id,
+            workflow_id,
+            vault_id: event.vault_id(),
+            causation_id: event.causation_id(),
+        })
+    }
 }
 
 /// Body of every webhook delivery
@@ -182,29 +439,60 @@ pub struct WebhookPayload {
     #[cfg_attr(feature = "openapi", schema(value_type = WebhookProcessing, required = false))]
     pub processing: Option<WebhookProcessing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WebhookVaultActivity, required = false))]
+    pub vault_activity: Option<WebhookVaultActivity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WebhookSource, required = false))]
+    pub source: Option<WebhookSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WebhookClassification, required = false))]
+    pub classification: Option<WebhookClassification>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(value_type = WebhookSavedView, required = false))]
     pub saved_view: Option<WebhookSavedView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WebhookWorkflow, required = false))]
+    pub workflow: Option<WebhookWorkflow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WebhookWorkflowRun, required = false))]
+    pub workflow_run: Option<WebhookWorkflowRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_event: Option<WorkflowEventIdentity>,
 }
 
 impl WebhookPayload {
+    fn for_event(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            event,
+            version: PAYLOAD_VERSION,
+            occurred_at,
+            document: None,
+            entry: None,
+            ingest: None,
+            metadata: None,
+            processing: None,
+            vault_activity: None,
+            source: None,
+            classification: None,
+            saved_view: None,
+            workflow: None,
+            workflow_run: None,
+            source_event,
+        }
+    }
+
     pub fn new(
         event: WorkflowTrigger,
         occurred_at: DateTime<Utc>,
         document: WebhookDocument,
     ) -> Self {
         Self {
-            event,
-            version: PAYLOAD_VERSION,
-            occurred_at,
             document: Some(document),
-            entry: None,
-            ingest: None,
-            metadata: None,
-            processing: None,
-            saved_view: None,
-            source_event: None,
+            ..Self::for_event(event, occurred_at, None)
         }
     }
 
@@ -215,16 +503,8 @@ impl WebhookPayload {
         source_event: Option<WorkflowEventIdentity>,
     ) -> Self {
         Self {
-            event,
-            version: PAYLOAD_VERSION,
-            occurred_at,
-            document: None,
             entry: Some(entry),
-            ingest: None,
-            metadata: None,
-            processing: None,
-            saved_view: None,
-            source_event,
+            ..Self::for_event(event, occurred_at, source_event)
         }
     }
 
@@ -235,16 +515,8 @@ impl WebhookPayload {
         source_event: Option<WorkflowEventIdentity>,
     ) -> Self {
         Self {
-            event,
-            version: PAYLOAD_VERSION,
-            occurred_at,
-            document: None,
-            entry: None,
             ingest: Some(ingest),
-            metadata: None,
-            processing: None,
-            saved_view: None,
-            source_event,
+            ..Self::for_event(event, occurred_at, source_event)
         }
     }
 
@@ -255,16 +527,20 @@ impl WebhookPayload {
         source_event: Option<WorkflowEventIdentity>,
     ) -> Self {
         Self {
-            event,
-            version: PAYLOAD_VERSION,
-            occurred_at,
-            document: None,
-            entry: None,
-            ingest: None,
             metadata: Some(metadata),
-            processing: None,
-            saved_view: None,
-            source_event,
+            ..Self::for_event(event, occurred_at, source_event)
+        }
+    }
+
+    pub fn for_vault_activity(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        vault_activity: WebhookVaultActivity,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            vault_activity: Some(vault_activity),
+            ..Self::for_event(event, occurred_at, source_event)
         }
     }
 
@@ -275,38 +551,97 @@ impl WebhookPayload {
         source_event: Option<WorkflowEventIdentity>,
     ) -> Self {
         Self {
-            event,
-            version: PAYLOAD_VERSION,
-            occurred_at,
-            document: None,
-            entry: None,
-            ingest: None,
-            metadata: None,
-            processing: None,
             saved_view: Some(saved_view),
-            source_event,
+            ..Self::for_event(event, occurred_at, source_event)
+        }
+    }
+
+    pub fn for_classification(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        classification: WebhookClassification,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            classification: Some(classification),
+            ..Self::for_event(event, occurred_at, source_event)
+        }
+    }
+
+    pub fn for_source(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        source: WebhookSource,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            source: Some(source),
+            ..Self::for_event(event, occurred_at, source_event)
+        }
+    }
+
+    pub(crate) fn for_workflow_run(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        outcome: WebhookWorkflowRun,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            workflow_run: Some(outcome),
+            ..Self::for_event(event, occurred_at, source_event)
+        }
+    }
+
+    pub(crate) fn for_workflow_definition(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        workflow: WebhookWorkflow,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            workflow: Some(workflow),
+            ..Self::for_event(event, occurred_at, source_event)
         }
     }
 
     pub fn for_clock(occurred_at: DateTime<Utc>) -> Self {
-        Self {
-            event: WorkflowTrigger::Scheduled,
-            version: PAYLOAD_VERSION,
-            occurred_at,
-            document: None,
-            entry: None,
-            ingest: None,
-            metadata: None,
-            processing: None,
-            saved_view: None,
-            source_event: None,
-        }
+        Self::for_event(WorkflowTrigger::Scheduled, occurred_at, None)
     }
 
     /// A payload with made-up content, for the "send test" action
     pub fn sample(event: WorkflowTrigger, base_url: &str) -> Self {
         if event == WorkflowTrigger::Scheduled {
             return Self::for_clock(Utc::now());
+        }
+        if event.is_vault_activity() {
+            let vault_id = VaultId(Id::nil());
+            let membership = match event {
+                WorkflowTrigger::MembershipGranted => Some((None, Some(VaultRole::Viewer))),
+                WorkflowTrigger::MembershipRoleChanged => {
+                    Some((Some(VaultRole::Viewer), Some(VaultRole::Editor)))
+                }
+                WorkflowTrigger::MembershipRevoked => Some((Some(VaultRole::Editor), None)),
+                _ => None,
+            };
+            return Self::for_vault_activity(
+                event,
+                Utc::now(),
+                WebhookVaultActivity {
+                    vault_id,
+                    subject_id: membership
+                        .map_or(vault_id.0, |_| Id::new_v5(&vault_id.0, b"user:sample-user")),
+                    actor_id: None,
+                    causation_id: None,
+                    name: membership.is_none().then(|| "Sample vault".into()),
+                    membership: membership.map(|(before_role, role)| WebhookMembership {
+                        principal_type: "user".into(),
+                        principal_id: "sample-user".into(),
+                        before_role,
+                        role,
+                    }),
+                },
+                None,
+            );
         }
         if event.is_saved_view() {
             return Self::for_saved_view(
@@ -319,6 +654,71 @@ impl WebhookPayload {
                     visibility: ViewVisibility::Shared,
                     presentation: ViewPresentation::List,
                     actor_id: None,
+                    causation_id: None,
+                },
+                None,
+            );
+        }
+        if let Some(subject) = event.classification_subject() {
+            return Self::for_classification(
+                event,
+                Utc::now(),
+                WebhookClassification {
+                    vault_id: VaultId(Id::nil()),
+                    subject_id: Id::nil(),
+                    name: match subject {
+                        "tag" => "Finance",
+                        "correspondent" => "Stadtwerke Köln",
+                        _ => "Invoice",
+                    }
+                    .into(),
+                    color: (subject == "tag").then(|| "#435e69".into()),
+                    actor_id: None,
+                    causation_id: None,
+                },
+                None,
+            );
+        }
+        if event.is_source_lifecycle() {
+            return Self::for_source(
+                event,
+                Utc::now(),
+                WebhookSource {
+                    vault_id: VaultId(Id::nil()),
+                    source_id: Id::nil(),
+                    name: "Sample managed source".into(),
+                    kind: SourceKind::Folder,
+                    enabled: false,
+                    actor_id: None,
+                    causation_id: None,
+                },
+                None,
+            );
+        }
+        if event.is_workflow_definition() {
+            return Self::for_workflow_definition(
+                event,
+                Utc::now(),
+                WebhookWorkflow {
+                    id: Id::nil(),
+                    vault_id: VaultId(Id::nil()),
+                    name: "File invoices".into(),
+                    enabled: event != WorkflowTrigger::WorkflowDisabled,
+                    trigger: WorkflowTrigger::DocumentUploaded.as_str().into(),
+                    actor_id: None,
+                    causation_id: None,
+                },
+                None,
+            );
+        }
+        if event.terminal_run_status().is_some() {
+            return Self::for_workflow_run(
+                event,
+                Utc::now(),
+                WebhookWorkflowRun {
+                    id: Id::nil(),
+                    workflow_id: Id::nil(),
+                    vault_id: VaultId(Id::nil()),
                     causation_id: None,
                 },
                 None,

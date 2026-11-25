@@ -282,6 +282,63 @@ import XCTest
         capture(app, name: "Saved one-time UTC schedule")
     }
 
+    func testFoundationTriggerSavesAndReopensWithSecondarySelection() {
+        let app = launch(arguments: ["--workflow-foundation-trigger"])
+        openWorkflow(app)
+        let edit = app.buttons["Edit trigger"]
+        guard scroll(app, until: edit) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+        let primary = app.buttons["workflow-primary-trigger"]
+        guard primary.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        primary.tap()
+        let label = "When a vault member’s role changes"
+        let foundationChoice = app.buttons[label]
+        guard foundationChoice.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        foundationChoice.tap()
+        let save = app.navigationBars["Edit trigger"].buttons["Save"]
+        guard save.isEnabled else { return XCTFail(app.debugDescription) }
+        save.tap()
+        guard save.waitForNonExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+
+        let orderedLabel = "\(label) · When a shared saved view is updated"
+        XCTAssertTrue(app.staticTexts[orderedLabel].waitForExistence(timeout: 5), app.debugDescription)
+        edit.tap()
+        guard primary.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        XCTAssertTrue(primary.staticTexts[label].exists, app.debugDescription)
+        let secondary = app.buttons["workflow-additional-trigger-1"]
+        XCTAssertTrue(secondary.staticTexts["When a shared saved view is updated"].exists, app.debugDescription)
+        XCTAssertFalse(save.isEnabled, app.debugDescription)
+    }
+
+    func testSavedResourceTriggersDisplayTheirCatalogLabelsInSavedOrder() {
+        let app = launch(arguments: ["--workflow-resource-labels"])
+        openWorkflow(app)
+        let title = "When a shared saved view is updated · When a vault member’s role changes"
+        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    func testWorkflowOutcomeSourceConditionSavesAndReopens() {
+        let app = launch(arguments: ["--workflow-outcome-condition"])
+        openWorkflow(app)
+        let edit = app.buttons["Edit conditions"]
+        guard scroll(app, until: edit) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+
+        let source = app.textFields["Source workflow ID"]
+        guard scroll(app, until: source) else { return XCTFail(app.debugDescription) }
+        XCTAssertFalse(app.textFields["Filename pattern"].exists, app.debugDescription)
+        let sourceID = "d328c55a-1bf3-4590-b878-ad432191caba"
+        source.tap()
+        source.typeText(sourceID)
+        let save = app.navigationBars["Edit conditions"].buttons["Save"]
+        guard save.isEnabled else { return XCTFail(app.debugDescription) }
+        save.tap()
+        guard save.waitForNonExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+        guard scroll(app, until: source) else { return XCTFail(app.debugDescription) }
+        XCTAssertEqual(source.value as? String, sourceID, app.debugDescription)
+    }
+
     func testIngestionConditionsSaveFalseAndReopenTheNestedBranch() {
         let app = launch(arguments: ["--workflow-ingestion-conditions"])
         openWorkflow(app)

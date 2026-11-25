@@ -17,9 +17,10 @@ use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::ports::{HealthCheck, RepositoryDocuments, SettingsRepository, WorkflowRepository};
 use folio_core::services::notifications::{NotificationPlanner, NotificationSender, SenderConfig};
 use folio_core::services::{
-    backfill_file_sizes, backfill_original_identities, BroadcastConsumer, DispatcherConfig,
-    Importer, IngestPipeline, IngestScheduler, IngestWorkflowAccess, LibraryService,
-    OutboxDispatcher, VaultService, WorkflowEngine,
+    backfill_file_sizes, backfill_original_identities, BroadcastConsumer,
+    ClassificationWorkflowAccess, DispatcherConfig, Importer, IngestPipeline, IngestScheduler,
+    IngestWorkflowAccess, LibraryService, OutboxDispatcher, VaultService, VaultWorkflowAccess,
+    WorkflowEngine,
 };
 use folio_core::EventBroadcaster;
 use folio_infra::archival::{ArchiveConverter, ToolPaths};
@@ -183,9 +184,17 @@ async fn main() -> Result<()> {
         &configured_sources,
         config.auth.required,
     ));
+    let classification_workflow_access = Arc::new(ClassificationWorkflowAccess::new(
+        tag_repo.clone(),
+        correspondent_repo.clone(),
+        document_type_repo.clone(),
+    ));
+    let vault_workflow_access = Arc::new(VaultWorkflowAccess::new(
+        repos.vaults.clone(),
+        repos.members.clone(),
+    ));
     let webhook_client = WebhookClient::new();
     let public_url = config.server.base_url();
-    // Workflow edits are announced to live clients but never re-trigger workflows.
     let workflow_runner = Arc::new(
         WorkflowRunner::new(
             workflow_repo.clone(),
@@ -193,6 +202,8 @@ async fn main() -> Result<()> {
             webhook_client.clone(),
         )
         .with_ingest_access(ingest_workflow_access.clone())
+        .with_vault_access(vault_workflow_access.clone())
+        .with_classification_access(classification_workflow_access.clone())
         .with_saved_views(repos.saved_views.clone()),
     );
     let workflow_engine = Arc::new(
@@ -205,6 +216,8 @@ async fn main() -> Result<()> {
             public_url.clone(),
         )
         .with_ingest_access(ingest_workflow_access)
+        .with_vault_access(vault_workflow_access)
+        .with_classification_access(classification_workflow_access)
         .with_saved_views(repos.saved_views.clone()),
     );
 

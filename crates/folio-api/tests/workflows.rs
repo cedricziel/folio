@@ -2051,6 +2051,36 @@ async fn saved_view_triggers_use_event_filters_and_delivery_actions() {
 }
 
 #[tokio::test]
+async fn classification_workflows_reject_document_filters_and_mutations() {
+    let app = test_app().await;
+    for (conditions, actions, reason) in [
+        (
+            json!({"none": [{"mime_type": "application/pdf"}]}),
+            json!([{"type": "webhook", "url": "https://example.com/hook"}]),
+            "Classification workflows do not have document filters",
+        ),
+        (
+            json!({}),
+            json!([{"type": "add_tags", "tag_ids": [Uuid::new_v4()]}]),
+            "Classification workflows take only webhook actions",
+        ),
+    ] {
+        let (status, error) = json_request(
+            &app,
+            "POST",
+            "/api/workflows",
+            Some(json!({
+                "name": "Unsupported classification workflow", "trigger": "tag.created",
+                "conditions": conditions, "actions": actions,
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(error.to_string().contains(reason), "{error}");
+    }
+}
+
+#[tokio::test]
 async fn web_editor_configures_typed_ingestion_outcome_filters() {
     let app = test_app().await;
     let source = Uuid::new_v4();
@@ -2415,4 +2445,93 @@ async fn web_editor_round_trips_a_tag_replacement_condition() {
     assert!(html.contains(&format!(
         "value=\"{removed_id}\" selected>Unavailable choice ({removed_id})"
     )));
+}
+
+#[tokio::test]
+async fn web_editor_preserves_root_and_nested_workflow_run_filters() {
+    let app = test_app().await;
+    let source = Uuid::new_v4();
+    let other_source = Uuid::new_v4();
+    let url = "https://example.com/hook";
+    let mut body = workflow_body(url);
+    body["trigger"] = json!("workflow_run.succeeded");
+    body["conditions"] = json!({});
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = created["id"].as_str().unwrap();
+    let uri = format!("/workflows/{id}");
+    let none = json!([{"event": {"workflow_id": other_source}}]);
+    let form = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("name", "Workflow finished")
+        .append_pair("trigger", "workflow_run.succeeded")
+        .append_pair("enabled", "on")
+        .append_pair("webhook_url", url)
+        .append_pair("event_actor", "")
+        .append_pair("event_workflow_id", &source.to_string())
+        .append_pair("mime_type", "image/png")
+        .append_pair("condition_groups", &json!({"none": none}).to_string())
+        .finish();
+    let (status, _) = post_form(&app, &uri, form).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, stored) = json_request(&app, "GET", &format!("/api{uri}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["trigger"], json!("workflow_run.succeeded"));
+    assert_eq!(
+        stored["conditions"],
+        json!({"event": {"workflow_id": source}, "none": none}),
+    );
+    let (status, html) = send(&app, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains(&format!(r#"name="event_workflow_id" value="{source}""#)));
+}
+
+#[tokio::test]
+async fn workflow_run_triggers_reject_document_conditions_and_actions() {
+    let app = test_app().await;
+    let mut body = workflow_body("https://example.com/hook");
+    body["trigger"] = json!("workflow_run.failed");
+    body["conditions"] = json!({"all": [{"mime_type": "application/pdf"}]});
+    let (status, _) = json_request(&app, "POST", "/api/workflows", Some(body.clone())).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    body["conditions"] = json!({});
+    body["actions"] = json!([{"type": "add_tags", "tag_ids": [Uuid::new_v4()]}]);
+    let (status, _) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn workflow_definition_editor_preserves_the_subject_and_actor() {
+    let app = test_app().await;
+    let subject = Uuid::new_v4();
+    let form = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("name", "Notify on workflow restore")
+        .append_pair("trigger", "workflow.restored")
+        .append_pair("enabled", "on")
+        .append_pair("webhook_url", "https://example.test/notify")
+        .append_pair("event_actor", "user")
+        .append_pair("event_user_id", "vault-owner")
+        .append_pair("event_subject_id", &subject.to_string())
+        .append_pair("mime_type", "application/pdf")
+        .finish();
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/workflows")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let path = response.headers()["location"].to_str().unwrap();
+    let (status, stored) = json_request(&app, "GET", &format!("/api{path}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["trigger"], "workflow.restored");
+    assert_eq!(
+        stored["conditions"],
+        json!({"event": {"subject_id": subject, "actor": {"type": "user", "user_id": "vault-owner"}}}),
+    );
 }

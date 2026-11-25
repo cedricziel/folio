@@ -1,14 +1,25 @@
 //! Workflow engine and webhook delivery against real SQLite and a local HTTP server.
 
 mod common;
+#[path = "workflows/run_dispatch.rs"]
+mod run_dispatch;
 
 #[path = "workflows/document_delta.rs"]
 mod document_delta;
 #[path = "workflows/document_lifecycle.rs"]
 mod document_lifecycle;
 
+#[path = "workflows/vault_activity.rs"]
+mod vault_activity;
+
 #[path = "workflows/saved_view_events.rs"]
 mod saved_view_events;
+
+#[path = "workflows/classification_events.rs"]
+mod classification_events;
+
+#[path = "workflows/source_lifecycle_events.rs"]
+mod source_lifecycle_events;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -33,7 +44,8 @@ use folio_core::ports::{
     TagRepository, VaultRepository, WorkflowRepository,
 };
 use folio_core::services::{
-    BroadcastConsumer, DispatcherConfig, EventConsumer, OutboxDispatcher, WorkflowEngine,
+    BroadcastConsumer, DispatcherConfig, EventConsumer, IngestWorkflowAccess, OutboxDispatcher,
+    WorkflowEngine,
 };
 use folio_core::{DocumentEvent, EventBroadcaster, EventOrigin, OutboxEvent};
 use folio_infra::workflow::{sign, RunOutcome, WebhookRequest, MAX_ATTEMPTS};
@@ -41,6 +53,84 @@ use folio_infra::{
     Database, JobQueue, ObjectStoreDocumentStore, StorageFileMetadata, WebhookClient,
     WorkflowRunner,
 };
+
+async fn remove_last_owner_for_test(
+    database: &Database,
+    vault: folio_core::models::VaultId,
+    owner: &folio_core::models::UserId,
+) {
+    // Normal membership edits protect the last direct owner.
+    let removed = match database {
+        Database::Sqlite(pool) => {
+            sqlx::query("DELETE FROM vault_members WHERE vault_id = ? AND user_id = ?")
+                .bind(vault.to_string())
+                .bind(owner.as_str())
+                .execute(pool)
+                .await
+                .unwrap()
+                .rows_affected()
+        }
+        Database::Postgres(pool) => {
+            sqlx::query("DELETE FROM vault_members WHERE vault_id = $1 AND user_id = $2")
+                .bind(vault.0)
+                .bind(owner.as_str())
+                .execute(pool)
+                .await
+                .unwrap()
+                .rows_affected()
+        }
+    };
+    assert_eq!(removed, 1);
+}
+
+fn vault_resource_workflows(repos: &folio_infra::Repositories) -> (WorkflowEngine, WorkflowRunner) {
+    use folio_core::services::{
+        ClassificationWorkflowAccess, IngestWorkflowAccess, VaultWorkflowAccess,
+    };
+
+    let classification = Arc::new(ClassificationWorkflowAccess::new(
+        repos.tags.clone(),
+        repos.correspondents.clone(),
+        repos.document_types.clone(),
+    ));
+    let ingest = Arc::new(IngestWorkflowAccess::new(
+        repos.sources.clone(),
+        repos.vaults.clone(),
+        repos.members.clone(),
+        &[],
+        true,
+    ));
+    let vault = Arc::new(VaultWorkflowAccess::new(
+        repos.vaults.clone(),
+        repos.members.clone(),
+    ));
+    let engine = WorkflowEngine::new(
+        repos.workflows.clone(),
+        repos.documents.clone(),
+        repos.correspondents.clone(),
+        repos.document_types.clone(),
+        Arc::new(StorageFileMetadata::new(Arc::new(
+            ObjectStoreDocumentStore::in_memory(),
+        ))),
+        "http://folio.test",
+    )
+    .with_ingest_access(ingest.clone())
+    .with_classification_access(classification.clone())
+    .with_vault_access(vault.clone())
+    .with_saved_views(repos.saved_views.clone());
+
+    let runner = WorkflowRunner::new(
+        repos.workflows.clone(),
+        repos.workflow_documents.clone(),
+        WebhookClient::new(),
+    )
+    .with_ingest_access(ingest)
+    .with_classification_access(classification)
+    .with_vault_access(vault)
+    .with_saved_views(repos.saved_views.clone());
+
+    (engine, runner)
+}
 
 struct Received {
     path: String,
@@ -170,21 +260,32 @@ impl Harness {
         let correspondents = repos.correspondents;
         let queue = repos.jobs;
 
-        let engine = Arc::new(WorkflowEngine::new(
-            workflows.clone(),
-            documents.clone(),
-            correspondents.clone(),
-            repos.document_types.clone(),
-            Arc::new(StorageFileMetadata::new(Arc::new(
-                ObjectStoreDocumentStore::in_memory(),
-            ))),
-            "http://folio.test",
+        let access = Arc::new(IngestWorkflowAccess::new(
+            repos.sources.clone(),
+            repos.vaults.clone(),
+            repos.members.clone(),
+            &[],
+            false,
         ));
+        let engine = Arc::new(
+            WorkflowEngine::new(
+                workflows.clone(),
+                documents.clone(),
+                correspondents.clone(),
+                repos.document_types.clone(),
+                Arc::new(StorageFileMetadata::new(Arc::new(
+                    ObjectStoreDocumentStore::in_memory(),
+                ))),
+                "http://folio.test",
+            )
+            .with_ingest_access(access.clone()),
+        );
         let runner = WorkflowRunner::new(
             workflows.clone(),
             repos.workflow_documents,
             WebhookClient::new(),
-        );
+        )
+        .with_ingest_access(access);
 
         Self {
             vault,

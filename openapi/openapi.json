@@ -13667,6 +13667,46 @@
           "shared"
         ]
       },
+      "WebhookClassification": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "subject_id",
+          "name"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "subject_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "WebhookDocument": {
         "type": "object",
         "description": "The document an event is about, as it was when the event happened",
@@ -13862,6 +13902,33 @@
           }
         }
       },
+      "WebhookMembership": {
+        "type": "object",
+        "required": [
+          "principal_type",
+          "principal_id"
+        ],
+        "properties": {
+          "before_role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "principal_id": {
+            "type": "string"
+          },
+          "principal_type": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "WebhookMetadata": {
         "type": "object",
         "required": [
@@ -13917,6 +13984,9 @@
           "occurred_at"
         ],
         "properties": {
+          "classification": {
+            "$ref": "#/components/schemas/WebhookClassification"
+          },
           "document": {
             "oneOf": [
               {
@@ -13971,6 +14041,9 @@
           "saved_view": {
             "$ref": "#/components/schemas/WebhookSavedView"
           },
+          "source": {
+            "$ref": "#/components/schemas/WebhookSource"
+          },
           "source_event": {
             "oneOf": [
               {
@@ -13981,12 +14054,21 @@
               }
             ]
           },
+          "vault_activity": {
+            "$ref": "#/components/schemas/WebhookVaultActivity"
+          },
           "version": {
             "type": "integer",
             "format": "int32",
             "description": "Payload schema version",
             "example": 1,
             "minimum": 0
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WebhookWorkflow"
+          },
+          "workflow_run": {
+            "$ref": "#/components/schemas/WebhookWorkflowRun"
           }
         }
       },
@@ -14087,6 +14169,48 @@
           }
         }
       },
+      "WebhookSource": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "source_id",
+          "name",
+          "kind",
+          "enabled"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SourceKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "WebhookUrls": {
         "type": "object",
         "description": "Links to the document, absolute so receivers can follow them",
@@ -14108,6 +14232,116 @@
           "web": {
             "type": "string",
             "description": "Page in the web UI"
+          }
+        }
+      },
+      "WebhookVaultActivity": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "subject_id"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "membership": {
+            "$ref": "#/components/schemas/WebhookMembership"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WebhookWorkflow": {
+        "type": "object",
+        "required": [
+          "id",
+          "vault_id",
+          "name",
+          "enabled",
+          "trigger"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WebhookWorkflowRun": {
+        "type": "object",
+        "required": [
+          "id",
+          "workflow_id",
+          "vault_id"
+        ],
+        "properties": {
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workflow_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -14899,6 +15133,13 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "workflow_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         },
         "additionalProperties": false
@@ -15339,6 +15580,27 @@
           "saved_view.created",
           "saved_view.updated",
           "saved_view.deleted",
+          "tag.created",
+          "tag.updated",
+          "tag.deleted",
+          "tag.restored",
+          "correspondent.created",
+          "correspondent.updated",
+          "correspondent.deleted",
+          "correspondent.restored",
+          "document_type.created",
+          "document_type.updated",
+          "document_type.deleted",
+          "document_type.restored",
+          "source.created",
+          "source.updated",
+          "source.deleted",
+          "source.restored",
+          "vault.updated",
+          "vault.restored",
+          "vault_membership.granted",
+          "vault_membership.role_changed",
+          "vault_membership.revoked",
           "metadata_field.created",
           "metadata_field.updated",
           "metadata_field.deleted",
@@ -15377,7 +15639,15 @@
           "document.processing.thumbnail.failed",
           "document.processing.thumbnail.skipped",
           "document.processing.thumbnail.retry_scheduled",
-          "workflow.scheduled"
+          "workflow.scheduled",
+          "workflow.created",
+          "workflow.updated",
+          "workflow.enabled",
+          "workflow.disabled",
+          "workflow.deleted",
+          "workflow.restored",
+          "workflow_run.succeeded",
+          "workflow_run.failed"
         ]
       },
       "WorkflowTriggerDefinition": {

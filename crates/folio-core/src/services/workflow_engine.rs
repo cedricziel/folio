@@ -1,4 +1,4 @@
-//! Turns document events into workflow runs
+//! Queues workflow runs for committed occurrences
 
 use std::sync::Arc;
 
@@ -7,12 +7,13 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tracing::{debug, error};
 
-use super::IngestWorkflowAccess;
+use super::{ClassificationWorkflowAccess, IngestWorkflowAccess, VaultWorkflowAccess};
 use crate::error::{Error, Result};
 use crate::events::{DocumentEvent, EventOrigin, EventSnapshot, OutboxEvent};
 use crate::models::{
-    ViewPresentation, ViewVisibility, WebhookDocument, WebhookEntry, WebhookIngest,
-    WebhookMetadata, WebhookPayload, WebhookProcessing, WebhookSavedView, WorkflowRun,
+    Id, ViewPresentation, ViewVisibility, WebhookClassification, WebhookDocument, WebhookEntry,
+    WebhookIngest, WebhookMetadata, WebhookPayload, WebhookProcessing, WebhookSavedView,
+    WebhookSource, WebhookVaultActivity, WebhookWorkflow, WebhookWorkflowRun, WorkflowRun,
     WorkflowTarget, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 use crate::ports::{
@@ -38,6 +39,8 @@ pub struct WorkflowEngine {
     public_url: String,
     ingest_access: Option<Arc<IngestWorkflowAccess>>,
     saved_views: Option<Arc<dyn SavedViewRepository>>,
+    classification_access: Option<Arc<ClassificationWorkflowAccess>>,
+    vault_access: Option<Arc<VaultWorkflowAccess>>,
 }
 
 impl WorkflowEngine {
@@ -58,6 +61,8 @@ impl WorkflowEngine {
             public_url: public_url.into(),
             ingest_access: None,
             saved_views: None,
+            classification_access: None,
+            vault_access: None,
         }
     }
 
@@ -68,6 +73,16 @@ impl WorkflowEngine {
 
     pub fn with_saved_views(mut self, repo: Arc<dyn SavedViewRepository>) -> Self {
         self.saved_views = Some(repo);
+        self
+    }
+
+    pub fn with_classification_access(mut self, access: Arc<ClassificationWorkflowAccess>) -> Self {
+        self.classification_access = Some(access);
+        self
+    }
+
+    pub fn with_vault_access(mut self, access: Arc<VaultWorkflowAccess>) -> Self {
+        self.vault_access = Some(access);
         self
     }
 
@@ -91,16 +106,39 @@ impl WorkflowEngine {
     /// is returned once all were tried, so the dispatcher retries the event;
     /// runs created in the meantime are not duplicated.
     pub async fn handle(&self, outbox_event: &OutboxEvent) -> Result<Vec<WorkflowRun>> {
-        if matches!(
-            outbox_event.origin,
-            EventOrigin::Workflow | EventOrigin::Import
-        ) {
-            return Ok(Vec::new());
+        match outbox_event.origin {
+            EventOrigin::Import => return Ok(Vec::new()),
+            EventOrigin::Workflow => {
+                return match (&outbox_event.event, &outbox_event.envelope) {
+                    (None, Some(envelope)) if envelope.audience() == &EventAudience::Owners => {
+                        self.handle_run_outcome(outbox_event.id, envelope).await
+                    }
+                    _ => Ok(Vec::new()),
+                };
+            }
+            EventOrigin::User => {}
         }
         if let Some(envelope) = &outbox_event.envelope {
             match envelope.audience() {
                 EventAudience::Owners => {
-                    return self.handle_ingest_outcome(outbox_event.id, envelope).await
+                    let Some(trigger) = WorkflowTrigger::parse(envelope.event_type()) else {
+                        return Ok(Vec::new());
+                    };
+                    return if trigger.is_vault_activity() {
+                        self.handle_vault_activity(outbox_event.id, envelope, trigger)
+                            .await
+                    } else if trigger.is_source_lifecycle() {
+                        self.handle_source_lifecycle(outbox_event.id, envelope, trigger)
+                            .await
+                    } else if trigger.is_workflow_definition() {
+                        self.handle_workflow_definition(outbox_event.id, envelope, trigger)
+                            .await
+                    } else if trigger.is_ingest_outcome() {
+                        self.handle_ingest_outcome(outbox_event.id, envelope, trigger)
+                            .await
+                    } else {
+                        Ok(Vec::new())
+                    };
                 }
                 EventAudience::User { .. } => return Ok(Vec::new()),
                 EventAudience::Vault => {}
@@ -131,16 +169,178 @@ impl WorkflowEngine {
         first_error.map_or(Ok(runs), Err)
     }
 
-    async fn handle_ingest_outcome(
+    async fn permits_owner_events(&self, envelope: &DomainEventEnvelope) -> Result<bool> {
+        match &self.ingest_access {
+            Some(access) => access.permits_owner_events(envelope.vault_id()).await,
+            None => Ok(false),
+        }
+    }
+
+    async fn handle_run_outcome(
         &self,
         outbox_id: i64,
         envelope: &DomainEventEnvelope,
     ) -> Result<Vec<WorkflowRun>> {
-        let (Some(access), Some(trigger)) = (
-            &self.ingest_access,
-            WorkflowTrigger::parse(envelope.event_type())
-                .filter(|trigger| trigger.is_ingest_outcome()),
+        let Some(trigger) = WorkflowTrigger::parse(envelope.event_type()) else {
+            return Ok(Vec::new());
+        };
+        let Some(status) = trigger.terminal_run_status() else {
+            return Ok(Vec::new());
+        };
+        let Some(outcome) = WebhookWorkflowRun::from_envelope(envelope) else {
+            return Ok(Vec::new());
+        };
+        if !self.permits_owner_events(envelope).await? {
+            return Ok(Vec::new());
+        }
+        let Some(run) = self.workflows.find_run(outcome.id).await? else {
+            return Ok(Vec::new());
+        };
+        if run.vault_id != outcome.vault_id
+            || run.status != status
+            || run.workflow_id != outcome.workflow_id
+        {
+            return Ok(Vec::new());
+        }
+        let Some(ancestors) = self.outcome_ancestors(run).await? else {
+            return Ok(Vec::new());
+        };
+        let payload = WebhookPayload::for_workflow_run(
+            trigger,
+            envelope.occurred_at(),
+            outcome,
+            Some(envelope.into()),
+        );
+        self.enqueue_owner_event(outbox_id, envelope, payload, &ancestors)
+            .await
+    }
+
+    async fn outcome_ancestors(&self, mut run: WorkflowRun) -> Result<Option<Vec<Id>>> {
+        const MAX_CHAIN: usize = 32;
+        let mut ancestors = Vec::new();
+        for _ in 0..MAX_CHAIN {
+            if ancestors.contains(&run.workflow_id) {
+                return Ok(None);
+            }
+            ancestors.push(run.workflow_id);
+            let Some(status) = run.event.terminal_run_status() else {
+                return Ok(Some(ancestors));
+            };
+            // A terminal occurrence uses its run ID as the mutation ID, which the child run retains.
+            let Some(source) = run.source_identity()? else {
+                return Ok(None);
+            };
+            let Some(parent) = self.workflows.find_run(source.mutation_id).await? else {
+                return Ok(None);
+            };
+            if parent.vault_id != run.vault_id || parent.status != status {
+                return Ok(None);
+            }
+            run = parent;
+        }
+        Ok(None)
+    }
+
+    async fn handle_workflow_definition(
+        &self,
+        outbox_id: i64,
+        envelope: &DomainEventEnvelope,
+        trigger: WorkflowTrigger,
+    ) -> Result<Vec<WorkflowRun>> {
+        let Some(workflow) = WebhookWorkflow::from_envelope(envelope) else {
+            return Ok(Vec::new());
+        };
+        if !self.permits_owner_events(envelope).await? {
+            return Ok(Vec::new());
+        }
+        if self
+            .workflows
+            .find_by_id(workflow.vault_id, workflow.id)
+            .await?
+            .is_none()
+            && self
+                .workflows
+                .find_deleted(workflow.vault_id, workflow.id)
+                .await?
+                .is_none()
+        {
+            return Ok(Vec::new());
+        }
+        let payload = WebhookPayload::for_workflow_definition(
+            trigger,
+            envelope.occurred_at(),
+            workflow,
+            Some(envelope.into()),
+        );
+        self.enqueue_owner_event(outbox_id, envelope, payload, &[])
+            .await
+    }
+
+    async fn handle_vault_activity(
+        &self,
+        outbox_id: i64,
+        envelope: &DomainEventEnvelope,
+        trigger: WorkflowTrigger,
+    ) -> Result<Vec<WorkflowRun>> {
+        let (Some(access), Some(activity)) = (
+            &self.vault_access,
+            WebhookVaultActivity::from_occurrence(trigger, envelope),
         ) else {
+            return Ok(Vec::new());
+        };
+        if !access.permits(activity.vault_id).await? {
+            return Ok(Vec::new());
+        }
+        let payload = WebhookPayload::for_vault_activity(
+            trigger,
+            envelope.occurred_at(),
+            activity,
+            Some(envelope.into()),
+        );
+        self.enqueue_owner_event(outbox_id, envelope, payload, &[])
+            .await
+    }
+
+    async fn handle_source_lifecycle(
+        &self,
+        outbox_id: i64,
+        envelope: &DomainEventEnvelope,
+        trigger: WorkflowTrigger,
+    ) -> Result<Vec<WorkflowRun>> {
+        let (Some(access), Some(source)) = (
+            &self.ingest_access,
+            WebhookSource::from_occurrence(trigger, envelope),
+        ) else {
+            return Ok(Vec::new());
+        };
+        if !access
+            .permits_managed_lifecycle(
+                source.vault_id,
+                source.source_id,
+                source.kind,
+                trigger == WorkflowTrigger::SourceDeleted,
+            )
+            .await?
+        {
+            return Ok(Vec::new());
+        }
+        let payload = WebhookPayload::for_source(
+            trigger,
+            envelope.occurred_at(),
+            source,
+            Some(envelope.into()),
+        );
+        self.enqueue_owner_event(outbox_id, envelope, payload, &[])
+            .await
+    }
+
+    async fn handle_ingest_outcome(
+        &self,
+        outbox_id: i64,
+        envelope: &DomainEventEnvelope,
+        trigger: WorkflowTrigger,
+    ) -> Result<Vec<WorkflowRun>> {
+        let Some(access) = &self.ingest_access else {
             return Ok(Vec::new());
         };
         let ingest: WebhookIngest = serde_json::from_value(envelope.data().clone())
@@ -174,20 +374,35 @@ impl WorkflowEngine {
         {
             return Ok(Vec::new());
         }
-        let body = serde_json::to_string(&WebhookPayload::for_ingest(
+        let payload = WebhookPayload::for_ingest(
             trigger,
             envelope.occurred_at(),
             ingest,
             Some(envelope.into()),
-        ))
-        .map_err(|error| Error::Repository(format!("Failed to encode payload: {error}")))?;
+        );
+        self.enqueue_owner_event(outbox_id, envelope, payload, &[])
+            .await
+    }
+
+    async fn enqueue_owner_event(
+        &self,
+        outbox_id: i64,
+        envelope: &DomainEventEnvelope,
+        payload: WebhookPayload,
+        excluded_workflows: &[Id],
+    ) -> Result<Vec<WorkflowRun>> {
+        let trigger = payload.event;
+        let vault = envelope.vault_id();
+        let body = serde_json::to_string(&payload)
+            .map_err(|error| Error::Repository(format!("Failed to encode payload: {error}")))?;
         let mut runs = Vec::new();
         let mut first_error = None;
         for workflow in self.workflows.list_enabled(vault, trigger).await? {
-            if !workflow
-                .actions
-                .iter()
-                .all(|action| trigger.target().accepts(action))
+            if excluded_workflows.contains(&workflow.id)
+                || !workflow
+                    .actions
+                    .iter()
+                    .all(|action| trigger.target().accepts(action))
                 || !workflow.conditions.matches_occurrence(None, envelope)
             {
                 continue;
@@ -219,7 +434,7 @@ impl WorkflowEngine {
                 Some(DocumentEvent::Deleted { .. })
             )
         );
-        let mut saved_view = None;
+        let mut resource_payload = None;
         let (document_id, vault, snapshot, occurred_at) = if use_projection || purge_with_snapshot {
             let event = outbox_event
                 .event
@@ -260,7 +475,33 @@ impl WorkflowEngine {
                 {
                     return Ok(Vec::new());
                 }
-                saved_view = Some(occurrence);
+                resource_payload = Some(WebhookPayload::for_saved_view(
+                    trigger,
+                    envelope.occurred_at(),
+                    occurrence,
+                    Some(envelope.into()),
+                ));
+                (None, envelope.vault_id(), None, envelope.occurred_at())
+            } else if trigger.classification_subject().is_some() {
+                let Some(occurrence) = WebhookClassification::from_occurrence(trigger, envelope)
+                else {
+                    return Ok(Vec::new());
+                };
+                let Some(access) = &self.classification_access else {
+                    return Ok(Vec::new());
+                };
+                if !access
+                    .permits(trigger, occurrence.vault_id, occurrence.subject_id)
+                    .await?
+                {
+                    return Ok(Vec::new());
+                }
+                resource_payload = Some(WebhookPayload::for_classification(
+                    trigger,
+                    envelope.occurred_at(),
+                    occurrence,
+                    Some(envelope.into()),
+                ));
                 (None, envelope.vault_id(), None, envelope.occurred_at())
             } else if trigger.is_custom_metadata() {
                 if !Self::valid_metadata_subject(trigger, envelope) {
@@ -349,14 +590,8 @@ impl WorkflowEngine {
                         let body = if let Some(ctx) = &snapshot {
                             self.build_payload(trigger, ctx, occurred_at, envelope)
                                 .await?
-                        } else if let Some(occurrence) = &saved_view {
-                            let payload = WebhookPayload::for_saved_view(
-                                trigger,
-                                occurred_at,
-                                occurrence.clone(),
-                                envelope.map(Into::into),
-                            );
-                            serde_json::to_string(&payload).map_err(|e| {
+                        } else if let Some(payload) = &resource_payload {
+                            serde_json::to_string(payload).map_err(|e| {
                                 Error::Repository(format!("Failed to encode payload: {e}"))
                             })?
                         } else if trigger.is_custom_metadata() {
