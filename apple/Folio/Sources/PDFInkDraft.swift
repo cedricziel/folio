@@ -76,7 +76,7 @@ final class PDFInkDraft {
                 .cropBox, rect: markup.bounds, rotate: 0, preserveAspectRatio: true
             ).inverted()
             for stroke in strokes {
-                let points = stroke.path.map { point in
+                let points = stroke.path.interpolatedPoints(by: .distance(1)).map { point in
                     let location = point.location.applying(stroke.transform)
                     let flipped = CGPoint(x: location.x, y: markup.bounds.height - location.y).applying(inverse)
                     return CGPoint(x: flipped.x - crop.minX, y: flipped.y - crop.minY)

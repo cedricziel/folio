@@ -11,7 +11,7 @@ final class PDFInkDraftTests: XCTestCase {
         let draft = try PDFInkDraft(data: source)
         let editor = try XCTUnwrap(draft.editor(for: 0))
         var markup = try XCTUnwrap(editor.markup)
-        let points = [CGPoint(x: 30, y: 50), CGPoint(x: 48, y: 70)]
+        let points = [CGPoint(x: 30, y: 50), CGPoint(x: 30, y: 90), CGPoint(x: 70, y: 90), CGPoint(x: 70, y: 50)]
         let strokePoints = points.enumerated().map { offset, point in
             PKStrokePoint(
                 location: point, timeOffset: Double(offset), size: CGSize(width: 3, height: 3),
@@ -40,6 +40,8 @@ final class PDFInkDraftTests: XCTestCase {
         XCTAssertEqual(path.element(at: 0, associatedPoints: &first), .moveTo)
         XCTAssertEqual(first[0].x, 50, accuracy: 0.01)
         XCTAssertEqual(first[0].y, 30, accuracy: 0.01)
+        XCTAssertGreaterThan(path.elementCount, points.count)
+        XCTAssertLessThan(path.bounds.maxX, 89)
         XCTAssertEqual(PDFDocument(data: source)?.page(at: 0)?.annotations.count, 1)
     }
 
