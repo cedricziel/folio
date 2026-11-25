@@ -106,6 +106,8 @@ test("edits a shared saved-view trigger with only occurrence filters", async ({ 
   await subjectID.fill(subject);
   await page.getByRole("combobox", { name: "Who made the change" }).selectOption("user");
   await page.getByRole("textbox", { name: "User ID", exact: true }).fill("owner");
+  await page.getByRole("combobox", { name: "Action to add" }).selectOption("webhook");
+  await page.getByRole("button", { name: "Add action", exact: true }).click();
   await page.getByRole("textbox", { name: "URL", exact: true }).fill("http://127.0.0.1:9/unused");
   await page.getByRole("button", { name: "Save workflow", exact: true }).click();
   await expect(page).toHaveURL(/\/workflows\/[0-9a-f-]{36}$/);
