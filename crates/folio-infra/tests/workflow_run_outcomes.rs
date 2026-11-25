@@ -86,7 +86,8 @@ async fn contract(db: Database) {
     failure.finished_at = Some(Utc::now());
     failure.last_error = Some("private response".into());
     failure.response_status = Some(503);
-    reject_failures(&db, "reject_run_failure_recorded").await;
+    install_failure_guard(&db).await;
+    reject_failures(&db, true).await;
     assert!(workflows.update_run(&failure).await.is_err());
     assert_eq!(
         workflows
@@ -97,7 +98,7 @@ async fn contract(db: Database) {
             .status,
         RunStatus::Pending
     );
-    allow_failures(&db, "reject_run_failure_recorded").await;
+    reject_failures(&db, false).await;
     workflows.update_run(&failure).await.unwrap();
 
     let superseded = new_run(&definition, None);
@@ -106,7 +107,7 @@ async fn contract(db: Database) {
         name: "Revised definition".into(),
         ..input.clone()
     };
-    reject_failures(&db, "reject_run_failure_superseded").await;
+    reject_failures(&db, true).await;
     assert!(workflows
         .update(vault, definition.id, update.clone())
         .await
@@ -129,7 +130,7 @@ async fn contract(db: Database) {
             .revision,
         definition.revision
     );
-    allow_failures(&db, "reject_run_failure_superseded").await;
+    reject_failures(&db, false).await;
     let edited = workflows
         .update(vault, definition.id, update)
         .await
@@ -204,27 +205,38 @@ async fn contract(db: Database) {
     }
 }
 
-async fn reject_failures(db: &Database, trigger: &str) {
+async fn install_failure_guard(db: &Database) {
+    // A second SQLite connection can cache the previously dropped trigger name.
     match db {
         Database::Sqlite(pool) => {
-            sqlx::raw_sql(&format!(
-                "CREATE TRIGGER {trigger} BEFORE INSERT ON outbox_events
-                 WHEN NEW.type = 'workflow_run.failed' BEGIN
+            sqlx::raw_sql(
+                "CREATE TABLE workflow_outcome_fault (active BOOLEAN NOT NULL);
+                 INSERT INTO workflow_outcome_fault VALUES (FALSE);
+                 CREATE TRIGGER reject_run_failure BEFORE INSERT ON outbox_events
+                 WHEN NEW.type = 'workflow_run.failed' AND (SELECT active FROM workflow_outcome_fault)
+                 BEGIN
                    SELECT RAISE(ABORT, 'rejected workflow outcome');
                  END;",
-            ))
+            )
             .execute(pool)
             .await
             .unwrap();
         }
         Database::Postgres(pool) => {
-            sqlx::raw_sql(&format!(
-                "CREATE OR REPLACE FUNCTION reject_run_failure() RETURNS trigger LANGUAGE plpgsql
-                 AS $$ BEGIN RAISE EXCEPTION 'rejected workflow outcome'; END; $$;
-                 CREATE TRIGGER {trigger} BEFORE INSERT ON outbox_events
+            sqlx::raw_sql(
+                "CREATE TABLE workflow_outcome_fault (active BOOLEAN NOT NULL);
+                 INSERT INTO workflow_outcome_fault VALUES (FALSE);
+                 CREATE FUNCTION reject_run_failure() RETURNS trigger LANGUAGE plpgsql
+                 AS $$ BEGIN
+                   IF (SELECT active FROM workflow_outcome_fault) THEN
+                     RAISE EXCEPTION 'rejected workflow outcome';
+                   END IF;
+                   RETURN NEW;
+                 END; $$;
+                 CREATE TRIGGER reject_run_failure BEFORE INSERT ON outbox_events
                  FOR EACH ROW WHEN (NEW.type = 'workflow_run.failed')
                  EXECUTE FUNCTION reject_run_failure();",
-            ))
+            )
             .execute(pool)
             .await
             .unwrap();
@@ -232,16 +244,18 @@ async fn reject_failures(db: &Database, trigger: &str) {
     }
 }
 
-async fn allow_failures(db: &Database, trigger: &str) {
+async fn reject_failures(db: &Database, active: bool) {
     match db {
         Database::Sqlite(pool) => {
-            sqlx::raw_sql(&format!("DROP TRIGGER {trigger}"))
+            sqlx::query("UPDATE workflow_outcome_fault SET active = ?")
+                .bind(active)
                 .execute(pool)
                 .await
                 .unwrap();
         }
         Database::Postgres(pool) => {
-            sqlx::raw_sql(&format!("DROP TRIGGER {trigger} ON outbox_events"))
+            sqlx::query("UPDATE workflow_outcome_fault SET active = $1")
+                .bind(active)
                 .execute(pool)
                 .await
                 .unwrap();
