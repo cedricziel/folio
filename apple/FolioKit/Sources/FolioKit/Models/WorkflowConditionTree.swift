@@ -306,6 +306,19 @@ struct WorkflowConditionTree: Identifiable, Sendable {
 
     private static let actorUserField = Field(id: "event.actor.user_id", title: "User ID")
 
+    private static let metadataChangePath = ["event", "document_change"]
+
+    func metadataChange(for choice: WorkflowTriggerChoice) -> WorkflowMetadataConditionDraft? {
+        let raw = Self.value(at: Self.metadataChangePath[...], in: values)
+        let saved = raw as? Object
+        guard raw == nil || saved != nil else { return nil }
+        return WorkflowMetadataConditionDraft(choice, saved: saved)
+    }
+
+    mutating func setMetadataChange(_ change: WorkflowMetadataConditionDraft) {
+        Self.set(change.wireValue, at: Self.metadataChangePath[...], in: &values)
+    }
+
     var count: Int {
         1 + groups.values.joined().reduce(0) { $0 + $1.count }
     }
@@ -314,21 +327,28 @@ struct WorkflowConditionTree: Identifiable, Sendable {
         (groups.values.joined().map(\.depth).max() ?? -1) + 1
     }
 
-    func validationMessage(fields: [Field], supportsActor: Bool = false) -> String? {
+    func validationMessage(
+        fields: [Field], supportsActor: Bool = false, metadataChoice: WorkflowTriggerChoice? = nil
+    ) -> String? {
         if count > Self.maximumNodes || depth > Self.maximumDepth {
             return "Use at most 64 conditions and eight levels of nesting."
         }
-        return invalidFilter(fields: fields, supportsActor: supportsActor)
+        return invalidFilter(fields: fields, supportsActor: supportsActor, metadataChoice: metadataChoice)
     }
 
-    private func invalidFilter(fields: [Field], supportsActor: Bool) -> String? {
-        if supportsActor && actor == .user && actorUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    private func invalidFilter(
+        fields: [Field], supportsActor: Bool, metadataChoice: WorkflowTriggerChoice?
+    ) -> String? {
+        if let choice = metadataChoice, let message = metadataChange(for: choice)?.validationMessage {
+            return message
+        }
+        if supportsActor, actor == .user, actorUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Enter the actor's user ID."
         }
         for field in fields {
             let text = self[field]
             guard !text.isEmpty else { continue }
-            if field.isIdentifier && UUID(uuidString: text) == nil {
+            if field.isIdentifier, UUID(uuidString: text) == nil {
                 return "Enter a valid UUID for \(field.title)."
             }
             if field.ingestion == .reason && text.utf8.count > 64 {
@@ -351,14 +371,22 @@ struct WorkflowConditionTree: Identifiable, Sendable {
             }
         }
         return Match.allCases.lazy.compactMap { self[$0] }.joined().lazy
-            .compactMap { $0.invalidFilter(fields: fields, supportsActor: supportsActor) }.first
+            .compactMap {
+                $0.invalidFilter(fields: fields, supportsActor: supportsActor, metadataChoice: metadataChoice)
+            }
+            .first
     }
 
-    func hasAdditionalFilters(fields: [Field], supportsActor: Bool) -> Bool {
+    func hasAdditionalFilters(
+        fields: [Field], supportsActor: Bool, metadataChoice: WorkflowTriggerChoice? = nil
+    ) -> Bool {
         var additional = self
         if supportsActor { additional.actor = .any }
         for field in fields where !self[field].isEmpty || textMatch(for: field) != nil {
             additional[field] = ""
+        }
+        if let choice = metadataChoice, let change = metadataChange(for: choice), !change.hasUnadvertisedValues {
+            Self.set(nil, at: Self.metadataChangePath[...], in: &additional.values)
         }
         return !additional.values.isEmpty
     }
@@ -407,7 +435,7 @@ struct WorkflowConditionTree: Identifiable, Sendable {
     }
 }
 
-protocol WorkflowConditionEditingService: WorkflowTriggerEditingService {
+protocol WorkflowConditionEditingService: WorkflowTriggerEditingService, WorkflowActionTaxonomyService {
     func loadWorkflowConditions(_ workflow: WorkflowConfigurationSummary) async throws -> WorkflowConditionTree
     func saveWorkflowConditions(_ workflow: WorkflowConfigurationSummary, conditions: WorkflowConditionTree)
         async throws -> WorkflowConfigurationSummary

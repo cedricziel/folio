@@ -217,6 +217,43 @@ import XCTest
         capture(app, name: "Created and enabled workflow")
     }
 
+    func testGroupedTagReplacementCanBeEditedAndReopened() {
+        let app = launch(arguments: ["--workflow-metadata-conditions"])
+        openWorkflow(app)
+        let edit = app.buttons["Edit conditions"]
+        guard scroll(app, until: edit) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+        let condition = app.buttons["Condition 1"]
+        guard scroll(app, until: condition) else { return XCTFail(app.debugDescription) }
+        condition.tap()
+        let addedTag = app.buttons["workflow-metadata-added_id"]
+        guard scroll(app, until: addedTag), addedTag.wait(for: \.isEnabled, toEqual: true, timeout: 5) else {
+            return XCTFail(app.debugDescription)
+        }
+        addedTag.tap()
+        let checked = app.buttons["Checked"]
+        guard checked.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        checked.tap()
+        let back = app.navigationBars["Condition 1"].buttons.firstMatch
+        guard back.waitForExistence(timeout: 5), back.isHittable else { return XCTFail(app.debugDescription) }
+        back.tap()
+        let save = app.navigationBars["Edit conditions"].buttons["Save"]
+        guard save.waitForExistence(timeout: 5), save.isEnabled else { return XCTFail(app.debugDescription) }
+        save.tap()
+        guard save.waitForNonExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        guard scroll(app, until: edit) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+        guard scroll(app, until: condition) else { return XCTFail(app.debugDescription) }
+        condition.tap()
+        guard scroll(app, until: addedTag), addedTag.wait(for: \.isEnabled, toEqual: true, timeout: 5) else {
+            return XCTFail(app.debugDescription)
+        }
+        capture(app, name: "Reopened tag replacement condition")
+        addedTag.tap()
+        guard checked.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        XCTAssertTrue(checked.isSelected, app.debugDescription)
+    }
+
     func testRecurringScheduleCanBeChangedToOnceAndReopened() {
         let app = launch(arguments: ["--workflow-schedule"])
         openWorkflow(app)
