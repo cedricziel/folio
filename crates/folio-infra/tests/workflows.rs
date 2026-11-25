@@ -1964,7 +1964,13 @@ async fn clock_run_delivers_the_scheduled_instant_without_a_document() {
         .await
         .unwrap();
 
-    assert_eq!(h.workflows.enqueue_due_schedules(at, 16).await.unwrap(), 1);
+    assert_eq!(
+        h.workflows
+            .enqueue_due_schedules(at, 16, "https://folio.test")
+            .await
+            .unwrap(),
+        1
+    );
     let runs = h
         .workflows
         .list_runs(h.vault, workflow.id, 8)
@@ -1981,7 +1987,13 @@ async fn clock_run_delivers_the_scheduled_instant_without_a_document() {
         h.runner.execute(run.id).await.unwrap(),
         RunOutcome::Succeeded
     );
-    assert_eq!(h.workflows.enqueue_due_schedules(at, 16).await.unwrap(), 0);
+    assert_eq!(
+        h.workflows
+            .enqueue_due_schedules(at, 16, "https://folio.test")
+            .await
+            .unwrap(),
+        0
+    );
 
     let requests = server.state.received.lock().unwrap();
     let [request] = requests.as_slice() else {
@@ -2075,8 +2087,11 @@ impl WorkflowRepository for RestoreVaultAfterLookup {
         &self,
         now: chrono::DateTime<chrono::Utc>,
         limit: u32,
+        public_url: &str,
     ) -> folio_core::Result<usize> {
-        self.inner.enqueue_due_schedules(now, limit).await
+        self.inner
+            .enqueue_due_schedules(now, limit, public_url)
+            .await
     }
     async fn find_run(&self, id: Id) -> folio_core::Result<Option<WorkflowRun>> {
         self.inner.find_run(id).await
@@ -2383,8 +2398,11 @@ impl WorkflowRepository for DeleteAfterLocalAction {
         &self,
         now: chrono::DateTime<chrono::Utc>,
         limit: u32,
+        public_url: &str,
     ) -> folio_core::Result<usize> {
-        self.inner.enqueue_due_schedules(now, limit).await
+        self.inner
+            .enqueue_due_schedules(now, limit, public_url)
+            .await
     }
     async fn find_run(&self, id: Id) -> folio_core::Result<Option<WorkflowRun>> {
         let stored = self.inner.find_run(id).await?;

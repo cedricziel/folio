@@ -48,6 +48,8 @@ pub struct WebhookDocument {
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_date: Option<super::DocumentDate>,
     /// Original filename
     pub filename: Option<String>,
     pub mime_type: Option<String>,
@@ -876,6 +878,7 @@ impl WebhookDocument {
         Self {
             id: snapshot.document_id,
             title: snapshot.title.clone(),
+            document_date: None,
             filename: snapshot.original_filename.clone(),
             mime_type: snapshot.mime_type.clone(),
             size,
@@ -913,6 +916,7 @@ impl WebhookDocument {
         Self {
             id,
             title: document.title.clone(),
+            document_date: None,
             filename: document.original_filename.clone(),
             mime_type: document.mime_type.clone(),
             size,

@@ -408,6 +408,31 @@ import XCTest
         }
     }
 
+    func testDocumentDateScheduleSavesAndReopensWithDocumentSettings() {
+        let app = launch(arguments: ["--workflow-date-offset"])
+        openWorkflow(app)
+        let edit = app.buttons["Edit trigger"]
+        guard edit.waitForExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+
+        let days = app.textFields["Offset in days"]
+        let time = app.textFields["Time in UTC"]
+        guard scroll(app, until: days) else { return XCTFail(app.debugDescription) }
+        XCTAssertEqual(days.value as? String, "-3", app.debugDescription)
+        XCTAssertEqual(time.value as? String, "09:30:00.123456789", app.debugDescription)
+        days.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        days.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 2) + "-2")
+
+        let save = app.navigationBars["Edit trigger"].buttons["Save"]
+        guard save.isEnabled else { return XCTFail(app.debugDescription) }
+        save.tap()
+        guard save.waitForNonExistence(timeout: 5) else { return XCTFail(app.debugDescription) }
+        edit.tap()
+        guard scroll(app, until: days) else { return XCTFail(app.debugDescription) }
+        XCTAssertEqual(days.value as? String, "-2", app.debugDescription)
+        XCTAssertEqual(time.value as? String, "09:30:00.123456789", app.debugDescription)
+    }
+
     func testDocumentDateActionCanBeAddedReorderedAndReopened() {
         let app = launch(arguments: ["--workflow-document-actions"])
         openWorkflow(app)

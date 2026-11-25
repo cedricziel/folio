@@ -5,16 +5,17 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool};
 use tracing::instrument;
 
-use super::insert_domain_event;
+use super::{capture_document, insert_domain_event};
 use crate::database::workflow_lifecycle::workflow_event;
 use crate::database::workflow_schedule::{
-    clock_cursor, clock_time, decode_cadence, edited_clock_cursor, encode_cadence,
-    resumed_clock_cursor,
+    claim_schedule_window, clock_cursor, clock_time, decode_cadence, edited_clock_cursor,
+    encode_cadence, resumed_clock_cursor,
 };
 use folio_core::error::{Error, Result};
 use folio_core::events::EventOrigin;
 use folio_core::models::{
-    Id, RunStatus, UserId, VaultId, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger,
+    DocumentDate, Id, RunStatus, UserId, VaultId, Workflow, WorkflowCadence, WorkflowInput,
+    WorkflowRun, WorkflowTrigger,
 };
 use folio_core::ports::WorkflowRepository;
 
@@ -51,6 +52,7 @@ struct WorkflowRow {
     additional_triggers: sqlx::types::Json<Vec<WorkflowTrigger>>,
     cadence: Option<String>,
     next_run_at: Option<String>,
+    next_schedule_document: Option<Id>,
     conditions: String,
     actions: String,
     created_at: DateTime<Utc>,
@@ -145,13 +147,14 @@ async fn insert_run(
     run: &WorkflowRun,
     revision: i64,
     scheduled_at: Option<DateTime<Utc>>,
+    scheduled_document_date: Option<DocumentDate>,
 ) -> Result<bool> {
     let mutation_id = run.source_identity()?.map(|source| source.mutation_id);
     let result = sqlx::query(
         "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts,
                                     completed_actions, last_error, response_status, payload,
-                                    actions, source_event_id, created_at, finished_at, mutation_id, definition_revision, scheduled_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                                    actions, source_event_id, created_at, finished_at, mutation_id, definition_revision, scheduled_at, scheduled_document_date)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
          ON CONFLICT DO NOTHING",
     )
     .bind(run.id)
@@ -171,6 +174,7 @@ async fn insert_run(
     .bind(mutation_id)
     .bind(revision)
     .bind(scheduled_at.map(clock_time))
+    .bind(scheduled_document_date.map(|date| date.to_string()))
     .execute(&mut *conn)
     .await
     .map_err(repo_err)?;
@@ -186,6 +190,44 @@ async fn insert_run(
     )
     .await?;
     Ok(true)
+}
+
+async fn enqueue_document_date_page(
+    conn: &mut PgConnection,
+    workflow: &Workflow,
+    at: DateTime<Utc>,
+    date: DocumentDate,
+    after: Option<Id>,
+    public_url: &str,
+) -> Result<(usize, Option<Id>)> {
+    let limit = 64_i64;
+    let ids: Vec<Id> = sqlx::query_scalar(
+        "SELECT id FROM documents
+                 WHERE vault_id = $1 AND deleted_at IS NULL AND document_date = $2::text::date
+                   AND ($3::uuid IS NULL OR id > $3)
+                 ORDER BY id LIMIT $4 FOR SHARE",
+    )
+    .bind(workflow.vault_id.0)
+    .bind(date.to_string())
+    .bind(after)
+    .bind(limit)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(repo_err)?;
+    let next = (ids.len() == limit as usize)
+        .then(|| *ids.last().expect("a full page has a final document"));
+    let mut queued = 0;
+    for id in ids {
+        let Some(snapshot) = capture_document(conn, id, Some(workflow.vault_id)).await? else {
+            continue;
+        };
+        if snapshot.document_date == Some(date) && workflow.conditions.matches_snapshot(&snapshot) {
+            let run = WorkflowRun::for_document_date(workflow, at, date, &snapshot, public_url)?;
+            queued +=
+                usize::from(insert_run(conn, &run, workflow.revision, Some(at), Some(date)).await?);
+        }
+    }
+    Ok((queued, next))
 }
 
 #[async_trait]
@@ -290,7 +332,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .bind(actor.as_ref().map(UserId::as_str))
         .bind(actor.as_ref().map(UserId::as_str))
         .bind(encode_cadence(input.cadence)?)
-        .bind(input.cadence.map(|cadence| clock_time(cadence.first_at())))
+        .bind(input.cadence.and_then(|cadence| cadence.first_cursor(now)).map(clock_time))
         .fetch_one(&mut *tx)
         .await
         .map_err(repo_err)?;
@@ -336,7 +378,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         let cursor = edited_clock_cursor(&existing, &input, stored_cursor.as_deref(), now)?;
         let actor = folio_core::mutation::current_actor();
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "UPDATE workflows SET revision = revision + 1, name = $1, enabled = $2, trigger_event = $3, additional_triggers = $4, conditions = $5, actions = $6, updated_at = $7, updated_by = $8, cadence = $9, next_run_at = $10 WHERE id = $11 AND vault_id = $12 RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, name = $1, enabled = $2, trigger_event = $3, additional_triggers = $4, conditions = $5, actions = $6, updated_at = $7, updated_by = $8, cadence = $9, next_run_at = $10, next_schedule_document = NULL WHERE id = $11 AND vault_id = $12 RETURNING *",
         )
         .bind(&input.name)
         .bind(input.enabled)
@@ -437,7 +479,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         let now = Utc::now();
         let cursor = resumed_clock_cursor(existing.cadence, stored_cursor.as_deref(), now)?;
         let row = sqlx::query_as::<_, WorkflowRow>(
-            "UPDATE workflows SET revision = revision + 1, deleted_at = $1, updated_at = $2, updated_by = $3, next_run_at = $4 WHERE id = $5 AND vault_id = $6 RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, deleted_at = $1, updated_at = $2, updated_by = $3, next_run_at = $4, next_schedule_document = NULL WHERE id = $5 AND vault_id = $6 RETURNING *",
         )
         .bind(None::<DateTime<Utc>>)
         .bind(now)
@@ -479,12 +521,17 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         {
             return Ok(false);
         }
-        let inserted = insert_run(&mut tx, run, revision, None).await?;
+        let inserted = insert_run(&mut tx, run, revision, None, None).await?;
         tx.commit().await.map_err(repo_err)?;
         Ok(inserted)
     }
 
-    async fn enqueue_due_schedules(&self, now: DateTime<Utc>, limit: u32) -> Result<usize> {
+    async fn enqueue_due_schedules(
+        &self,
+        now: DateTime<Utc>,
+        limit: u32,
+        public_url: &str,
+    ) -> Result<usize> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let rows = sqlx::query_as::<_, WorkflowRow>(
             "SELECT w.* FROM workflows w JOIN vaults v ON v.id = w.vault_id
@@ -500,14 +547,47 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         let mut count = 0;
         for row in rows {
             let cursor = clock_cursor(row.next_run_at.as_deref())?;
+            let last_document = row.next_schedule_document;
             let workflow = Workflow::try_from(row)?;
             let cadence = workflow
                 .cadence
                 .ok_or_else(|| repo_err("A clock cursor needs a cadence"))?;
-            let window = cadence.claim_window(cursor, now)?;
+            let window = claim_schedule_window(cadence, cursor, now, last_document.is_some())?;
+            if matches!(cadence, WorkflowCadence::DocumentDateOffset { .. }) {
+                let Some(&at) = window.due.first() else {
+                    continue;
+                };
+                let after = if cursor == Some(at) {
+                    last_document
+                } else {
+                    None
+                };
+                let (queued, next_document) = if let Some(date) = cadence.document_date_at(at) {
+                    enqueue_document_date_page(&mut tx, &workflow, at, date, after, public_url)
+                        .await?
+                } else {
+                    (0, None)
+                };
+                count += queued;
+                let next_at = if next_document.is_some() {
+                    Some(at)
+                } else {
+                    window.due.get(1).copied().or(window.next_at)
+                };
+                sqlx::query("UPDATE workflows SET next_run_at = $1, next_schedule_document = $2 WHERE id = $3")
+                    .bind(next_at.map(clock_time))
+                    .bind(next_document)
+                    .bind(workflow.id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(repo_err)?;
+                continue;
+            }
             for at in window.due {
                 let run = WorkflowRun::for_clock(&workflow, at)?;
-                count += usize::from(insert_run(&mut tx, &run, workflow.revision, Some(at)).await?);
+                count += usize::from(
+                    insert_run(&mut tx, &run, workflow.revision, Some(at), None).await?,
+                );
             }
             sqlx::query("UPDATE workflows SET next_run_at = $1 WHERE id = $2")
                 .bind(window.next_at.map(clock_time))

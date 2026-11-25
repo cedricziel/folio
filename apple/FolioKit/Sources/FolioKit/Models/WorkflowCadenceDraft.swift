@@ -4,6 +4,7 @@ import Foundation
 struct WorkflowCadenceDraft {
     enum Trigger: String {
         case clock = "workflow.scheduled"
+        case documentDate = "document.date_offset"
     }
 
     enum Frequency: String, CaseIterable, Identifiable {
@@ -16,6 +17,8 @@ struct WorkflowCadenceDraft {
     var frequency: Frequency = .once
     var start = ""
     var interval = ""
+    var days = "0"
+    var time = "09:00:00"
 
     init(_ cadence: Components.Schemas.WorkflowCadence? = nil) {
         switch cadence {
@@ -25,6 +28,9 @@ struct WorkflowCadenceDraft {
             frequency = .recurring
             start = recurring.firstAt
             interval = String(recurring.intervalSeconds)
+        case .case3(let offset):
+            days = String(offset.days)
+            time = offset.timeUtc
         case nil:
             break
         }
@@ -66,6 +72,18 @@ struct WorkflowCadenceDraft {
                 throw FolioError.server(status: 400, message: "Enter a repeat interval from 1 to 4294967295 seconds.")
             }
             return .case2(.init(firstAt: instant, intervalSeconds: seconds, _type: .recurring))
+        case .documentDate:
+            guard let offset = Int32(days.trimmingCharacters(in: .whitespacesAndNewlines)),
+                (-3_652_058...3_652_058).contains(offset)
+            else {
+                throw FolioError.server(status: 400, message: "Enter a whole-day offset within the calendar range.")
+            }
+            let enteredTime = time.trimmingCharacters(in: .whitespacesAndNewlines)
+            let utcTime = enteredTime.count == 5 ? enteredTime + ":00" : enteredTime
+            guard Self.validTime(utcTime) else {
+                throw FolioError.server(status: 400, message: "Enter a UTC time in HH:mm:ss format.")
+            }
+            return .case3(.init(days: offset, timeUtc: utcTime, _type: .documentDateOffset))
         case nil:
             return nil
         }

@@ -1,7 +1,10 @@
-use chrono::{DateTime, Datelike, Duration, Utc};
+use chrono::{DateTime, Datelike, Days, Duration, NaiveTime, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{WebhookPayload, Workflow, WorkflowRun, WorkflowTrigger};
+use super::{
+    DocumentDate, WebhookDocument, WebhookPayload, Workflow, WorkflowRun, WorkflowTrigger,
+};
+use crate::EventSnapshot;
 use crate::{Error, Result};
 
 const CATCH_UP_LIMIT: i64 = 16;
@@ -22,6 +25,11 @@ pub enum WorkflowCadence {
         #[cfg_attr(feature = "openapi", schema(value_type = i64, minimum = 1, maximum = 4294967295_i64))]
         interval_seconds: u32,
     },
+    DocumentDateOffset {
+        days: i32,
+        #[cfg_attr(feature = "openapi", schema(value_type = String, example = "09:00:00"))]
+        time_utc: NaiveTime,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -31,28 +39,63 @@ pub struct DueWorkflowOccurrences {
 }
 
 impl WorkflowCadence {
-    pub fn first_at(self) -> DateTime<Utc> {
+    pub fn first_cursor(self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
         match self {
-            Self::Once { at } => at,
-            Self::Recurring { first_at, .. } => first_at,
+            Self::Once { at } => Some(at),
+            Self::Recurring { first_at, .. } => Some(first_at),
+            Self::DocumentDateOffset { time_utc, .. } => {
+                let today = now.date_naive().and_time(time_utc).and_utc();
+                if today >= now {
+                    Some(today)
+                } else {
+                    today
+                        .checked_add_days(Days::new(1))
+                        .filter(|next| next.year() <= 9999)
+                }
+            }
         }
     }
 
+    pub fn document_date_at(self, occurrence: DateTime<Utc>) -> Option<DocumentDate> {
+        let Self::DocumentDateOffset { days, time_utc } = self else {
+            return None;
+        };
+        if occurrence.time() != time_utc {
+            return None;
+        }
+        DocumentDate::from_naive_date(
+            occurrence
+                .date_naive()
+                .checked_sub_signed(Duration::days(i64::from(days)))?,
+        )
+    }
+
     pub fn validate(self) -> Result<()> {
-        if !(1..=9999).contains(&self.first_at().year()) {
+        let at = match self {
+            Self::Once { at } => at,
+            Self::Recurring {
+                first_at,
+                interval_seconds,
+            } => {
+                if interval_seconds == 0 {
+                    return Err(Error::Validation(
+                        "A recurring interval must be positive".into(),
+                    ));
+                }
+                first_at
+            }
+            Self::DocumentDateOffset { days, time_utc } => {
+                if days.unsigned_abs() >= 3_652_059 || time_utc.nanosecond() >= 1_000_000_000 {
+                    return Err(Error::Validation(
+                        "The document date offset is out of range".into(),
+                    ));
+                }
+                return Ok(());
+            }
+        };
+        if !(1..=9999).contains(&at.year()) {
             return Err(Error::Validation(
                 "The schedule start is out of range".into(),
-            ));
-        }
-        if matches!(
-            self,
-            Self::Recurring {
-                interval_seconds: 0,
-                ..
-            }
-        ) {
-            return Err(Error::Validation(
-                "A recurring interval must be positive".into(),
             ));
         }
         if matches!(self, Self::Recurring { first_at, .. } if first_at.timestamp_subsec_nanos() >= 1_000_000_000)
@@ -76,6 +119,18 @@ impl WorkflowCadence {
                 next_at: None,
             });
         };
+        if let Self::DocumentDateOffset { time_utc, .. } = self {
+            if cursor.time() != time_utc {
+                return Err(Error::Validation(
+                    "The date offset cursor is not on its UTC time".into(),
+                ));
+            }
+            return Self::Recurring {
+                first_at: cursor,
+                interval_seconds: 86_400,
+            }
+            .claim_window(Some(cursor), now);
+        }
         match self {
             Self::Once { at } if cursor != at => {
                 return Err(Error::Validation(
@@ -129,6 +184,31 @@ impl WorkflowCadence {
 }
 
 impl WorkflowRun {
+    pub fn for_document_date(
+        workflow: &Workflow,
+        occurrence_at: DateTime<Utc>,
+        date: DocumentDate,
+        snapshot: &EventSnapshot,
+        public_url: &str,
+    ) -> Result<Self> {
+        let mut document = WebhookDocument::from_snapshot(snapshot, None, public_url);
+        document.document_date = Some(date);
+        let payload = serde_json::to_string(&WebhookPayload::new(
+            WorkflowTrigger::DocumentDateOffset,
+            occurrence_at,
+            document,
+        ))
+        .map_err(|error| Error::Repository(format!("Invalid workflow payload: {error}")))?;
+        Ok(Self::new(
+            workflow.vault_id,
+            workflow.id,
+            WorkflowTrigger::DocumentDateOffset,
+            Some(snapshot.document_id),
+            payload,
+        )
+        .with_definition(workflow))
+    }
+
     pub fn for_clock(workflow: &Workflow, occurrence_at: DateTime<Utc>) -> Result<Self> {
         let payload = serde_json::to_string(&WebhookPayload::for_clock(occurrence_at))
             .map_err(|error| Error::Repository(format!("Invalid workflow payload: {error}")))?;
@@ -156,7 +236,7 @@ mod tests {
         let at = utc("2026-11-22T14:00:00Z");
         let cadence = WorkflowCadence::Once { at };
         let before = cadence
-            .claim_window(Some(cadence.first_at()), at - Duration::seconds(1))
+            .claim_window(cadence.first_cursor(at), at - Duration::seconds(1))
             .unwrap();
         assert!(before.due.is_empty());
         let due = cadence.claim_window(before.next_at, at).unwrap();
@@ -178,6 +258,26 @@ mod tests {
             interval_seconds: 3600,
         };
         assert!(recurring.validate().is_err());
+    }
+
+    #[test]
+    fn document_date_offsets_use_the_utc_calendar_and_keep_the_recent_window() {
+        let cadence = WorkflowCadence::DocumentDateOffset {
+            days: -1,
+            time_utc: "09:30:00".parse().unwrap(),
+        };
+        let now = utc("2028-02-27T09:30:01Z");
+        let cursor = cadence.first_cursor(now);
+        assert_eq!(cursor, Some(utc("2028-02-28T09:30:00Z")));
+        let day = cadence.document_date_at(cursor.unwrap()).unwrap();
+        assert_eq!(day.to_string(), "2028-02-29");
+        assert!(cadence.document_date_at(now).is_none());
+        let catch_up = cadence
+            .claim_window(cursor, utc("2028-04-01T11:00:00Z"))
+            .unwrap();
+        assert_eq!(catch_up.due.len(), 16);
+        assert_eq!(catch_up.due.last(), Some(&utc("2028-04-01T09:30:00Z")));
+        assert_eq!(catch_up.next_at, Some(utc("2028-04-02T09:30:00Z")));
     }
 
     #[test]

@@ -303,6 +303,8 @@ struct FormValues {
     cadence_interval: String,
     clear_clock_filters: Option<String>,
     clear_clock_actions: Option<String>,
+    offset_days: String,
+    offset_time: String,
     enabled: Option<String>,
     condition_groups: Option<String>,
     mime_type: String,
@@ -864,7 +866,15 @@ impl FormValues {
                 first_at.to_rfc3339_opts(SecondsFormat::AutoSi, true),
                 interval_seconds.to_string(),
             ),
-            None => ("once", String::new(), String::new()),
+            Some(WorkflowCadence::DocumentDateOffset { .. }) | None => {
+                ("once", String::new(), String::new())
+            }
+        };
+        let (offset_days, offset_time) = match workflow.cadence {
+            Some(WorkflowCadence::DocumentDateOffset { days, time_utc }) => {
+                (days.to_string(), time_utc.to_string())
+            }
+            _ => (String::new(), String::new()),
         };
         let mut values = Self {
             extra_fields,
@@ -876,6 +886,8 @@ impl FormValues {
             cadence_mode: cadence_mode.into(),
             cadence_start,
             cadence_interval,
+            offset_days,
+            offset_time,
             enabled: workflow.enabled.then(|| "on".to_string()),
             mime_type: c.mime_type.clone().unwrap_or_default(),
             tag_id: c.tag_id.map(|i| i.to_string()).unwrap_or_default(),
@@ -1024,6 +1036,24 @@ impl FormValues {
     }
 
     fn cadence(&self, trigger: WorkflowTrigger) -> Result<Option<WorkflowCadence>, String> {
+        if trigger == WorkflowTrigger::DocumentDateOffset {
+            let time = self.offset_time.trim();
+            let time = if time.len() == 5 {
+                format!("{time}:00")
+            } else {
+                time.to_owned()
+            };
+            let cadence = WorkflowCadence::DocumentDateOffset {
+                days: self
+                    .offset_days
+                    .trim()
+                    .parse()
+                    .map_err(|_| "Enter an offset in whole days.")?,
+                time_utc: time.parse().map_err(|_| "Choose a UTC time.")?,
+            };
+            cadence.validate().map_err(|error| error.to_string())?;
+            return Ok(Some(cadence));
+        }
         if trigger != WorkflowTrigger::Scheduled {
             return Ok(None);
         }
@@ -1070,13 +1100,14 @@ impl FormValues {
             .find(|trigger| trigger.is_custom_metadata())
             .unwrap_or(trigger);
         let cadence = self.cadence(trigger)?;
+        let clock = trigger == WorkflowTrigger::Scheduled;
         let optional = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
         let id = |s: &str, what: &str| -> Result<Option<Id>, String> {
             optional(s)
                 .map(|v| Uuid::parse_str(&v).map_err(|_| format!("The {what} is not valid.")))
                 .transpose()
         };
-        let clear_clock_filters = cadence.is_some() && self.clear_clock_filters.is_some();
+        let clear_clock_filters = clock && self.clear_clock_filters.is_some();
         let processing = if clear_clock_filters {
             None
         } else {
@@ -1088,7 +1119,13 @@ impl FormValues {
         };
         let mut event = match self.event_actor.as_deref() {
             _ if clear_clock_filters => None,
-            None if trigger == WorkflowTrigger::IngestReceived => None,
+            None if matches!(
+                trigger,
+                WorkflowTrigger::IngestReceived | WorkflowTrigger::DocumentDateOffset
+            ) =>
+            {
+                None
+            }
             None => existing.and_then(|workflow| workflow.conditions.event.clone()),
             Some(mode) => {
                 let subject_id = id(&self.event_subject_id, "event subject ID")?;
@@ -1184,7 +1221,7 @@ impl FormValues {
                 none: conditions.none,
                 ..WorkflowConditions::default()
             };
-        } else if cadence.is_none() {
+        } else if !clock {
             conditions.event = event;
         }
         if let Some(groups) = &self.condition_groups {
@@ -1192,7 +1229,7 @@ impl FormValues {
                 .map_err(|_| "Check the values in the nested condition groups.")?
                 .apply(&mut conditions);
         }
-        if cadence.is_none()
+        if !clock
             && (selected.iter().any(|trigger| {
                 trigger.entry_transition().is_none()
                     && !trigger.is_ingest_outcome()
@@ -1217,7 +1254,7 @@ impl FormValues {
                 email_attachment_glob: optional(&self.email_attachment_glob),
                 email_mailbox_glob: optional(&self.email_mailbox_glob),
             };
-        } else if cadence.is_none()
+        } else if !clock
             && self.trigger_selection.is_none()
             && existing.is_some_and(|workflow| {
                 workflow.trigger.entry_transition().is_none()
@@ -1312,9 +1349,9 @@ impl FormValues {
         // The form edits one action of each kind: it replaces the first stored
         // one, or removes it when the section was emptied. Anything else stays.
         let mut actions = existing.map(|w| w.actions.clone()).unwrap_or_default();
-        if cadence.is_some() && self.clear_clock_actions.is_some() {
+        if clock && self.clear_clock_actions.is_some() {
             actions.retain(WorkflowAction::is_webhook);
-        } else if cadence.is_none() {
+        } else if !clock {
             set_action(
                 &mut actions,
                 |a| matches!(a, WorkflowAction::AddTags { .. }),

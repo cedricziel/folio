@@ -13740,6 +13740,16 @@
             "type": "string",
             "format": "date-time"
           },
+          "document_date": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DocumentDate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "document_type": {
             "oneOf": [
               {
@@ -14820,6 +14830,30 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "required": [
+              "days",
+              "time_utc",
+              "type"
+            ],
+            "properties": {
+              "days": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "time_utc": {
+                "type": "string",
+                "example": "09:00:00"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "document_date_offset"
+                ]
+              }
+            }
           }
         ]
       },
@@ -15647,7 +15681,8 @@
           "workflow.deleted",
           "workflow.restored",
           "workflow_run.succeeded",
-          "workflow_run.failed"
+          "workflow_run.failed",
+          "document.date_offset"
         ]
       },
       "WorkflowTriggerDefinition": {

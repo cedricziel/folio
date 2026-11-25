@@ -35,6 +35,7 @@ use folio_mcp::McpOptions;
 
 async fn run_workflow_schedules(
     workflows: Arc<dyn WorkflowRepository>,
+    public_url: String,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut ticks = tokio::time::interval(Duration::from_secs(5));
@@ -48,7 +49,7 @@ async fn run_workflow_schedules(
                 }
             }
             _ = ticks.tick() => {
-                if let Err(error) = workflows.enqueue_due_schedules(chrono::Utc::now(), 16).await {
+                if let Err(error) = workflows.enqueue_due_schedules(chrono::Utc::now(), 16, &public_url).await {
                     tracing::warn!(%error, "Could not enqueue due workflows");
                 }
             }
@@ -285,6 +286,7 @@ async fn main() -> Result<()> {
     background.spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
     background.spawn(run_workflow_schedules(
         workflow_repo.clone(),
+        public_url.clone(),
         shutdown_tx.subscribe(),
     ));
 

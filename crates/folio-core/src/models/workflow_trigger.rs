@@ -142,7 +142,8 @@ fn snapshot_condition_fields(
         | DocumentTitleChanged
         | DocumentTagsChanged
         | DocumentCorrespondentChanged
-        | DocumentTypeChanged => (FILE, CLASSIFICATION),
+        | DocumentTypeChanged
+        | DocumentDateOffset => (FILE, CLASSIFICATION),
         IngestReceived => (FILE, &[][..]),
         _ => (&[][..], &[][..]),
     };
@@ -180,7 +181,9 @@ impl WorkflowTriggerRegistry {
                         target: trigger.target(),
                         condition_fields: if matches!(
                             trigger,
-                            WorkflowTrigger::IngestReceived | WorkflowTrigger::Scheduled
+                            WorkflowTrigger::IngestReceived
+                                | WorkflowTrigger::Scheduled
+                                | WorkflowTrigger::DocumentDateOffset
                         ) {
                             Vec::new()
                         } else {

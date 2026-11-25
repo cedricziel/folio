@@ -113,6 +113,14 @@ test("sets typed custom values and clears a field in the saved action order", as
   const receipt = await page.request.post("/api/documents", { data: { title: receiptTitle } });
   expect(receipt.ok()).toBeTruthy();
   const { id: receiptID } = await receipt.json();
+  await expect.poll(async () => {
+    const response = await page.request.get(`/vaults/${vault}/api/documents/search`, {
+      params: { q: receiptTitle, limit: 50 },
+    });
+    expect(response.ok()).toBeTruthy();
+    const { results } = await response.json();
+    return results.some((match: { document: { id: string } }) => match.document.id === receiptID);
+  }).toBe(true);
   const option = await page.request.post(`${fieldURL}/${approval.id}/options`, {
     data: { label: "Needs approval", position: 0 },
   });

@@ -31,6 +31,7 @@ struct WorkflowLifecycleFixture: View {
             || arguments.contains("--workflow-outcome-condition")
             || arguments.contains("--workflow-ingestion-conditions")
             || arguments.contains("--workflow-metadata-conditions")
+            || arguments.contains("--workflow-date-offset")
             || arguments.contains("--workflow-processing-conditions")
     }
 }
@@ -161,14 +162,15 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
 
     private static let ingestionConditionEditing = ProcessInfo.processInfo.arguments.contains(
         "--workflow-ingestion-conditions")
-    private static let processingConditionEditing = ProcessInfo.processInfo.arguments.contains(
-        "--workflow-processing-conditions")
     private static let outcomeConditionEditing = ProcessInfo.processInfo.arguments.contains(
         "--workflow-outcome-condition")
     private static let foundationTriggerEditing = ProcessInfo.processInfo.arguments.contains(
         "--workflow-foundation-trigger")
     private static let foundationTrigger = "vault_membership.role_changed"
+    private static let processingConditionEditing = ProcessInfo.processInfo.arguments.contains(
+        "--workflow-processing-conditions")
     private static let watchedSource = "923553bf-9c39-4990-90ae-41250d12d03e"
+    private static let dateOffsetEditing = ProcessInfo.processInfo.arguments.contains("--workflow-date-offset")
 
     private static let sourceWorkflow = "d328c55a-1bf3-4590-b878-ad432191caba"
 
@@ -212,6 +214,12 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 }}}]}
                 """.utf8
             )
+        }
+        if dateOffsetEditing {
+            workflow.trigger = "document.date_offset"
+            workflow.cadence = Data(#"{"type":"document_date_offset","days":-3,"time_utc":"09:30:00.123456789"}"#.utf8)
+            workflow.conditions = Data(#"{"filename_glob":"invoice-*.pdf"}"#.utf8)
+            workflow.actions = Data(#"[{"type":"set_reviewed","reviewed":false}]"#.utf8)
         }
         if processingConditionEditing {
             workflow.trigger = "document.processing.ocr.completed"
@@ -322,10 +330,6 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 "target":"document","condition_fields":[]},
                 {"event_type":"workflow.scheduled","label":"On a schedule","subject_type":"workflow",
                 "target":"event","condition_fields":[]},
-                {"event_type":"document.processing.ocr.completed","label":"Text extraction completed",
-                "subject_type":"document","target":"document","condition_fields":[
-                  {"key":"data.attempt","label":"Attempt","value_type":"integer"},
-                  {"key":"data.has_text","label":"Text found","value_type":"boolean"}]},
                 {"event_type":"vault_membership.role_changed","label":"When a vault member’s role changes",
                 "subject_type":"vault_membership","target":"event","condition_fields":[]},
                 {"event_type":"saved_view.updated","label":"When a shared saved view is updated",
@@ -333,6 +337,10 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 {"event_type":"workflow_run.failed","label":"When a workflow run fails","subject_type":"workflow_run",
                 "target":"event","condition_fields":[{"key":"event.workflow_id","label":"Source workflow ID","value_type":"identifier"},
                 {"key":"event.actor.type","label":"Actor type","value_type":"text"}]},
+                {"event_type":"document.processing.ocr.completed","label":"Text extraction completed",
+                "subject_type":"document","target":"document","condition_fields":[
+                  {"key":"data.attempt","label":"Attempt","value_type":"integer"},
+                  {"key":"data.has_text","label":"Text found","value_type":"boolean"}]},
                 {"event_type":"ingest.imported","label":"Item imported","subject_type":"ingest","target":"event",
                 "condition_fields":[{"key":"data.source_id","label":"Source ID","value_type":"identifier"},
                 {"key":"data.source_kind","label":"Source kind","value_type":"text"},
@@ -363,7 +371,9 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 {"key":"data.reason_code","label":"Reason","value_type":"text"}]},
                 {"event_type":"source.recovered","label":"Source recovered","subject_type":"source","target":"event",
                 "condition_fields":[{"key":"data.source_id","label":"Source ID","value_type":"identifier"},
-                {"key":"data.source_kind","label":"Source kind","value_type":"text"}]}]
+                {"key":"data.source_kind","label":"Source kind","value_type":"text"}]},
+                {"event_type":"document.date_offset","label":"Relative to the document date","subject_type":"document",
+                "target":"document","condition_fields":[{"key":"filename_glob","label":"Filename pattern","value_type":"text"}]}]
                 """
             )
         case ("GET", "/api/tags") where metadataEditing:
@@ -468,6 +478,15 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                     actions.map({ $0["type"] as? String }) == ["webhook", "webhook"],
                     actions.map({ $0["url"] as? String }) == ["https://first.test/hook", "https://second.test/hook"]
                 else { return (400, #"{"error":"Unexpected ingestion condition"}"#) }
+            }
+            if dateOffsetEditing {
+                guard trigger == "document.date_offset", let schedule = input["cadence"] as? [String: Any],
+                    schedule["type"] as? String == "document_date_offset", schedule["days"] as? Int == -2,
+                    schedule["time_utc"] as? String == "09:30:00.123456789",
+                    filters["filename_glob"] as? String == "invoice-*.pdf",
+                    actions.count == 1, actions[0]["type"] as? String == "set_reviewed",
+                    actions[0]["reviewed"] as? Bool == false
+                else { return (400, #"{"error":"Unexpected date schedule"}"#) }
             }
             if processingConditionEditing {
                 let expected: [String: Any] = [
