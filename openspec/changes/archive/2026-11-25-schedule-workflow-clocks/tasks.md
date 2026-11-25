@@ -5,4 +5,4 @@
 - [x] Wire the server scheduler, JSON API, and web editor.
 - [x] Verify concurrency, restart, catch-up, edit and rollback on SQLite and PostgreSQL.
 - [x] Regenerate OpenAPI and verify the Swift transport contract.
-- [ ] Resolve review feedback and merge after the required checks pass.
+- [x] Resolve the review finding, verify the repaired scheduler on SQLite and PostgreSQL, and confirm the protected merge.
