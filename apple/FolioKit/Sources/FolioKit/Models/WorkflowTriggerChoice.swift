@@ -36,6 +36,16 @@ public struct WorkflowTriggerChoice: Identifiable, Equatable, Sendable {
         self.canEditDocumentConditions = canEditDocumentConditions
     }
 
+    enum DataFamily: Equatable {
+        case ingestion, processing
+    }
+
+    var dataFamily: DataFamily? {
+        if id.hasPrefix("document.processing.") { return .processing }
+        if id.hasPrefix("ingest.") || id == "source.failed" || id == "source.recovered" { return .ingestion }
+        return nil
+    }
+
     var requiresSingleSelection: Bool {
         target == .ingestCandidate || id == "document.date_offset" || WorkflowCadenceDraft.Trigger(rawValue: id) != nil
     }
@@ -58,6 +68,7 @@ public struct WorkflowTriggerChoice: Identifiable, Equatable, Sendable {
             selected.dropFirst().allSatisfy { choice in
                 (!field.id.hasPrefix("event.document_change.")
                     || choice.documentConditionFamily == primary.documentConditionFamily)
+                    && (!field.id.hasPrefix("data.") || choice.dataFamily == primary.dataFamily)
                     && choice.conditionFields.contains { $0.id == field.id && $0.valueType == field.valueType }
             }
         }

@@ -26,6 +26,7 @@ struct WorkflowLifecycleFixture: View {
             || arguments.contains("--workflow-schedule") || arguments.contains("--workflow-document-actions")
             || arguments.contains("--workflow-create-multiple")
             || arguments.contains("--workflow-custom-field-actions")
+            || arguments.contains("--workflow-ingestion-conditions")
     }
 }
 
@@ -83,7 +84,8 @@ struct WorkflowLifecycleFixture: View {
             .init(id: "document.uploaded", title: "When a document is added", target: .document, conditionFields: []),
             .init(id: "document_note.created", title: "When a note is created", target: .document, conditionFields: []),
             .init(
-                id: "document_comment.created", title: "When a comment is created", target: .document, conditionFields: []
+                id: "document_comment.created", title: "When a comment is created",
+                target: .document, conditionFields: []
             ),
             .init(id: "source.failed", title: "When a source becomes unavailable", target: .event, conditionFields: []),
         ]
@@ -148,6 +150,10 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
     private static let documentActions = ProcessInfo.processInfo.arguments.contains("--workflow-document-actions")
     private static let scheduleEditing = ProcessInfo.processInfo.arguments.contains("--workflow-schedule")
 
+    private static let ingestionConditionEditing = ProcessInfo.processInfo.arguments.contains(
+        "--workflow-ingestion-conditions")
+    private static let watchedSource = "923553bf-9c39-4990-90ae-41250d12d03e"
+
     private static func initialWorkflow() -> SavedWorkflow {
         var workflow = SavedWorkflow()
         if documentActions || ProcessInfo.processInfo.arguments.contains("--workflow-custom-field-actions") {
@@ -159,6 +165,13 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
             workflow.cadence = Data(
                 #"{"type":"recurring","first_at":"2032-02-29T09:30:00.123456789Z","interval_seconds":3600}"#.utf8)
             workflow.conditions = Data("{}".utf8)
+        }
+        if ingestionConditionEditing {
+            workflow.trigger = "ingest.failed"
+            workflow.conditions = Data(
+                """
+                {"all":[{"event":{"ingest":{"source_id":"\(watchedSource)","source_kind":"folder","retryable":true}}}]}
+                """.utf8)
         }
         return workflow
     }
@@ -245,7 +258,38 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 {"event_type":"document_note.created","label":"When a note is created","subject_type":"document_note",
                 "target":"document","condition_fields":[]},
                 {"event_type":"workflow.scheduled","label":"On a schedule","subject_type":"workflow",
-                "target":"event","condition_fields":[]}]
+                "target":"event","condition_fields":[]},
+                {"event_type":"ingest.imported","label":"Item imported","subject_type":"ingest","target":"event",
+                "condition_fields":[{"key":"data.source_id","label":"Source ID","value_type":"identifier"},
+                {"key":"data.source_kind","label":"Source kind","value_type":"text"},
+                {"key":"data.outcome","label":"Outcome","value_type":"text"},
+                {"key":"data.reason_code","label":"Reason","value_type":"text"},
+                {"key":"data.retryable","label":"Retryable","value_type":"boolean"}]},
+                {"event_type":"ingest.skipped","label":"Item skipped by a rule","subject_type":"ingest","target":"event",
+                "condition_fields":[{"key":"data.source_id","label":"Source ID","value_type":"identifier"},
+                {"key":"data.source_kind","label":"Source kind","value_type":"text"},
+                {"key":"data.outcome","label":"Outcome","value_type":"text"},
+                {"key":"data.reason_code","label":"Reason","value_type":"text"},
+                {"key":"data.retryable","label":"Retryable","value_type":"boolean"}]},
+                {"event_type":"ingest.duplicate","label":"Duplicate item found","subject_type":"ingest","target":"event",
+                "condition_fields":[{"key":"data.source_id","label":"Source ID","value_type":"identifier"},
+                {"key":"data.source_kind","label":"Source kind","value_type":"text"},
+                {"key":"data.outcome","label":"Outcome","value_type":"text"},
+                {"key":"data.reason_code","label":"Reason","value_type":"text"},
+                {"key":"data.retryable","label":"Retryable","value_type":"boolean"}]},
+                {"event_type":"ingest.failed","label":"Item import failed","subject_type":"ingest","target":"event",
+                "condition_fields":[{"key":"data.source_id","label":"Source ID","value_type":"identifier"},
+                {"key":"data.source_kind","label":"Source kind","value_type":"text"},
+                {"key":"data.outcome","label":"Outcome","value_type":"text"},
+                {"key":"data.reason_code","label":"Reason","value_type":"text"},
+                {"key":"data.retryable","label":"Retryable","value_type":"boolean"}]},
+                {"event_type":"source.failed","label":"Source became unavailable","subject_type":"source","target":"event",
+                "condition_fields":[{"key":"data.source_id","label":"Source ID","value_type":"identifier"},
+                {"key":"data.source_kind","label":"Source kind","value_type":"text"},
+                {"key":"data.reason_code","label":"Reason","value_type":"text"}]},
+                {"event_type":"source.recovered","label":"Source recovered","subject_type":"source","target":"event",
+                "condition_fields":[{"key":"data.source_id","label":"Source ID","value_type":"identifier"},
+                {"key":"data.source_kind","label":"Source kind","value_type":"text"}]}]
                 """
             )
         case ("GET", "/api/workflows/\(id)/runs"):
@@ -301,6 +345,19 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
             if creatingMultiple {
                 guard trigger == createdSelection[0], triggers == createdSelection
                 else { return (400, #"{"error":"Workflow settings changed the trigger order"}"#) }
+            }
+            if ingestionConditionEditing {
+                guard trigger == "ingest.failed",
+                    let all = filters["all"] as? [[String: Any]], all.count == 1,
+                    let event = all.first?["event"] as? [String: Any],
+                    let ingest = event["ingest"] as? [String: Any],
+                    ingest["source_id"] as? String == watchedSource,
+                    ingest["source_kind"] as? String == "folder",
+                    ingest["reason_code"] as? String == "unreadable_attachment",
+                    ingest["retryable"] as? Bool == false,
+                    actions.map({ $0["type"] as? String }) == ["webhook", "webhook"],
+                    actions.map({ $0["url"] as? String }) == ["https://first.test/hook", "https://second.test/hook"]
+                else { return (400, #"{"error":"Unexpected ingestion condition"}"#) }
             }
             let query = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
             let expected = query?.queryItems?.first(where: { $0.name == "expected_revision" })?.value

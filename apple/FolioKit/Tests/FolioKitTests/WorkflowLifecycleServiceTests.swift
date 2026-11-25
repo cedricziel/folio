@@ -405,6 +405,51 @@ import Testing
         #expect(!saved.enabled)
     }
 
+    @Test func ingestionConditionEditsUseTheGuardedRequestAndRetainBooleanFalse() async throws {
+        let summaryJSON = workflowJSON(deleted: false, trigger: "ingest.failed", revision: 4, enabled: false)
+        let sourceID = "99999999-8888-4777-8666-555555555555"
+        let ingestion: [String: Any] = ["source_id": sourceID, "source_kind": "folder", "retryable": false]
+        let filters = ["none": [["event": ["ingest": ingestion]]]]
+        let expectedFilters = try JSONSerialization.data(withJSONObject: filters, options: .sortedKeys)
+        var saved = try #require(JSONSerialization.jsonObject(with: Data(summaryJSON.utf8)) as? [String: Any])
+        saved["conditions"] = filters
+        saved["revision"] = 5
+        let response = String(decoding: try JSONSerialization.data(withJSONObject: saved), as: UTF8.self)
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
+            if request.httpMethod == "GET" { return (200, summaryJSON) }
+            #expect(request.httpMethod == "PUT")
+            #expect(request.url?.path == "/folio/api/workflows/\(workflowID.uuidString.lowercased())/definition")
+            #expect(request.url?.query == "expected_revision=4")
+            guard let bytes = LifecycleURLProtocol.body(for: request),
+                let body = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+                let conditions = body["conditions"] as? [String: Any]
+            else { return (400, "{}") }
+            #expect((try? JSONSerialization.data(withJSONObject: conditions, options: .sortedKeys)) == expectedFilters)
+            #expect(body["enabled"] as? Bool == false)
+            return (200, response)
+        }
+        let choice = WorkflowTriggerChoice(
+            id: "ingest.failed", title: "Item import failed", target: .event,
+            conditionFields: [
+                .init(id: "data.source_id", title: "Source ID", valueType: "identifier"),
+                .init(id: "data.source_kind", title: "Source kind", valueType: "text"),
+                .init(id: "data.retryable", title: "Retry available", valueType: "boolean"),
+            ])
+        let fields = WorkflowConditionTree.Field.available(for: choice)
+        var branch = WorkflowConditionTree()
+        branch[try #require(fields.first { $0.ingestion == .sourceID })] = sourceID
+        branch[try #require(fields.first { $0.ingestion == .sourceKind })] = "folder"
+        branch[try #require(fields.first { $0.ingestion == .retryable })] = "false"
+        var conditions = WorkflowConditionTree()
+        conditions[.none] = [branch]
+        let live = service()
+        let summary = try await live.workflowConfiguration(vaultID: vaultID, workflowID: workflowID)
+        #expect(summary.triggerTitle == choice.title)
+        let updated = try await live.saveWorkflowConditions(summary, conditions: conditions)
+        #expect(updated.revision == 5)
+    }
+
     @Test func orderedActionsAndCadenceUseTheSameGuardedDefinitionRoute() async throws {
         let live = service()
         let choice = WorkflowTriggerChoice(

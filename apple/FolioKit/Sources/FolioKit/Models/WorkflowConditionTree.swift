@@ -61,13 +61,30 @@ struct WorkflowConditionTree: Identifiable, Sendable {
         }
     }
 
+    enum IngestionField: String, Sendable {
+        case sourceID = "source_id"
+        case sourceKind = "source_kind"
+        case reason = "reason_code"
+        case retryable
+
+        var valueType: String {
+            switch self {
+            case .sourceID: "identifier"
+            case .sourceKind, .reason: "text"
+            case .retryable: "boolean"
+            }
+        }
+    }
+
     struct Field: Identifiable, Sendable {
         let id: String
         let title: String
         var isIdentifier = false
         var processing: ProcessingField?
+        var ingestion: IngestionField?
 
-        var isSourceKind: Bool { id == "source.kind" }
+        var isSourceKind: Bool { id == "source.kind" || ingestion == .sourceKind }
+        var isBoolean: Bool { processing == .hasText || ingestion == .retryable }
 
         var isTextMatch: Bool {
             switch id {
@@ -120,7 +137,8 @@ struct WorkflowConditionTree: Identifiable, Sendable {
                     fields.append(.init(id: advertised.id, title: advertised.title, isIdentifier: true))
                 }
             }
-            if choice.id.hasPrefix("document.processing.") {
+            switch choice.dataFamily {
+            case .processing:
                 fields += choice.conditionFields.compactMap { advertised in
                     guard advertised.id.hasPrefix("data."),
                         let processing = ProcessingField(rawValue: String(advertised.id.dropFirst("data.".count))),
@@ -131,6 +149,19 @@ struct WorkflowConditionTree: Identifiable, Sendable {
                         isIdentifier: processing.valueType == "identifier", processing: processing
                     )
                 }
+            case .ingestion:
+                fields += choice.conditionFields.compactMap { advertised in
+                    guard advertised.id.hasPrefix("data."),
+                        let ingestion = IngestionField(rawValue: String(advertised.id.dropFirst("data.".count))),
+                        ingestion.valueType == advertised.valueType
+                    else { return nil }
+                    return Self(
+                        id: "event.ingest.\(ingestion.rawValue)", title: advertised.title,
+                        isIdentifier: ingestion == .sourceID, ingestion: ingestion
+                    )
+                }
+            case nil:
+                break
             }
             return fields
         }
@@ -206,7 +237,7 @@ struct WorkflowConditionTree: Identifiable, Sendable {
     subscript(_ field: Field) -> String {
         get {
             let value = Self.value(at: field.path[...], in: values)
-            if field.processing == .hasText, let boolean = value as? Bool {
+            if field.isBoolean, let boolean = value as? Bool {
                 return String(boolean)
             }
             if field.processing == .attempt, let attempt = value as? Int {
@@ -215,11 +246,13 @@ struct WorkflowConditionTree: Identifiable, Sendable {
             return value as? String ?? ""
         }
         set {
-            let text = field.processing == nil ? newValue : newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text =
+                field.processing == nil && field.ingestion == nil
+                ? newValue : newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             let value: (any Sendable)?
             if text.isEmpty {
                 value = nil
-            } else if field.processing == .hasText, let boolean = Bool(text) {
+            } else if field.isBoolean, let boolean = Bool(text) {
                 value = boolean
             } else if field.processing == .attempt, let attempt = UInt32(text) {
                 value = Int(attempt)
@@ -297,6 +330,12 @@ struct WorkflowConditionTree: Identifiable, Sendable {
             guard !text.isEmpty else { continue }
             if field.isIdentifier && UUID(uuidString: text) == nil {
                 return "Enter a valid UUID for \(field.title)."
+            }
+            if field.ingestion == .reason && text.utf8.count > 64 {
+                return "Use 64 bytes or fewer for the ingestion reason."
+            }
+            if field.ingestion == .retryable && Bool(text) == nil {
+                return "Choose whether retry is available."
             }
             switch field.processing {
             case .attempt where UInt32(text) == nil:
