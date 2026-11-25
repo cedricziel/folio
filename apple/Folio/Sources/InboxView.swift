@@ -148,7 +148,7 @@ struct InboxView: View {
             if let document = list.document(for: id) {
                 DocumentDetailView(
                     snapshot: .init(document: document, lookups: list.lookups), service: service,
-                    vaultID: vaultID, onDocumentChange: { list.apply($0) },
+                    vaultID: vaultID, canEditFile: canEdit, onDocumentChange: { list.apply($0) },
                     openLinkedDocument: { onOpenDocument($0, vaultID) },
                     continuation: session.continuation?.documentID == id ? session.continuation : nil,
                     onContinued: { session.continuation = nil }

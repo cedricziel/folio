@@ -20,6 +20,7 @@ struct DocumentFileHistoryView: View {
     @State private var export: RevisionExport?
     @State private var showingExporter = false
     @State private var publicationEnabled = false
+    @State private var markingUp: DocumentFileRevision?
     @State private var showingImporter = false
     @State private var readingReplacement = false
     @State private var publishing = false
@@ -48,6 +49,12 @@ struct DocumentFileHistoryView: View {
 
                 if let downloadFailure {
                     Text(downloadFailure).foregroundStyle(Color.danger)
+                }
+                if #available(iOS 27.2, macOS 27.2, *), let current = editableCurrent,
+                    let pdf = revisions.first(where: { $0.id == current && $0.mimeType == "application/pdf" })
+                {
+                    Button("Mark up and sign", systemImage: "pencil.tip") { markingUp = pdf }
+                        .disabled(publishing || readingReplacement || loading || pendingPublication != nil)
                 }
                 if editableCurrent != nil {
                     Button("Choose a replacement file", systemImage: "arrow.trianglehead.clockwise") {
@@ -97,6 +104,14 @@ struct DocumentFileHistoryView: View {
             discardExport()
         } onCancellation: {
             discardExport()
+        }
+        .sheet(item: $markingUp) { revision in
+            if #available(iOS 27.2, macOS 27.2, *) {
+                DocumentPDFMarkupView(documentID: documentID, revision: revision, service: service) {
+                    await load(before: nil)
+                    await onPublication()
+                }
+            }
         }
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.pdf, .image]) { result in
             switch result {
