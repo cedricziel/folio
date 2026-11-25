@@ -28,6 +28,7 @@ struct WorkflowLifecycleFixture: View {
             || arguments.contains("--workflow-custom-field-actions")
             || arguments.contains("--workflow-ingestion-conditions")
             || arguments.contains("--workflow-metadata-conditions")
+            || arguments.contains("--workflow-processing-conditions")
     }
 }
 
@@ -157,6 +158,8 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
 
     private static let ingestionConditionEditing = ProcessInfo.processInfo.arguments.contains(
         "--workflow-ingestion-conditions")
+    private static let processingConditionEditing = ProcessInfo.processInfo.arguments.contains(
+        "--workflow-processing-conditions")
     private static let watchedSource = "923553bf-9c39-4990-90ae-41250d12d03e"
 
     private static func initialWorkflow() -> SavedWorkflow {
@@ -188,6 +191,10 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 }}}]}
                 """.utf8
             )
+        }
+        if processingConditionEditing {
+            workflow.trigger = "document.processing.ocr.completed"
+            workflow.conditions = Data(#"{"all":[{"event":{"processing":{"has_text":true}}}]}"#.utf8)
         }
         return workflow
     }
@@ -288,6 +295,10 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                 "target":"document","condition_fields":[]},
                 {"event_type":"workflow.scheduled","label":"On a schedule","subject_type":"workflow",
                 "target":"event","condition_fields":[]},
+                {"event_type":"document.processing.ocr.completed","label":"Text extraction completed",
+                "subject_type":"document","target":"document","condition_fields":[
+                  {"key":"data.attempt","label":"Attempt","value_type":"integer"},
+                  {"key":"data.has_text","label":"Text found","value_type":"boolean"}]},
                 {"event_type":"ingest.imported","label":"Item imported","subject_type":"ingest","target":"event",
                 "condition_fields":[{"key":"data.source_id","label":"Source ID","value_type":"identifier"},
                 {"key":"data.source_kind","label":"Source kind","value_type":"text"},
@@ -406,6 +417,17 @@ private final class WorkflowEditorFixtureProtocol: URLProtocol, @unchecked Senda
                     actions.map({ $0["type"] as? String }) == ["webhook", "webhook"],
                     actions.map({ $0["url"] as? String }) == ["https://first.test/hook", "https://second.test/hook"]
                 else { return (400, #"{"error":"Unexpected ingestion condition"}"#) }
+            }
+            if processingConditionEditing {
+                let expected: [String: Any] = [
+                    "all": [["event": ["processing": ["has_text": false]]]],
+                    "event": ["processing": ["attempt": 2]],
+                ]
+                guard trigger == "document.processing.ocr.completed",
+                    let encoded = try? JSONSerialization.data(withJSONObject: filters, options: .sortedKeys),
+                    let expectedData = try? JSONSerialization.data(withJSONObject: expected, options: .sortedKeys),
+                    encoded == expectedData
+                else { return (400, #"{"error":"Unexpected processing conditions"}"#) }
             }
             let query = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
             let expected = query?.queryItems?.first(where: { $0.name == "expected_revision" })?.value
