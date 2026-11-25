@@ -86,7 +86,7 @@ async fn contract(db: Database) {
     failure.finished_at = Some(Utc::now());
     failure.last_error = Some("private response".into());
     failure.response_status = Some(503);
-    reject_failures(&db).await;
+    reject_failures(&db, "reject_run_failure_recorded").await;
     assert!(workflows.update_run(&failure).await.is_err());
     assert_eq!(
         workflows
@@ -97,7 +97,7 @@ async fn contract(db: Database) {
             .status,
         RunStatus::Pending
     );
-    allow_failures(&db).await;
+    allow_failures(&db, "reject_run_failure_recorded").await;
     workflows.update_run(&failure).await.unwrap();
 
     let superseded = new_run(&definition, None);
@@ -106,7 +106,7 @@ async fn contract(db: Database) {
         name: "Revised definition".into(),
         ..input.clone()
     };
-    reject_failures(&db).await;
+    reject_failures(&db, "reject_run_failure_superseded").await;
     assert!(workflows
         .update(vault, definition.id, update.clone())
         .await
@@ -129,7 +129,7 @@ async fn contract(db: Database) {
             .revision,
         definition.revision
     );
-    allow_failures(&db).await;
+    allow_failures(&db, "reject_run_failure_superseded").await;
     let edited = workflows
         .update(vault, definition.id, update)
         .await
@@ -204,27 +204,27 @@ async fn contract(db: Database) {
     }
 }
 
-async fn reject_failures(db: &Database) {
+async fn reject_failures(db: &Database, trigger: &str) {
     match db {
         Database::Sqlite(pool) => {
-            sqlx::raw_sql(
-                "CREATE TRIGGER reject_run_failure BEFORE INSERT ON outbox_events
+            sqlx::raw_sql(&format!(
+                "CREATE TRIGGER {trigger} BEFORE INSERT ON outbox_events
                  WHEN NEW.type = 'workflow_run.failed' BEGIN
                    SELECT RAISE(ABORT, 'rejected workflow outcome');
                  END;",
-            )
+            ))
             .execute(pool)
             .await
             .unwrap();
         }
         Database::Postgres(pool) => {
-            sqlx::raw_sql(
+            sqlx::raw_sql(&format!(
                 "CREATE OR REPLACE FUNCTION reject_run_failure() RETURNS trigger LANGUAGE plpgsql
                  AS $$ BEGIN RAISE EXCEPTION 'rejected workflow outcome'; END; $$;
-                 CREATE TRIGGER reject_run_failure BEFORE INSERT ON outbox_events
+                 CREATE TRIGGER {trigger} BEFORE INSERT ON outbox_events
                  FOR EACH ROW WHEN (NEW.type = 'workflow_run.failed')
                  EXECUTE FUNCTION reject_run_failure();",
-            )
+            ))
             .execute(pool)
             .await
             .unwrap();
@@ -232,16 +232,16 @@ async fn reject_failures(db: &Database) {
     }
 }
 
-async fn allow_failures(db: &Database) {
+async fn allow_failures(db: &Database, trigger: &str) {
     match db {
         Database::Sqlite(pool) => {
-            sqlx::raw_sql("DROP TRIGGER reject_run_failure")
+            sqlx::raw_sql(&format!("DROP TRIGGER {trigger}"))
                 .execute(pool)
                 .await
                 .unwrap();
         }
         Database::Postgres(pool) => {
-            sqlx::raw_sql("DROP TRIGGER reject_run_failure ON outbox_events")
+            sqlx::raw_sql(&format!("DROP TRIGGER {trigger} ON outbox_events"))
                 .execute(pool)
                 .await
                 .unwrap();
