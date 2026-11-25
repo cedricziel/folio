@@ -7,7 +7,8 @@ import PencilKit
 final class PDFInkDraft {
     private let source: Data
     private let document: PDFDocument
-    private var editors: [Int: PaperMarkupViewController] = [:]
+    private var markupByPage: [Int: PaperMarkup] = [:]
+    private var active: (index: Int, editor: PaperMarkupViewController)?
 
     var pageCount: Int { document.pageCount }
 
@@ -28,12 +29,17 @@ final class PDFInkDraft {
     }
 
     func editor(for index: Int) -> PaperMarkupViewController? {
-        if let existing = editors[index] { return existing }
+        if let active, active.index == index { return active.editor }
+        if let active {
+            markupByPage[active.index] = active.editor.markup
+            self.active = nil
+        }
         guard let page = document.page(at: index), let canvas = Self.canvas(for: page) else { return nil }
         var features = FeatureSet.empty
         features.insert(.drawing)
         features.inks = [.pen]
-        let editor = PaperMarkupViewController(markup: PaperMarkup(bounds: canvas), supportedFeatureSet: features)
+        let markup = markupByPage.removeValue(forKey: index) ?? PaperMarkup(bounds: canvas)
+        let editor = PaperMarkupViewController(markup: markup, supportedFeatureSet: features)
         editor.drawingTool = PKInkingTool(.pen, color: .black, width: 3)
         editor.indirectPointerTouchMode = .drawing
         let scale = min(1, 1600 / max(canvas.width, canvas.height))
@@ -50,22 +56,26 @@ final class PDFInkDraft {
             background.imageScaling = .scaleAxesIndependently
         #endif
         editor.contentView = background
-        editors[index] = editor
+        active = (index, editor)
         return editor
     }
 
     func export() throws -> Data {
         guard let output = PDFDocument(data: source) else { throw DraftError.unsupportedPDF }
         var changed = false
-        for (index, editor) in editors {
-            guard let markup = editor.markup, let page = output.page(at: index), let reference = page.pageRef else {
+        var markups = markupByPage
+        if let active { markups[active.index] = active.editor.markup }
+        for (index, markup) in markups {
+            let strokes = markup.subelements.strokes
+            guard !strokes.isEmpty else { continue }
+            guard let page = output.page(at: index), let reference = page.pageRef else {
                 throw DraftError.unsupportedPDF
             }
             let crop = page.bounds(for: .cropBox)
             let inverse = reference.getDrawingTransform(
                 .cropBox, rect: markup.bounds, rotate: 0, preserveAspectRatio: true
             ).inverted()
-            for stroke in markup.subelements.strokes {
+            for stroke in strokes {
                 let points = stroke.path.map { point in
                     let location = point.location.applying(stroke.transform)
                     let flipped = CGPoint(x: location.x, y: markup.bounds.height - location.y).applying(inverse)

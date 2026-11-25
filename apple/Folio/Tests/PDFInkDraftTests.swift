@@ -25,6 +25,7 @@ final class PDFInkDraftTests: XCTestCase {
                     path: PKStrokePath(controlPoints: strokePoints, creationDate: Date()))
             ]))
         editor.markup = markup
+        XCTAssertNotNil(draft.editor(for: 1))
 
         let result = try XCTUnwrap(PDFDocument(data: try draft.export()))
         let page = try XCTUnwrap(result.page(at: 0))
