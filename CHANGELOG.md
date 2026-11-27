@@ -1,5 +1,97 @@
 # Changelog
 
+## [0.19.0](https://github.com/cedricziel/folio/compare/v0.18.1...v0.19.0) (2026-11-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **apple:** require SDK and OS 27.2 ([#605](https://github.com/cedricziel/folio/issues/605))
+* **apple:** Apple apps and extensions now require iOS 27.2 or macOS 27.2. FolioKit requires Swift tools 6.4.
+
+### Features
+
+* **api:** add conditional file replacement and revision restore ([#558](https://github.com/cedricziel/folio/issues/558)) ([6fe65c6](https://github.com/cedricziel/folio/commit/6fe65c672d3a01d03a475be30be519366a3c96aa))
+* **api:** publish conditional document file revisions ([afc030e](https://github.com/cedricziel/folio/commit/afc030ec031bca9c3b3a34c9e4d070efcfa676c9))
+* **apple:** browse and save document file revisions ([#596](https://github.com/cedricziel/folio/issues/596)) ([6bbfe0b](https://github.com/cedricziel/folio/commit/6bbfe0be5508f64aa540618dfcfdd3219cb15090))
+* **apple:** choose typed custom field workflow conditions ([#556](https://github.com/cedricziel/folio/issues/556)) ([54e012a](https://github.com/cedricziel/folio/commit/54e012a915acdcc1af2dd5fa550dac9040854e90))
+* **apple:** edit captured ingestion workflow conditions ([2f7e9fa](https://github.com/cedricziel/folio/commit/2f7e9fa893f61fdfdce04e8ec19f8e96a3e54ada))
+* **apple:** edit grouped document change conditions ([3e0c94d](https://github.com/cedricziel/folio/commit/3e0c94d5607e61319de79ca3e755ef2e574a53a8))
+* **apple:** edit grouped document change conditions ([#628](https://github.com/cedricziel/folio/issues/628)) ([483b50f](https://github.com/cedricziel/folio/commit/483b50f30b80f32b1b241f33c7e48375f25095d3))
+* **apple:** edit ingestion workflow conditions ([#623](https://github.com/cedricziel/folio/issues/623)) ([cebf798](https://github.com/cedricziel/folio/commit/cebf798f6e3653ac754d4712e69aeaa14c52cdf1))
+* **apple:** preview recognized text during scan review ([836269d](https://github.com/cedricziel/folio/commit/836269df117253ff871e5354c6609bb3c1877c39))
+* **apple:** preview recognized text during scan review ([#607](https://github.com/cedricziel/folio/issues/607)) ([16b6331](https://github.com/cedricziel/folio/commit/16b6331df3ae9542631cb0a077fa92323a033b8b)), closes [#202](https://github.com/cedricziel/folio/issues/202)
+* **apple:** publish files from document revision history ([73a27b8](https://github.com/cedricziel/folio/commit/73a27b896377dd25179de282ef264a1c8a22c0bb))
+* **apple:** replace and restore files from revision history ([#624](https://github.com/cedricziel/folio/issues/624)) ([3857072](https://github.com/cedricziel/folio/commit/3857072ee1df08bf020a0a970f5c3f956d162e97))
+* **apple:** select workflow triggers from the catalog ([#572](https://github.com/cedricziel/folio/issues/572)) ([6256982](https://github.com/cedricziel/folio/commit/62569822227126bda05c47a14f191f331075aac5))
+* **apple:** show read-only workflows to vault members ([0f4dcb9](https://github.com/cedricziel/folio/commit/0f4dcb928d3cbb7e4abd6c18151ae08943938ee9))
+* **file-provider:** search authorized vaults from Finder ([b7db915](https://github.com/cedricziel/folio/commit/b7db91536aa74ea4f0faf1b88799b928e0bb4967))
+* **file-provider:** search authorized vaults from Finder ([#609](https://github.com/cedricziel/folio/issues/609)) ([ebe5713](https://github.com/cedricziel/folio/commit/ebe571386309f8105f7d559ee3946535a357163b)), closes [#365](https://github.com/cedricziel/folio/issues/365)
+* **mcp:** expose file history and revision originals ([#597](https://github.com/cedricziel/folio/issues/597)) ([0777843](https://github.com/cedricziel/folio/commit/0777843af15892f2f8349ce4027f83d40ab73b02))
+* **revisions:** enable verified file publication and processing ([89b4ca4](https://github.com/cedricziel/folio/commit/89b4ca484b4d08a8e95a36c3bb6e6f62f2ce96b1))
+* **revisions:** enable verified file publication and processing ([#625](https://github.com/cedricziel/folio/issues/625)) ([ca025c8](https://github.com/cedricziel/folio/commit/ca025c8b928de82bb6030b63cd46371a9febf22b))
+* **saved-views:** restore exact custom field filters ([#581](https://github.com/cedricziel/folio/issues/581)) ([6987e86](https://github.com/cedricziel/folio/commit/6987e86bbb2f4b0c23ffe95891ce21b3ce6cd865))
+* **web:** replace and restore files from revision history ([67764fd](https://github.com/cedricziel/folio/commit/67764fd7983a3b37275bfd9228a9a251eeb55e03))
+* **web:** replace and restore files from revision history ([#618](https://github.com/cedricziel/folio/issues/618)) ([239ffea](https://github.com/cedricziel/folio/commit/239ffeae9041eae82534ea14122f0e3bdd99e32f))
+* **workflows:** add date review and revision conditions ([#577](https://github.com/cedricziel/folio/issues/577)) ([c9ecc52](https://github.com/cedricziel/folio/commit/c9ecc52f22dbdd6786d33bcfc3385b6b28fcd5f5))
+* **workflows:** author processing filters on the web ([#598](https://github.com/cedricziel/folio/issues/598)) ([0398b30](https://github.com/cedricziel/folio/commit/0398b30b527f9ae13163c8b4ff718ab2bd3e0fde))
+* **workflows:** author typed custom-field actions ([#621](https://github.com/cedricziel/folio/issues/621)) ([22752bf](https://github.com/cedricziel/folio/commit/22752bf6ae1633ceb8dfd3e235e22d3ce9b3a4fd))
+* **workflows:** build ordered workflows on web and Apple ([d8748ad](https://github.com/cedricziel/folio/commit/d8748ad6631d8a6fbe4d75d09f32a7a5518f606b))
+* **workflows:** build ordered workflows on web and Apple ([#620](https://github.com/cedricziel/folio/issues/620)) ([71de25d](https://github.com/cedricziel/folio/commit/71de25d5551968ce27c1976c3e054be6618a5d45))
+* **workflows:** commit ordered document actions atomically ([#579](https://github.com/cedricziel/folio/issues/579)) ([8d843e7](https://github.com/cedricziel/folio/commit/8d843e74050362fbf4437ea38a95b124bae8a9a0))
+* **workflows:** compose typed custom-field actions ([0a5de7c](https://github.com/cedricziel/folio/commit/0a5de7ca5e9d77adf38a74078a8133547f37295f))
+* **workflows:** consume scoped foundation and workflow events ([23aea6f](https://github.com/cedricziel/folio/commit/23aea6f5fa577945c0425086f4ec2d7be647e1f9))
+* **workflows:** consume scoped foundation and workflow events ([#633](https://github.com/cedricziel/folio/issues/633)) ([9dccac3](https://github.com/cedricziel/folio/commit/9dccac30e4bedc584bd7707c34ecbb39cda9637d))
+* **workflows:** dispatch shared saved-view events ([343b663](https://github.com/cedricziel/folio/commit/343b6637a75c0104915774b861e7f650d7c6ac44))
+* **workflows:** dispatch shared saved-view events ([#615](https://github.com/cedricziel/folio/issues/615)) ([b519505](https://github.com/cedricziel/folio/commit/b5195050ef53d853e8f20a9e4e47b544f0fad77a))
+* **workflows:** edit document predicates with revision checks ([502077d](https://github.com/cedricziel/folio/commit/502077d326a702ea1d4b291bf1711d28c584098a))
+* **workflows:** edit document predicates with revision checks ([#626](https://github.com/cedricziel/folio/issues/626)) ([87d7538](https://github.com/cedricziel/folio/commit/87d75383ae445dc8d24b5ff5405c15309124dd48))
+* **workflows:** enqueue durable UTC schedules ([#578](https://github.com/cedricziel/folio/issues/578)) ([6d7e40c](https://github.com/cedricziel/folio/commit/6d7e40c4f02fcb3ab1b7a113229efb7f0c27aee3))
+* **workflows:** filter date, review and file revision events ([1a39030](https://github.com/cedricziel/folio/commit/1a39030d6b899464862695c25513f571483f11d0))
+* **workflows:** match committed document metadata changes ([71bd997](https://github.com/cedricziel/folio/commit/71bd997be03c591546a96038a9ed0b9414efb214))
+* **workflows:** match committed document metadata changes ([#589](https://github.com/cedricziel/folio/issues/589)) ([ed28786](https://github.com/cedricziel/folio/commit/ed2878686e09afd4652360fba365581801e33eb9))
+* **workflows:** schedule runs relative to document dates ([34bc60c](https://github.com/cedricziel/folio/commit/34bc60c6d10931c8346e46c3e0e8c8846a014247))
+* **workflows:** schedule runs relative to document dates ([#634](https://github.com/cedricziel/folio/issues/634)) ([1767bfd](https://github.com/cedricziel/folio/commit/1767bfda3ec571e6818bed20cda0c8af4aa3dd66))
+* **workflows:** show safe member workflow activity ([#622](https://github.com/cedricziel/folio/issues/622)) ([3f37447](https://github.com/cedricziel/folio/commit/3f37447c13fd93e19cfbd2b17ed97a4554a96840))
+* **workflows:** show vault members safe run summaries ([1bfd750](https://github.com/cedricziel/folio/commit/1bfd7508d5ce2a88b88d04f9c670f1aee1b8d28f))
+
+
+### Bug Fixes
+
+* **api:** regenerate the ordered workflow schema ([07cf149](https://github.com/cedricziel/folio/commit/07cf14982467fcfe373a1679349f5f646ed29447))
+* **apple:** keep 27.2 test coverage when the CI host is older ([#640](https://github.com/cedricziel/folio/issues/640)) ([b4b0a4f](https://github.com/cedricziel/folio/commit/b4b0a4f66740b13c22fd71f1ac2188c319e5229e))
+* **apple:** keep date offsets out of mixed trigger selections ([b97f3c2](https://github.com/cedricziel/folio/commit/b97f3c222e5d8ad770a0ff55332a4baf30288147))
+* **apple:** keep predicate edits while choosing another trigger ([986769e](https://github.com/cedricziel/folio/commit/986769e034cdc948e5eb80848783269281ddc6b0))
+* **apple:** preserve metadata conditions with workflow trigger picker ([9fba27f](https://github.com/cedricziel/folio/commit/9fba27fd0745c12b279f668a286c2f2dd51f690b))
+* **apple:** reconcile picker with merged metadata coverage ([523ed5e](https://github.com/cedricziel/folio/commit/523ed5e8a7941009f3114726bd2b04383d301846))
+* **apple:** refresh file history after a revision conflict ([3126db6](https://github.com/cedricziel/folio/commit/3126db620edde6a69d96c91c9f05bcdb01302f6e))
+* **apple:** retain labels for every saved workflow trigger ([9786fb3](https://github.com/cedricziel/folio/commit/9786fb35f7eb61ac3692ae4d1712e3b6a9bee930))
+* **apple:** retain newer workflow state after a delayed save ([555277d](https://github.com/cedricziel/folio/commit/555277d44bffd3a9fd94d07746e7aed5ec55fc28))
+* **apple:** run the 27.2 test suite when the CI host is older ([06086ae](https://github.com/cedricziel/folio/commit/06086ae42203198b1c1fea250696df1ec5ef6adf))
+* **file-provider:** keep newer snapshot after capture failure ([b28d34a](https://github.com/cedricziel/folio/commit/b28d34a1179fc5445aba7d0671138ca6315b7cc3))
+* **saved-views:** preserve exact custom field filters ([bf828bc](https://github.com/cedricziel/folio/commit/bf828bcfadd979e53857e846f48026f64207f08d))
+* **uploads:** preserve receipts after immediate workflow trash ([2191e23](https://github.com/cedricziel/folio/commit/2191e236b51cab83f7ff2157fa96e2ad505bb25f))
+* **web:** keep revision conflicts visible below the toolbar ([f4cb289](https://github.com/cedricziel/folio/commit/f4cb289d596ebf176a5ab3702d727041f9560e96))
+* **web:** refresh file history after a revision conflict ([5573878](https://github.com/cedricziel/folio/commit/5573878ee9dbbb4e3ffa416854cb7d96b3346fcc))
+* **workflows:** guard native trigger edits by revision ([bdd0c28](https://github.com/cedricziel/folio/commit/bdd0c28cbd97183e35230f18f3f8c7572937d675))
+* **workflows:** harden ordered document action completion ([8b5dc3d](https://github.com/cedricziel/folio/commit/8b5dc3db17494b7b2526fcd329dc5acf799c6b1d))
+* **workflows:** keep installed Apple trigger choices compatible ([216eb99](https://github.com/cedricziel/folio/commit/216eb99e42f8362d87d3b0084cb416d8d6022f00))
+* **workflows:** keep installed Apple trigger choices compatible ([#617](https://github.com/cedricziel/folio/issues/617)) ([cc2bfd7](https://github.com/cedricziel/folio/commit/cc2bfd74798e1f86ba2560f92e84225a342f4df3))
+* **workflows:** preserve explicit clock conversion and resume semantics ([b331c71](https://github.com/cedricziel/folio/commit/b331c71c5381d6d9683a77237cf6ef1ee56579fc))
+* **workflows:** preserve trigger order in read-only views ([c76d448](https://github.com/cedricziel/folio/commit/c76d4480df7dbca50c5cbf80b981a319d73c98ce))
+* **workflows:** reconcile scheduling with current main ([7d34de7](https://github.com/cedricziel/folio/commit/7d34de7b8921ca05d9f749518f4c1c797685770d))
+* **workflows:** resume saved date pages before bounded catch-up ([f7f67ba](https://github.com/cedricziel/folio/commit/f7f67babc870ad3243726604d8363dfefde87429))
+* **workflows:** retain predicates when only the trigger changes ([0a071ce](https://github.com/cedricziel/folio/commit/0a071ce24675ead8f24bea734e62ee36d5835c14))
+* **workflows:** retry runs after stale progress saves ([548a363](https://github.com/cedricziel/folio/commit/548a363c2c8c56a86ac2a67b0c0c566349e0d23e))
+* **workflows:** settle exhausted queue leases atomically ([a53b88f](https://github.com/cedricziel/folio/commit/a53b88f66c410e5869ce08964f24a7a5ccd51906))
+* **workflows:** settle exhausted queue leases atomically ([#619](https://github.com/cedricziel/folio/issues/619)) ([6412821](https://github.com/cedricziel/folio/commit/6412821ea4afcb93d2285ee30e5b99adbc16ec0b))
+* **workflows:** sync persisted retry attempts before saving ([7068b33](https://github.com/cedricziel/folio/commit/7068b336840ac11be5934de720f0e1c2d32cfc4b))
+
+
+### Miscellaneous Chores
+
+* **apple:** require iOS and macOS 27.2 ([57b8927](https://github.com/cedricziel/folio/commit/57b8927390fee608e79446e2b244e1474bf1922c))
+* **apple:** require SDK and OS 27.2 ([#605](https://github.com/cedricziel/folio/issues/605)) ([8eb4ef0](https://github.com/cedricziel/folio/commit/8eb4ef0aac164881f10952aa2a9b220cd15d7a79))
+
 ## [0.18.1](https://github.com/cedricziel/folio/compare/v0.18.0...v0.18.1) (2026-11-23)
 
 
