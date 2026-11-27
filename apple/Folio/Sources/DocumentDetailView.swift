@@ -22,6 +22,7 @@ struct DocumentDetailView: View {
     @State private var pageRequest: PDFPageRequest?
     let snapshot: Snapshot
     let vaultID: UUID
+    let canEditFile: Bool
     /// Hands saved edits back to the list so its rows and inbox follow them.
     let onDocumentChange: @MainActor (Document) -> Void
     /// How Handoff asked to show this document, if it did.
@@ -29,7 +30,7 @@ struct DocumentDetailView: View {
     let onContinued: () -> Void
 
     init(
-        snapshot: Snapshot, service: any FolioService, vaultID: UUID,
+        snapshot: Snapshot, service: any FolioService, vaultID: UUID, canEditFile: Bool,
         onDocumentChange: @escaping @MainActor (Document) -> Void = { _ in },
         openLinkedDocument: @escaping (UUID) -> Void = { _ in },
         continuation: DocumentContinuation? = nil, onContinued: @escaping () -> Void = {}
@@ -41,6 +42,7 @@ struct DocumentDetailView: View {
         self.service = service
         self.openLinkedDocument = openLinkedDocument
         self.vaultID = vaultID
+        self.canEditFile = canEditFile
         self.onDocumentChange = onDocumentChange
         self.continuation = continuation
         self.onContinued = onContinued
@@ -69,7 +71,8 @@ struct DocumentDetailView: View {
         .sheet(isPresented: $showingDiscussion) { DocumentDiscussionView(model: model.discussion) }
         .sheet(isPresented: $showingFileHistory) {
             DocumentFileHistoryView(
-                documentID: model.document.id, service: service, canEditFile: model.document.canEditDocumentDate
+                documentID: model.document.id, service: service,
+                canEditFile: canEditFile && model.document.canEditDocumentDate
             ) {
                 page = nil
                 pageRequest = nil

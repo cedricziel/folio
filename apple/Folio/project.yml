@@ -103,6 +103,7 @@ targets:
       - path: Sources/AppLock.swift
       - path: Sources/DeviceAuthenticator.swift
       - path: Sources/PDFPreview.swift
+      - path: Sources/PDFInkDraft.swift
     dependencies:
       - package: FolioKit
     settings:

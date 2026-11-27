@@ -234,6 +234,7 @@ import XCTest
         history.tap()
         let unavailable = app.staticTexts["This server does not support file history."]
         XCTAssertTrue(unavailable.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(app.buttons["Mark up and sign"].exists)
         app.buttons["Done"].tap()
         XCTAssertTrue(app.navigationBars["First fixture"].waitForExistence(timeout: 5), app.debugDescription)
     }
