@@ -81,7 +81,7 @@ apple: apple-test apple-project
 		CODE_SIGNING_ALLOWED=NO
 
 apple-test:
-	cd apple/FolioKit && xcrun swift test
+	apple/scripts/test-foliokit.sh
 
 # Generate apple/Folio/Folio.xcodeproj from project.yml (requires `brew install xcodegen`)
 apple-project:
