@@ -74,8 +74,9 @@ jobs:
       group: apple-test-${{ github.ref }}
       cancel-in-progress: true
     runs-on: xcode-27
-    # Build the app and run iPhone, iPad and Duo navigation; individual tests keep their watchdogs.
-    timeout-minutes: 120
+    # Build the app and run iPhone, iPad and Duo navigation; individual tests keep their watchdogs. The navigation
+    # step needs room for three simulator runs and one Duo retry: the iOS 27.2 suite takes about 30 minutes per run.
+    timeout-minutes: 160
     defaults:
       run:
         working-directory: apple
@@ -91,6 +92,7 @@ jobs:
       - name: Report Apple toolchain
         run: |
           sw_vers
+          printf 'Runner image=%s (%s)\n' "${ImageVersion:-unknown}" "${ImageOS:-unknown}"
           printf 'DEVELOPER_DIR=%s\n' "$DEVELOPER_DIR"
           xcrun xcodebuild -version
           xcrun swift --version
@@ -107,16 +109,8 @@ jobs:
         id: install_xcodegen
       - run: bundle exec fastlane test
         env:
-          # FolioKit's `swift test` takes a few minutes; past this it counts as hung and its stacks are recorded.
-          TEST_WATCHDOG_LIMIT: "900"
-          TEST_WATCHDOG_DIR: ${{ github.workspace }}/apple/build/test-hang
-      - name: Upload the stacks of a hung test run
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: test-hang-27.2
-          path: apple/build/test-hang
-          if-no-files-found: ignore
+          # The package suite runs in the `foliokit` job, where the simulator cross-build gets its own runner.
+          FOLIOKIT_TESTS_SEPARATE: "1"
       - name: Check the official build's identifiers
         run: scripts/check-build-settings.sh
       - name: Check associated domains for self-builds
@@ -161,8 +155,9 @@ jobs:
               -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO
           done
       - name: Test navigation on iPhone, iPad and iPhone Duo (27.2)
-        # Allow for a cold Duo runtime and one fresh simulator after a recognized launch failure.
-        timeout-minutes: 75
+        # One iPhone run, the iPad window checks and the Duo run take about 90 minutes together; the extra room
+        # covers a cold Duo runtime and one fresh simulator after a recognized launch failure.
+        timeout-minutes: 120
         if: ${{ !cancelled() && steps.install_xcodegen.outcome == 'success' }}
         run: |
           verify_dir=$(mktemp -d)
@@ -237,6 +232,44 @@ jobs:
             exit "$ipad_result"
           fi
 
+  foliokit:
+    name: FolioKit tests
+    if: github.event_name == 'pull_request'
+    concurrency:
+      group: apple-foliokit-${{ github.ref }}
+      cancel-in-progress: true
+    runs-on: xcode-27
+    # A macOS 27.2 host runs the suite with `swift test`; an older host cross-builds it for the iOS 27.2 simulator.
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: apple
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Report Apple toolchain
+        run: |
+          sw_vers
+          printf 'Runner image=%s (%s)\n' "${ImageVersion:-unknown}" "${ImageOS:-unknown}"
+          printf 'DEVELOPER_DIR=%s\n' "$DEVELOPER_DIR"
+          xcrun xcodebuild -version
+          xcrun swift --version
+          xcrun xcodebuild -showsdks
+          for sdk in iphoneos iphonesimulator macosx; do
+            printf '%s SDK: ' "$sdk"
+            xcrun --sdk "$sdk" --show-sdk-version
+          done
+      - name: Run the FolioKit tests
+        env:
+          TEST_WATCHDOG_DIR: ${{ github.workspace }}/apple/build/test-hang
+        run: scripts/test-foliokit.sh
+      - name: Upload the stacks of a hung test run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: foliokit-hang
+          path: apple/build/test-hang
+          if-no-files-found: ignore
+
   thumbnails:
     name: Thumbnail UI
     needs: changes
@@ -245,7 +278,8 @@ jobs:
       group: apple-thumbnails-${{ github.ref }}
       cancel-in-progress: true
     runs-on: xcode-27
-    timeout-minutes: 25
+    # The fixture build plus the iPhone run takes about 26 minutes on the current image.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: brew install xcodegen

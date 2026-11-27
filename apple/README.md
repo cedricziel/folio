@@ -82,8 +82,13 @@ Apple's CDN fetches the association file from your server, so the server must be
 ## Tests
 
 ```sh
-cd apple/FolioKit && xcrun swift test
+apple/scripts/test-foliokit.sh   # macOS 27.2 when the host has it, otherwise the iOS 27.2 simulator
+cd apple/FolioKit && xcrun swift test   # the host's macOS only; fails on 27.0.x
 ```
+
+FolioKit requires macOS 27.2, and comparing two `Date`s resolves to Foundation's `Date.>=`, which only exists from 27.2. A macOS test bundle built for 27.2 therefore cannot load on a 27.0.x host (`dyld: Symbol not found: _$s10Foundation4DateV2geoiySbAC_ACtFZ`). GitHub's `xcode-27` image briefly shipped macOS 27.2 and then went back to 27.0.1 ([actions/runner-images#15334](https://github.com/actions/runner-images/issues/15334)), so `apple/scripts/test-foliokit.sh` — which the `test` lane runs — uses the host's macOS when it meets the floor and otherwise runs the same suite on the iOS 27.2 simulator that ships with Xcode 27.2, and records in the job summary that the run is simulator coverage rather than macOS coverage. Pass `macos` or `ios-simulator` to force a destination.
+
+`FolioAuthTests` and `FolioProviderTests` are macOS-only and link FolioKit, so they need a 27.2 host as well. `apple/scripts/test-macos-bundles.sh` runs them when the host meets the floor and otherwise reports in the job summary that they did not run; that gap closes by itself once a 27.2 runner is available. CI runs the package suite in its own `foliokit` job, because the simulator cross-build needs a whole runner; the `test` job keeps the app builds, the macOS-only bundles and the navigation checks.
 
 ## Fastlane and TestFlight
 

@@ -192,15 +192,13 @@ import XCTest
         let view = app.buttons["workspace-saved-view-\(savedViewID)"]
         XCTAssertTrue(view.waitForExistence(timeout: 5), "The sidebar must show the seeded saved view.")
         view.tap()
-        let inbox = app.buttons["workspace-destination-inbox"]
-        if !inbox.isHittable {
-            let back = app.buttons["BackButton"]
-            if back.isHittable {
-                back.tap()
-            } else {
-                swipeBack(in: app)
-            }
+        // The saved view replaces the sidebar as it opens; go back to it before choosing a destination, as the other
+        // compact tests do. Under iOS 27 a hittability probe on an off-screen sidebar row fails the test instead of
+        // returning false.
+        if !app.navigationBars["Folio"].exists {
+            returnToSidebar(in: app)
         }
+        let inbox = app.buttons["workspace-destination-inbox"]
         guard inbox.waitForExistence(timeout: 5) else {
             XCTFail("Inbox must be available while the saved view loads.")
             return
