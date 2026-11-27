@@ -15,6 +15,9 @@ ASSERTION_FAILURE = """/fixture/NavigationTests.swift:74: error: -[NavigationTes
 Test Case '-[NavigationTests.NavigationTests testInboxOpensAnotherDocumentAfterReturning]' failed (12.000 seconds).
 ** TEST EXECUTE FAILED **
 """
+STALLED_TEST = """Test Case '-[NavigationTests.CustomMetadataWorkflowUITests testChoosesMetadataTriggerAndExactValueCondition]' exceeded execution time allowance of 3 minutes. The test may have hung; check Xcode's test report for additional diagnostics. If the test requires additional time, use -[XCTestCase executionTimeAllowance] or one of xcodebuild's command-line overrides.
+** TEST EXECUTE FAILED **
+"""
 
 
 class DuoNavigationRetryTests(unittest.TestCase):
@@ -39,6 +42,16 @@ class DuoNavigationRetryTests(unittest.TestCase):
 
     def test_incomplete_failure_log_does_not_qualify(self):
         self.assertFalse(should_retry(BOOTSTRAP_FAILURE.replace("** TEST EXECUTE FAILED **", "")))
+
+    def test_a_single_stalled_test_qualifies(self):
+        self.assertTrue(should_retry(STALLED_TEST))
+
+    def test_a_stall_next_to_an_assertion_failure_does_not_qualify(self):
+        self.assertFalse(should_retry(STALLED_TEST + ASSERTION_FAILURE))
+
+    def test_two_stalled_tests_do_not_qualify(self):
+        other = STALLED_TEST.replace("testChoosesMetadataTriggerAndExactValueCondition", "testOpensTheEditor")
+        self.assertFalse(should_retry(STALLED_TEST + other))
 
 
 if __name__ == "__main__":

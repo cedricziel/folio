@@ -20,6 +20,16 @@ def should_retry(log):
         )
 
     totals = {int(count) for count in re.findall(r"\b(\d+) failures? \(\d+ unexpected\)", log)}
+
+    # A simulator stall leaves one test past its execution-time allowance: the test never asserts and the rest of
+    # the suite passes. It runs in seconds on the same runtime elsewhere, so retry it on a fresh simulator; a real
+    # hang repeats and still fails.
+    timeouts = re.findall(
+        r"^Test Case '([^'\n]+)' exceeded execution time allowance of .+$", log, re.MULTILINE
+    )
+    if timeouts:
+        return len(timeouts) == 1 and not diagnostics and not failed
+
     return (
         len(failed) == len(diagnostics) == 1
         and totals == {1}
